@@ -94,6 +94,18 @@
         Explorer
       </button>
       <button
+        class="tab-btn {activeTab === 'content_search' ? 'active' : ''}"
+        on:click={() => (activeTab = 'content_search')}
+      >
+        Content Search
+      </button>
+      <button
+        class="tab-btn {activeTab === 'screenshots' ? 'active' : ''}"
+        on:click={() => (activeTab = 'screenshots')}
+      >
+        Screenshots
+      </button>
+      <button
         class="tab-btn {activeTab === 'duplicates' ? 'active' : ''}"
         on:click={() => (activeTab = 'duplicates')}
       >
@@ -112,6 +124,7 @@
         Batch Rename
       </button>
     </div>
+
 
     <button
       class="btn btn-secondary stats-btn"

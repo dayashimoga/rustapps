@@ -26,6 +26,7 @@ walkdir.workspace = true
 blake3.workspace = true
 tempfile.workspace = true
 tantivy.workspace = true
+flate2.workspace = true
 
 # Internal workspace crates
 platform-common = { path = "../../platform" }

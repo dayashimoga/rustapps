@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { BatchRenameRule, FileItem } from './types';
+import type { BatchRenameRule, FileItem, SemanticSearchResult } from './types';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -30,6 +30,16 @@ function computeRename(originalName: string, rule: BatchRenameRule, index = 0): 
     case 'ToUpperCase':
       return originalName.toUpperCase();
   }
+}
+
+function computeHammingDistance(h1: bigint, h2: bigint): number {
+  let xor = h1 ^ h2;
+  let dist = 0;
+  while (xor > 0n) {
+    if (xor & 1n) dist++;
+    xor >>= 1n;
+  }
+  return dist;
 }
 
 describe('AI File Explorer Frontend Utilities', () => {
@@ -88,5 +98,28 @@ describe('AI File Explorer Frontend Utilities', () => {
     expect(sorted[0].file_name).toBe('src');
     expect(sorted[1].file_name).toBe('app.rs');
     expect(sorted[2].file_name).toBe('doc.txt');
+  });
+
+  it('calculates Hamming distance and similarity percentage for visual screenshot matching', () => {
+    const h1 = 0b1111_0000_1111_0000n;
+    const h2 = 0b1111_0000_1111_0001n; // 1 bit diff
+    const dist = computeHammingDistance(h1, h2);
+    expect(dist).toBe(1);
+
+    const similarity = Math.round(((64 - dist) / 64) * 100);
+    expect(similarity).toBe(98);
+  });
+
+  it('ranks semantic search results by score properly', () => {
+    const results: SemanticSearchResult[] = [
+      { path: '/a.md', file_name: 'a.md', score: 0.65, snippet: 'partial match', format: 'MD' },
+      { path: '/b.pdf', file_name: 'b.pdf', score: 0.94, snippet: 'exact match', format: 'PDF' },
+      { path: '/c.rs', file_name: 'c.rs', score: 0.81, snippet: 'good match', format: 'RS' },
+    ];
+
+    const sorted = [...results].sort((a, b) => b.score - a.score);
+    expect(sorted[0].file_name).toBe('b.pdf');
+    expect(sorted[1].file_name).toBe('c.rs');
+    expect(sorted[2].file_name).toBe('a.md');
   });
 });

@@ -7,17 +7,13 @@ This document tracks all planned, ongoing, and completed tasks across all phases
 
 ## In Progress
 
-- *(None currently — Phase 5 completed; awaiting Quality Gate Review before proceeding to Phase 6)*
+*(None - Phase 6 completed, awaiting user Quality Gate approval to advance to Phase 7)*
 
 ---
 
 ## Pending
-- [ ] **Phase 6: AI File Explorer Advanced (8 weeks)**
-  - Offline OCR indexing for images/scanned PDFs.
-  - Instant screenshot search with visual fingerprints and OCR.
-  - Document text/metadata extraction from PDF, DOCX, Markdown, code, archives.
-  - Embedded local quantized CPU/NPU vector embedding inference.
 - [ ] **Phase 7: Cross-Platform Expansion (6 weeks)**
+
   - Windows ARM64, Linux x64/ARM64, macOS Intel/Apple Silicon matrix builds.
   - Native packaging (MSI/EXE, AppImage/DEB/RPM, DMG/tarball).
   - Native platform integrations (macOS Touch ID/Keychain, Linux Secret Service/Polkit).
@@ -88,3 +84,12 @@ This document tracks all planned, ongoing, and completed tasks across all phases
   - [x] Implement real-time debounced filesystem watcher emitting coalesced events (`watcher.rs`).
   - [x] Implement desktop UI components with glassmorphic dark theme (`Header.svelte`, `FileBrowser.svelte`, `DuplicateFinder.svelte`, `TreemapView.svelte`, `BatchRenameModal.svelte`, `StatsDrawer.svelte`).
   - [x] Implement 8-tier test suite (109 passing unit/integration tests) and Criterion benchmark suites verifying all SLAs.
+- [x] **Phase 6: AI File Explorer Advanced (8 weeks)**
+  - [x] Implement pure-Rust offline OCR engine for images and scanned PDFs with Otsu binarization and topological glyph classification (`ocr.rs`).
+  - [x] Implement instant screenshot search combining 64-bit dHash visual fingerprints and OCR text with sub-microsecond Hamming distance matching (`screenshot.rs`).
+  - [x] Implement streaming multi-format document text and metadata extraction for PDF, DOCX, Markdown, 20+ language code, and archives (`doc_extract.rs`).
+  - [x] Implement 8-bit quantized local embedding inference (`[i8; 64]`) and in-memory cosine vector index with SIMD acceleration (`embeddings.rs`).
+  - [x] Extend Tantivy schema and indexer with extracted content text, document metadata, and OCR tokens (`indexer.rs`).
+  - [x] Extend `FileExplorerService` and Tauri IPC `commands.rs` with semantic and content search endpoints.
+  - [x] Implement desktop UI components: `ContentSearch.svelte`, `ScreenshotGallery.svelte`, and `DocumentModal.svelte`.
+  - [x] Implement 8-tier tests and Criterion benchmark suites verifying all SLAs (< 50ms search, < 300MB RAM, 100% offline).

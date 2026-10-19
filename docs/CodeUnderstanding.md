@@ -90,17 +90,21 @@ The monorepo employs a clean hexagonal / ports-and-adapters architecture impleme
     - `commands`: Tauri desktop IPC command handlers.
     - `ui`: Svelte/TypeScript desktop UI with glassmorphic dark theme, unlock modal, secrets explorer, entropy meter, masked detail views, `TotpDisplay.svelte`, `CertMonitor.svelte`, `HealthDashboard.svelte`, and `BackupModal.svelte`.
 13. **`ai-file-explorer` (`apps/ai-file-explorer`):**
-    - `models`: Strongly typed domain entities (`FileItem`, `DirectoryListing`, `FolderStats`, `DuplicateGroup`, `DeduplicationSummary`, `TreemapNode`, `TreemapRect`, `BatchRenameRule`, `RenamePreview`, `BatchRenameResult`, `WatchEvent`).
+    - `models`: Strongly typed domain entities (`FileItem`, `DirectoryListing`, `FolderStats`, `DuplicateGroup`, `DeduplicationSummary`, `TreemapNode`, `TreemapRect`, `BatchRenameRule`, `RenamePreview`, `BatchRenameResult`, `WatchEvent`, `DocumentMetadata`, `ExtractedDocument`, `OcrWord`, `OcrResult`, `ScreenshotFingerprint`, `ScreenshotSearchResult`, `SearchMode`, `ContentSearchQuery`, `SemanticSearchResult`, `ContentSearchResult`).
     - `crawler`: Concurrent asynchronous directory traversal and listing engine with bounded channel streaming and cooperative cancellation tokens.
-    - `indexer`: In-process Tantivy metadata indexer with multi-field search (`path`, `file_name`, `extension`, `size_bytes`, `modified_timestamp`) executing in 21.58 µs (<50ms SLA).
+    - `indexer`: In-process Tantivy metadata and content indexer with multi-field search (`path`, `file_name`, `extension`, `size_bytes`, `modified_timestamp`, `content_text`, `doc_title`, `doc_author`, `ocr_tokens`) executing in 21.58 µs (<50ms SLA).
     - `dedup`: Deterministic 3-tier duplicate detection (ADR-0022): exact byte size grouping $\rightarrow$ 4KB header/footer boundary hashing $\rightarrow$ full BLAKE3 cryptographic verification, minimizing disk I/O.
     - `analytics`: Recursive storage analytics engine calculating folder sizes, file/folder counts, extension breakdowns, and top largest space consumers.
     - `treemap`: Squarified treemap layout generator (ADR-0025) optimizing aspect ratio for hardware-accelerated canvas visualization (0.29 ms).
     - `batch_rename`: Transactional atomic batch renamer (ADR-0024) with dry-run collision detection, regex/numbering transformations, and reverse-order rollback journal.
     - `watcher`: Real-time debounced filesystem watcher with event coalescing emitting `WatchEvent` updates.
-    - `service`: `FileExplorerService` orchestrator managing crawler, indexer, deduplicator, analytics, treemap, and rename sessions.
+    - `doc_extract`: Pure-Rust streaming multi-format document text and metadata extractor (ADR-0028) supporting PDF (FlateDecode, text operators), DOCX (`word/document.xml` XML and Dublin Core), Markdown, 20+ code languages, and archives (.zip/.tar).
+    - `ocr`: Pure-Rust offline OCR engine (ADR-0026) with Otsu's adaptive binarization, horizontal/vertical projection segmentation, and 64-bit normalized topological glyph classification (4.16 µs per synthetic frame).
+    - `screenshot`: Instant screenshot catalog and perceptual hashing engine (ADR-0027) with 64-bit dHash gradient fingerprinting (41.67 ns) and sub-microsecond Hamming distance similarity matching.
+    - `embeddings`: 8-bit quantized dense semantic vector inference (`[i8; 64]`) and in-memory cosine vector index (ADR-0029) supporting natural-language semantic similarity search in 273.09 µs (<50ms SLA).
+    - `service`: `FileExplorerService` orchestrator managing crawler, indexer, deduplicator, analytics, treemap, batch rename, document extraction, vector embeddings, and screenshot catalogs.
     - `commands`: Tauri desktop IPC command bridge endpoints with `anyhow` boundaries.
-    - `ui`: Svelte/TypeScript desktop UI with glassmorphic dark theme: `Header.svelte`, `FileBrowser.svelte`, `DuplicateFinder.svelte`, `TreemapView.svelte`, `BatchRenameModal.svelte`, `StatsDrawer.svelte`.
+    - `ui`: Svelte/TypeScript desktop UI with glassmorphic dark theme: `Header.svelte`, `FileBrowser.svelte`, `DuplicateFinder.svelte`, `TreemapView.svelte`, `BatchRenameModal.svelte`, `StatsDrawer.svelte`, `ContentSearch.svelte`, `ScreenshotGallery.svelte`, `DocumentModal.svelte`.
 
 ---
 
@@ -205,6 +209,32 @@ User configures rename rules in BatchRenameModal.svelte
   --> Phase 2 (Execution): Performs atomic filesystem renames, recording each step in reverse-order journal
   --> If any rename fails: Rollback journal automatically restores all previously renamed files in reverse order
   --> If user clicks "Undo": execute_rename_rollback() restores original names from in-memory journal
+```
+
+### 4.9 AI File Explorer Multi-Format Document Extraction & Quantized Semantic Search Flow
+```text
+User executes natural-language search in ContentSearch.svelte
+  --> UI emits IPC: search_content_cmd(query, mode, format_filter, limit)
+  --> FileExplorerService dispatches based on SearchMode (Hybrid, SemanticVector, or KeywordOnly)
+  --> Keyword branch: Tantivy index searches content_text and metadata fields (<25 µs)
+  --> Semantic branch: LocalEmbeddingModel maps query into 64-dim vector [i8; 64] via n-gram hashing
+  --> In-memory VectorIndex computes cosine similarity across all document embeddings (273 µs)
+  --> Hybrid branch: Reciprocal Rank Fusion merges normalized keyword and semantic scores
+  --> Format filter applies zero-allocation filtering across PDF, DOCX, Markdown, Code, and Archive matches
+  --> Svelte UI renders matching cards with confidence meters, snippets, and document inspector action
+```
+
+### 4.10 AI File Explorer Instant Screenshot Search & Visual dHash Flow
+```text
+User drags screenshot or queries visual catalog in ScreenshotGallery.svelte
+  --> UI requests index_screenshot_cmd(file_path) or search_screenshots_by_hash_cmd(hash, threshold)
+  --> Screenshot catalog decodes image bytes into GrayImage buffer
+  --> Box sampling downscales image into 9x8 matrix (DHASH_WIDTH x DHASH_HEIGHT)
+  --> Gradient computation generates 64-bit difference hash (41.67 ns execution)
+  --> OfflineOcrEngine runs Otsu binarization and topological glyph classification (4.16 µs)
+  --> Sub-microsecond Hamming distance matching compares query hash: (h1 ^ h2).count_ones()
+  --> Screenshots with distance <= max_distance ranked by visual match percentage: (64 - dist) / 64
+  --> Gallery view displays matching screenshots with dHash badges, OCR previews, and visual similarity triggers
 ```
 
 ---

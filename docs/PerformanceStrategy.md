@@ -59,7 +59,7 @@ The `/benchmarks/` directory houses statistical Criterion benchmarks measuring:
 ### Regression Threshold Enforcement
 During CI execution:
 - Any benchmark exhibiting a regression greater than $5\%$ ($p < 0.05$) triggers an automatic pipeline failure.
-- In Phase 5, 20 benchmark suites cover:
+- In Phase 6, 24 benchmark suites cover:
   1. `aes_256_gcm_encrypt_4kb` and `aes_256_gcm_decrypt_4kb`
   2. `tantivy_query_latency` (<50ms SLA)
   3. `sqlite_wal_insert_and_query`
@@ -80,8 +80,13 @@ During CI execution:
   18. `file_explorer/file_explorer_dedup_3tier_scan` (767.85 µs — 0.76 ms for multi-file 3-tier scan)
   19. `file_explorer/file_explorer_storage_analytics` (69.17 µs — sub-millisecond recursive stats)
   20. `file_explorer/file_explorer_squarified_treemap` (292.00 µs — 0.29 ms for full squarified layout)
+  21. `file_explorer_advanced/ocr_throughput` (4.16 µs per synthetic raster frame)
+  22. `file_explorer_advanced/dhash_generation` (41.67 ns — sub-microsecond 64-bit difference hash)
+  23. `file_explorer_advanced/document_extraction` (425.71 ns — streaming multi-format document extraction)
+  24. `file_explorer_advanced/vector_cosine_similarity` (273.09 µs — 180x faster than 50ms SLA across 1,000 vectors)
 
 - Criterion compares new results against the committed baseline in `benchmarks/baseline.json`.
 - A statistically significant degradation $> 5\%$ in query latency or throughput triggers an immediate CI failure.
 - A peak RSS exceeding $300\,\text{MB}$ under test conditions fails CI immediately.
+
 

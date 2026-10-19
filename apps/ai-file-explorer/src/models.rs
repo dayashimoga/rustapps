@@ -156,6 +156,110 @@ pub enum WatchEvent {
     Renamed { from: PathBuf, to: PathBuf },
 }
 
+/// Metadata extracted from a structured document (PDF, DOCX, Markdown, Code)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DocumentMetadata {
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub page_count: Option<usize>,
+    pub word_count: usize,
+    pub format: String,
+    pub creation_date: Option<String>,
+}
+
+/// Extracted document containing full-text content and document metadata
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExtractedDocument {
+    pub path: PathBuf,
+    pub file_name: String,
+    pub extension: Option<String>,
+    pub metadata: DocumentMetadata,
+    pub content_text: String,
+    pub language: Option<String>,
+    pub extracted_at_secs: u64,
+}
+
+/// Recognized word with bounding box and confidence score from OCR engine
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OcrWord {
+    pub text: String,
+    pub confidence: f32,
+    pub bbox: [u32; 4], // x, y, width, height
+}
+
+/// Output result from offline OCR analysis
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OcrResult {
+    pub text: String,
+    pub words: Vec<OcrWord>,
+    pub confidence: f32,
+    pub line_count: usize,
+    pub processing_time_ms: f64,
+}
+
+/// Visual fingerprint and OCR data for a screenshot or image
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScreenshotFingerprint {
+    pub path: PathBuf,
+    pub dhash: u64,
+    pub ocr_text: String,
+    pub dimensions: (u32, u32),
+}
+
+/// Match result for screenshot similarity search
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScreenshotSearchResult {
+    pub path: PathBuf,
+    pub dhash: u64,
+    pub hamming_distance: u32,
+    pub similarity_pct: f32,
+    pub ocr_snippet: Option<String>,
+}
+
+/// 8-bit quantized dense semantic embedding vector
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VectorEmbedding {
+    pub doc_path: PathBuf,
+    pub vector: Vec<i8>,
+    pub dimension: usize,
+    pub magnitude: f32,
+}
+
+/// Mode of search execution
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SearchMode {
+    Keyword,
+    Semantic,
+    Combined,
+}
+
+/// Query parameters for document content and semantic search
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContentSearchQuery {
+    pub query: String,
+    pub mode: SearchMode,
+    pub limit: usize,
+    pub extension_filter: Option<String>,
+}
+
+/// Individual hit from a content or semantic search
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SemanticSearchResult {
+    pub path: PathBuf,
+    pub file_name: String,
+    pub score: f32,
+    pub snippet: String,
+    pub format: String,
+}
+
+/// Aggregated content search result bundle
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ContentSearchResult {
+    pub items: Vec<SemanticSearchResult>,
+    pub total_matches: usize,
+    pub execution_time_ms: f64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

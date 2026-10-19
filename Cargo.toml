@@ -65,6 +65,7 @@ regex = "1.11"
 # Utilities & System
 tempfile = "3.12"
 criterion = { version = "0.5", features = ["html_reports"] }
+flate2 = "1.0"
 
 # Internal workspace crates
 platform-common = { path = "platform" }

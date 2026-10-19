@@ -136,3 +136,27 @@ Before any code is committed or merged:
 - [ ] Are random numbers generated exclusively via `OsRng`?
 - [ ] Have `cargo audit` and `cargo deny check` passed with 0 warnings or vulnerabilities?
 - [ ] Does the change introduce any network socket or egress dependencies? (Must be 0).
+
+---
+
+## 8. Offline Intelligence & Content Extraction Security Controls
+
+The advanced intelligence capabilities of AI File Explorer (Phase 6) adhere to strict air-gap and memory safety boundaries:
+
+1. **Pure-Rust Offline OCR Engine (ADR-0026):**
+   - Implements 100% pure-Rust image decoding, binarization, and glyph classification without linking external C/C++ native libraries (e.g., zero Tesseract or Leptonica C dependencies). This eliminates common native memory corruption vulnerabilities (such as buffer overflows or use-after-free bugs).
+   - Enforces a hard dimension limit (`MAX_IMAGE_DIMENSION = 4096` pixels per axis) to prevent allocation exhaustion and pixel decompression bombs.
+
+2. **Perceptual Visual Hashing Isolation (ADR-0027):**
+   - 64-bit difference perceptual hashing (`dHash`) executes entirely in volatile memory with box sampling and bitwise gradient shifts (`u64`).
+   - Image buffers are freed immediately after computing the 64-bit hash; no uncompressed bitmaps are retained in long-lived memory structures.
+
+3. **Multi-Format Document Extraction Hardening (ADR-0028):**
+   - Hard upper bound on document size (`MAX_DOC_SIZE_BYTES = 50 MB`).
+   - Pure-Rust `flate2` streaming decompression operates on bounded buffers to prevent zip bombs, recursive compression loops, or infinite FlateDecode streams.
+   - Text parsing ignores active scripts, macros, or external references in PDF and DOCX files, preventing script injection or XML external entity (XXE) attacks.
+
+4. **Quantized Vector Embeddings & In-Memory Index (ADR-0029):**
+   - 8-bit integer quantization (`[i8; 64]`) consumes exactly 64 bytes per document, allowing 100,000 indexed documents to fit in $< 6.4\,\text{MB}$ of vector memory, well within the 300MB RAM budget.
+   - Zero-call external API isolation: All tokenization, character n-gram hashing, and vector projections are calculated on-device with zero cloud telemetry or network egress.
+

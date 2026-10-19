@@ -528,6 +528,98 @@ fn benchmark_file_explorer_operations(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_file_explorer_advanced_features(c: &mut Criterion) {
+    use ai_file_explorer::doc_extract::DocumentExtractor;
+    use ai_file_explorer::embeddings::VectorIndex;
+    use ai_file_explorer::ocr::{GrayImage, OfflineOcrEngine};
+    use ai_file_explorer::screenshot::compute_dhash;
+    use std::path::Path;
+
+    let mut group = c.benchmark_group("file_explorer_advanced");
+
+    // 1. OCR processing on a synthetic grayscale image
+    let width = 64u32;
+    let height = 32u32;
+    let mut pixels = vec![255u8; (width * height) as usize];
+    for y in 10..22 {
+        for x in 10..14 {
+            pixels[(y * width + x) as usize] = 0;
+        }
+        for x in 20..24 {
+            pixels[(y * width + x) as usize] = 0;
+        }
+    }
+    for x in 10..24 {
+        pixels[(16 * width + x) as usize] = 0;
+    }
+    let ocr_img = GrayImage::new(width, height, pixels);
+
+    group.bench_function("ocr_throughput", |b| {
+        b.iter(|| {
+            let res = OfflineOcrEngine::recognize_gray_image(
+                black_box(&ocr_img),
+                black_box(std::time::Instant::now()),
+            )
+            .unwrap();
+            black_box(res.words.len());
+        });
+    });
+
+    // 2. 64-bit dHash perceptual hashing computation
+    let mut dhash_pixels = vec![128u8; 128 * 128];
+    for y in 0..128 {
+        for x in 0..128 {
+            dhash_pixels[y * 128 + x] = ((x * 2 + y) % 256) as u8;
+        }
+    }
+    let dhash_img = GrayImage::new(128, 128, dhash_pixels);
+
+    group.bench_function("dhash_generation", |b| {
+        b.iter(|| {
+            let hash = compute_dhash(black_box(&dhash_img));
+            black_box(hash);
+        });
+    });
+
+    // 3. Multi-format document text & metadata extraction
+    let markdown_payload = b"# Architecture Overview\n\n- Sub-50ms search latency\n- Quantized 8-bit embeddings\n\n```rust\nfn main() {}\n```\n";
+    group.bench_function("document_extraction", |b| {
+        b.iter(|| {
+            let doc = DocumentExtractor::extract_from_bytes(
+                black_box(Path::new("README.md")),
+                black_box("README.md"),
+                black_box(Some("md")),
+                black_box(markdown_payload),
+            )
+            .unwrap();
+            black_box(doc.metadata.word_count);
+        });
+    });
+
+    // 4. In-memory quantized vector similarity search across 1,000 vectors
+    let vector_index = VectorIndex::new();
+    for i in 0..1000 {
+        let path = format!("docs/module_spec_{}.md", i);
+        let content = format!(
+            "Offline-first local search engine indexing document number {} with cosine similarity vectors and inverted index.",
+            i
+        );
+        vector_index.index_document(Path::new(&path), &content);
+    }
+
+    group.bench_function("vector_cosine_similarity", |b| {
+        b.iter(|| {
+            let results = vector_index.search(
+                black_box("offline search engine cosine similarity"),
+                black_box(10),
+            );
+            black_box(results.len());
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -541,6 +633,7 @@ criterion_group!(
     benchmark_timeline_histogram,
     benchmark_vault_search_and_crypto,
     benchmark_vault_advanced_features,
-    benchmark_file_explorer_operations
+    benchmark_file_explorer_operations,
+    benchmark_file_explorer_advanced_features
 );
 criterion_main!(benches);

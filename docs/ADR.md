@@ -379,6 +379,78 @@ This document records the foundational architectural decisions made for the mono
 - **Rationale:** Guarantees 60 FPS rendering, instant zooming/drilling, and minimal browser memory consumption.
 - **Consequences:** Drill-down re-aggregates children dynamically from the folder tree index.
 
+---
 
+## ADR-0026: Offline Image & Scanned PDF OCR Extraction Pipeline
 
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Extracting search terms from image files (PNG, JPEG, BMP) and scanned PDFs typically relies on cloud vision APIs (AWS Textract, Google Cloud Vision) or heavy native dynamic library bindings (Tesseract C++ / Leptonica), violating offline-first and zero-dependency constraints.
+- **Alternatives Considered:**
+  1. *Cloud Vision APIs:* Strict violation of air-gap, privacy, and zero-cost constraints.
+  2. *Tesseract C++ FFI bindings:* Requires system dynamic libraries (`libtesseract.so`, `leptonica.dll`), complicated cross-platform compilation, and large distribution size (>50MB).
+  3. *In-Process Pure Rust Offline OCR Pipeline:*
+     - Image loading and normalization (grayscale conversion, Otsu's adaptive thresholding binarization).
+     - Connected-component segmentation into lines and words.
+     - Normalized feature extraction ($8 \times 8$ density, topological loops, crossing counts) matched against an embedded offline glyph dictionary / neural weight matrix with fallback to embedded PDF text layers.
+- **Decision:** Implement an in-process, pure-Rust offline OCR pipeline in `ocr.rs` for raster images and scanned PDF documents.
+- **Rationale:** 100% offline, zero external dynamic libraries, memory-safe, $< 300\,\text{MB}$ RAM, and seamlessly streams extracted words into Tantivy schema fields.
+- **Consequences:** Optimized for machine-printed text, screenshots, code snippets, and structured receipts; cursive handwritten recognition is out of scope.
 
+---
+
+## ADR-0027: Visual Perceptual Hashing (dHash) for Sub-Millisecond Screenshot Similarity
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Users capture frequent screenshots that differ only by minor resizing, compression artifacts, or slight crop differences. Cryptographic hashes (SHA-256, BLAKE3) fail because even a single altered bit invalidates the hash.
+- **Alternatives Considered:**
+  1. *Pixel-by-pixel Mean Squared Error (MSE):* High CPU overhead ($O(W \times H)$) and intolerant to resolution scaling.
+  2. *Deep convolutional neural feature extractors (ResNet/ViT):* Heavy weight files (>100MB), slow CPU inference (>100ms per image), high RAM usage.
+  3. *Perceptual Difference Hashing (dHash):*
+     - Downsample image to a $9 \times 8$ grayscale matrix.
+     - Compute horizontal gradient bits: $\text{bit}(x, y) = 1$ if $P(x+1, y) > P(x, y)$ else $0$.
+     - Yields a compact 64-bit integer (`u64`) fingerprint.
+     - Distance measured via bitwise XOR Hamming distance: `(h1 ^ h2).count_ones()`.
+- **Decision:** Implement 64-bit Perceptual Difference Hashing (dHash) combined with Tantivy OCR text search in `screenshot.rs`.
+- **Rationale:** Fingerprint computation takes $< 100\,\text{µs}$; Hamming distance comparison completes in $< 1\,\text{µs}$ (single CPU cycle `popcnt`), allowing real-time similarity clustering across tens of thousands of screenshots.
+- **Consequences:** Images must be downscaled to $9 \times 8$ during indexing.
+
+---
+
+## ADR-0028: Multi-Format Document Text and Metadata Extraction Engine
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Comprehensive full-text search requires indexing textual content and metadata across diverse document formats: PDF, DOCX, Markdown, source code, and archives, without external runtime binaries (`pdftotext`, `pandoc`, `unzip`).
+- **Alternatives Considered:**
+  1. *External CLI tools:* High security risk, OS portability hurdles, and external process spawning latency.
+  2. *Heavy Java/Python server services:* Violates strict offline-first and lightweight client rules.
+  3. *Pure-Rust Streaming Extractors in `doc_extract.rs`:*
+     - *PDF:* Parser extracting body objects, FlateDecode decompression, font encoding maps, text operators (`BT`, `ET`, `Tj`, `TJ`), and `/Info` dictionary metadata.
+     - *DOCX:* In-memory ZIP archive reader streaming `word/document.xml` for `<w:t>` text nodes and `docProps/core.xml` for Dublin Core metadata.
+     - *Markdown:* Fast scanner extracting title headers, YAML/TOML frontmatter, and stripping syntax tokens.
+     - *Source Code:* Language detector extracting module docstrings, function signatures, and code tokens across 20+ programming languages.
+     - *Archives:* Container scanner indexing archive manifests and inner text files under 1MB.
+- **Decision:** Implement native in-process streaming document extractors directly within `apps/ai-file-explorer` feeding into the Tantivy indexing pipeline.
+- **Rationale:** 100% offline, zero external dependencies, bounded heap memory ($< 50\,\text{MB}$ working RAM), and sub-millisecond per-file parsing throughput.
+- **Consequences:** Password-protected or DRM-locked files require explicit user authentication prior to extraction.
+
+---
+
+## ADR-0029: 8-Bit Quantized Local Embedding Inference & Vector Similarity Index for Semantic Search
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Keyword-only queries fail when users search using conceptual or natural-language phrasing (e.g. searching "database credential leak" should match "unencrypted postgres password"). External vector databases and large LLMs exceed our strict $< 300\,\text{MB}$ RAM and $< 50\,\text{ms}$ query SLAs.
+- **Alternatives Considered:**
+  1. *Remote vector embedding APIs (OpenAI, Cohere):* Strict violation of air-gap constraint and zero-cost policy.
+  2. *Heavy local LLMs (Ollama, Llama.cpp 7B):* Requires 4GB–16GB RAM and dedicated GPU acceleration.
+  3. *In-Process 8-Bit Quantized Embedding Model & Cosine Vector Index (`embeddings.rs`):*
+     - 64-dimensional dense semantic vector space.
+     - 8-bit integer quantization (`[i8; 64]`) consuming only 64 bytes per document.
+     - Character n-gram and subword token hasher with positional encoding and trained projection weights.
+     - In-memory contiguous vector bank with SIMD-accelerated integer dot products ($A \cdot B = \sum A_i B_i$) for instant cosine similarity.
+- **Decision:** Implement an in-memory 8-bit quantized embedding inference engine and vector similarity index in `embeddings.rs`.
+- **Rationale:** 100,000 document vectors occupy only $6.4\,\text{MB}$ of resident RAM; vector query across 100,000 items executes in $< 2\,\text{ms}$ on standard CPU cores; 100% offline and zero cloud dependencies.
+- **Consequences:** Calibrated for technical documentation, code, file paths, and general English corpus search.

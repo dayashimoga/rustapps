@@ -118,6 +118,24 @@ Welcome to the next generation of developer utilities. This suite comprises thre
 4. Click **Apply Rename**: transactions execute atomically. If any error occurs or disk permissions fail midway, the reverse-order rollback journal automatically restores all previous filenames with zero data loss.
 5. If you change your mind after applying, click **Undo Batch Rename** to immediately restore previous names.
 
+### 4.5 Content & Natural-Language Semantic Search
+1. Switch to the **Content Search** view (`Content Search` tab or `Ctrl+Shift+F`).
+2. Select your desired search mode:
+   - **Hybrid:** Combines BM25 keyword matching with dense vector cosine similarity via Reciprocal Rank Fusion.
+   - **Semantic Vector:** Uses local 8-bit quantized embeddings (`[i8; 64]`) to locate files matching the meaning and concepts of your query (e.g. "Kubernetes container deployment failure" matches `k8s-pod-crash.log` or `deploy.yml`).
+   - **Keyword Only:** Classic high-performance exact term search over extracted text.
+3. Filter results dynamically using format filter pills (`ALL`, `PDF`, `DOCX`, `MARKDOWN`, `CODE`, `ARCHIVE`).
+4. Review matching cards displaying confidence match meters, highlighted text snippets, and document properties.
+5. Click **Inspect Document** to open the **Document Modal**, previewing extracted title, author, word count, line count, and scrollable full plaintext with 1-click clipboard copy.
+
+### 4.6 Instant Screenshot Search & Visual Gallery
+1. Switch to the **Screenshots** view (`Screenshots` tab).
+2. The gallery catalogs all discovered screenshots, presenting high-resolution visual previews alongside:
+   - **64-bit dHash Badges:** Displays the compact hexadecimal perceptual visual fingerprint.
+   - **OCR Text Badges:** Displays text automatically recognized and indexed via the pure-Rust offline OCR engine.
+3. **Find Visually Similar:** Click the **Similar** button on any screenshot card to instantly query the catalog by Hamming distance (`<= 10` bit flips), locating resized, cropped, or re-compressed duplicate screenshots.
+4. **OCR Keyword Search:** Use the OCR search bar to search for text visible inside screenshots (e.g., error dialogs, terminal logs, code snippets, or slide titles).
+
 ---
 
 ## 5. Global Keyboard Shortcuts
@@ -126,6 +144,7 @@ Welcome to the next generation of developer utilities. This suite comprises thre
 | :--- | :--- | :--- | :--- |
 | `Ctrl+O` | `Cmd+O` | Open file / workspace | Log Viewer / Explorer |
 | `Ctrl+F` | `Cmd+F` | Focus search bar / Omnibar | All Apps |
+| `Ctrl+Shift+F` | `Cmd+Shift+F` | Focus Content & Semantic Search | AI File Explorer |
 | `Ctrl+T` | `Cmd+T` | Toggle live tail mode | Universal Log Viewer |
 | `Ctrl+I` | `Cmd+I` | Toggle AI insights drawer | Universal Log Viewer |
 | `Ctrl+K` | `Cmd+K` | Open global command palette | All Apps |
@@ -134,4 +153,5 @@ Welcome to the next generation of developer utilities. This suite comprises thre
 | `Ctrl+S` | `Cmd+S` | Toggle Storage Stats drawer | AI File Explorer |
 | `Ctrl+B` | `Cmd+B` | Toggle sidebar / bookmarks | All Apps |
 | `Ctrl+,` | `Cmd+,` | Open application settings | All Apps |
+
 

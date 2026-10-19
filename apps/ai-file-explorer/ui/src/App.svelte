@@ -6,12 +6,16 @@
   import TreemapView from './components/TreemapView.svelte';
   import BatchRenameModal from './components/BatchRenameModal.svelte';
   import StatsDrawer from './components/StatsDrawer.svelte';
+  import ContentSearch from './components/ContentSearch.svelte';
+  import ScreenshotGallery from './components/ScreenshotGallery.svelte';
+  import DocumentModal from './components/DocumentModal.svelte';
   import type {
     ActiveTab,
     BatchRenameResult,
     BatchRenameRule,
     DeduplicationSummary,
     DirectoryListing,
+    ExtractedDocument,
     FileItem,
     FolderStats,
     RenamePreview,
@@ -42,6 +46,10 @@
   let renamePreviews: RenamePreview[] = [];
   let renameResult: BatchRenameResult | null = null;
   let isExecutingRename = false;
+
+  // Phase 6 Document Inspection Modal State
+  let inspectedDoc: ExtractedDocument | null = null;
+  let isDocModalOpen = false;
 
   // Tauri IPC Bridge
   async function invokeTauri<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -98,46 +106,47 @@
       return {
         root_path: currentPath,
         total_files: 38,
-        total_dirs: 8,
-        total_size_bytes: 26050000,
-        extension_counts: { rs: 24, toml: 4, md: 5, jpg: 2, json: 3 },
-        extension_sizes: { rs: 500000, toml: 12000, md: 28000, jpg: 2097152, json: 15000 },
-        largest_files: listing.items.slice(0, 5),
+        total_dirs: 12,
+        total_size_bytes: 145000000,
+        extension_counts: { rs: 24, svelte: 8, md: 4, toml: 2 },
+        extension_sizes: { rs: 95000000, svelte: 30000000, md: 15000000, toml: 5000000 },
+        largest_files: [
+          { path: `${currentPath}/target/debug/app.exe`, file_name: 'app.exe', extension: 'exe', size_bytes: 45000000, is_dir: false, modified_timestamp_secs: 1729300000, is_readonly: false },
+          { path: `${currentPath}/target/debug/lib.rlib`, file_name: 'lib.rlib', extension: 'rlib', size_bytes: 25000000, is_dir: false, modified_timestamp_secs: 1729300000, is_readonly: false },
+        ],
       } as unknown as T;
     }
 
     if (cmd === 'get_treemap_cmd') {
-      const width = args.width as number || 800;
-      const height = args.height as number || 600;
       return {
         name: 'rustapps',
         path: currentPath,
-        size_bytes: 26050000,
+        size_bytes: 145000000,
         is_dir: true,
-        bounds: { x: 0, y: 0, width, height },
+        bounds: { x: 0, y: 0, width: (args.width as number) || 1024, height: (args.height as number) || 768 },
         children: [
           {
             name: 'apps',
             path: `${currentPath}/apps`,
-            size_bytes: 15000000,
+            size_bytes: 85000000,
             is_dir: true,
-            bounds: { x: 0, y: 0, width: width * 0.6, height },
+            bounds: { x: 0, y: 0, width: 600, height: 768 },
             children: [],
           },
           {
             name: 'shared',
             path: `${currentPath}/shared`,
-            size_bytes: 8000000,
+            size_bytes: 45000000,
             is_dir: true,
-            bounds: { x: width * 0.6, y: 0, width: width * 0.4, height: height * 0.6 },
+            bounds: { x: 600, y: 0, width: 424, height: 450 },
             children: [],
           },
           {
-            name: 'photo_dup_1.jpg',
-            path: `${currentPath}/photo_dup_1.jpg`,
-            size_bytes: 1048576,
-            is_dir: false,
-            bounds: { x: width * 0.6, y: height * 0.6, width: width * 0.4, height: height * 0.4 },
+            name: 'docs',
+            path: `${currentPath}/docs`,
+            size_bytes: 15000000,
+            is_dir: true,
+            bounds: { x: 600, y: 450, width: 424, height: 318 },
             children: [],
           },
         ],
@@ -146,12 +155,44 @@
 
     if (cmd === 'preview_batch_rename_cmd') {
       const paths = (args.paths as string[]) || [];
-      const previews: RenamePreview[] = paths.map((p, idx) => ({
-        original_path: p,
-        proposed_path: `${p.replace(/\.[^/.]+$/, '')}_renamed_${idx + 1}.dat`,
-        has_conflict: false,
-        conflict_reason: null,
-      }));
+      const rule = args.rule as BatchRenameRule;
+      const previews: RenamePreview[] = paths.map((p, idx) => {
+        const parts = p.split('/');
+        const originalName = parts.pop() || '';
+        let newName = originalName;
+
+        if (rule.type === 'RegexReplace') {
+          try {
+            const re = new RegExp(rule.config.pattern, 'g');
+            newName = originalName.replace(re, rule.config.replacement);
+          } catch {
+            newName = originalName;
+          }
+        } else if (rule.type === 'PrefixSuffix') {
+          const dot = originalName.lastIndexOf('.');
+          const stem = dot !== -1 ? originalName.slice(0, dot) : originalName;
+          const ext = dot !== -1 ? originalName.slice(dot) : '';
+          newName = `${rule.config.prefix}${stem}${rule.config.suffix}${ext}`;
+        } else if (rule.type === 'Numbering') {
+          const dot = originalName.lastIndexOf('.');
+          const ext = dot !== -1 ? originalName.slice(dot) : '';
+          const numStr = (rule.config.start_number + idx).toString().padStart(rule.config.pad_digits, '0');
+          newName = `${rule.config.prefix}${numStr}${ext}`;
+        } else if (rule.type === 'ToLowerCase') {
+          newName = originalName.toLowerCase();
+        } else if (rule.type === 'ToUpperCase') {
+          newName = originalName.toUpperCase();
+        }
+
+        const dir = parts.join('/');
+        const proposedPath = `${dir}/${newName}`;
+        return {
+          original_path: p,
+          proposed_path: proposedPath,
+          has_conflict: false,
+          conflict_reason: null,
+        };
+      });
       return previews as unknown as T;
     }
 
@@ -165,21 +206,37 @@
       } as unknown as T;
     }
 
-    throw new Error(`Command ${cmd} not mocked in dev environment`);
+    if (cmd === 'extract_document_cmd') {
+      const docPath = args.path as string;
+      const fileName = docPath.split('/').pop() || 'document.md';
+      return {
+        path: docPath,
+        file_name: fileName,
+        extension: 'md',
+        metadata: {
+          title: 'System Architecture Specification',
+          author: 'Lead Architect',
+          page_count: 5,
+          word_count: 1420,
+          format: 'Markdown Document',
+          creation_date: '2026-10-19',
+        },
+        content_text: `# System Architecture\n\nHigh-performance offline document indexing using Tantivy and 8-bit quantized embeddings.\n\nAll cryptographic keys are scrubbed from RAM on drop via zeroize.\nStrictly zero network egress is permitted in core binaries.`,
+        language: 'markdown',
+        extracted_at_secs: 1729300000,
+      } as unknown as T;
+    }
+
+    throw new Error(`Unhandled mock Tauri command: ${cmd}`);
   }
 
-  // Load current directory listing
   async function loadDirectory(path: string) {
+    currentPath = path;
     try {
-      const res = await invokeTauri<DirectoryListing>('list_directory_cmd', { path });
-      listing = res;
-      currentPath = res.current_path;
-      searchQuery = '';
+      listing = await invokeTauri<DirectoryListing>('list_directory_cmd', { path });
       selectedPaths = [];
-
-      // Update analytics and treemap in background
-      loadStorageStats(currentPath);
-      loadTreemap(currentPath);
+      await loadStorageStats(path);
+      await loadTreemap(path);
     } catch (err) {
       console.error('Failed to list directory:', err);
     }
@@ -194,8 +251,8 @@
 
     try {
       const hits = await invokeTauri<FileItem[]>('search_files_cmd', {
-        query: query.trim(),
-        limit: 50,
+        query,
+        limit: 100,
       });
       listing = {
         ...listing,
@@ -262,13 +319,21 @@
         previews,
       });
       if (!renameResult.rolled_back) {
-        // Refresh directory
         await loadDirectory(currentPath);
       }
     } catch (err) {
       console.error('Execute error:', err);
     } finally {
       isExecutingRename = false;
+    }
+  }
+
+  async function handleInspectDoc(path: string) {
+    try {
+      inspectedDoc = await invokeTauri<ExtractedDocument>('extract_document_cmd', { path });
+      isDocModalOpen = true;
+    } catch (err) {
+      console.error('Inspect doc error:', err);
     }
   }
 
@@ -312,47 +377,62 @@
     onNavigateUp={handleNavigateUp}
   />
 
-  <!-- Active Tab View Surface -->
-  {#if activeTab === 'browser'}
-    <FileBrowser
-      items={listing.items}
-      {selectedPaths}
-      onNavigateToFolder={loadDirectory}
-      onNavigateUp={handleNavigateUp}
-      onToggleSelect={handleToggleSelect}
-      onSelectAll={handleSelectAll}
-      onDeselectAll={handleDeselectAll}
-    />
-  {:else if activeTab === 'duplicates'}
-    <DuplicateFinder
-      searchRoot={currentPath}
-      summary={dedupSummary}
-      isScanning={isScanningDuplicates}
-      onStartScan={handleStartScanDuplicates}
-    />
-  {:else if activeTab === 'treemap'}
-    <TreemapView
-      rootNode={treemapNode}
-      onDrillDown={loadDirectory}
-      onRefreshTreemap={() => loadTreemap(currentPath)}
-    />
-  {:else if activeTab === 'batch_rename'}
-    <BatchRenameModal
-      selectedFiles={selectedPaths}
-      previews={renamePreviews}
-      {renameResult}
-      isExecuting={isExecutingRename}
-      onGeneratePreview={handlePreviewBatchRename}
-      onExecuteRename={handleExecuteBatchRename}
-      onClearSelection={handleDeselectAll}
-    />
-  {/if}
+  <div class="main-content-view">
+    <!-- Active Tab View Surface -->
+    {#if activeTab === 'browser'}
+      <FileBrowser
+        items={listing.items}
+        {selectedPaths}
+        onNavigateToFolder={loadDirectory}
+        onNavigateUp={handleNavigateUp}
+        onToggleSelect={handleToggleSelect}
+        onSelectAll={handleSelectAll}
+        onDeselectAll={handleDeselectAll}
+      />
+    {:else if activeTab === 'content_search'}
+      <ContentSearch
+        onInspectDoc={handleInspectDoc}
+      />
+    {:else if activeTab === 'screenshots'}
+      <ScreenshotGallery />
+    {:else if activeTab === 'duplicates'}
+      <DuplicateFinder
+        searchRoot={currentPath}
+        summary={dedupSummary}
+        isScanning={isScanningDuplicates}
+        onStartScan={handleStartScanDuplicates}
+      />
+    {:else if activeTab === 'treemap'}
+      <TreemapView
+        rootNode={treemapNode}
+        onDrillDown={loadDirectory}
+        onRefreshTreemap={() => loadTreemap(currentPath)}
+      />
+    {:else if activeTab === 'batch_rename'}
+      <BatchRenameModal
+        selectedFiles={selectedPaths}
+        previews={renamePreviews}
+        {renameResult}
+        isExecuting={isExecutingRename}
+        onGeneratePreview={handlePreviewBatchRename}
+        onExecuteRename={handleExecuteBatchRename}
+        onClearSelection={handleDeselectAll}
+      />
+    {/if}
+  </div>
 
   <!-- Slide-Over Storage Stats Drawer -->
   <StatsDrawer
     stats={folderStats}
     isOpen={showStatsDrawer}
     onClose={() => (showStatsDrawer = false)}
+  />
+
+  <!-- Phase 6 Document Inspection Modal -->
+  <DocumentModal
+    doc={inspectedDoc}
+    isOpen={isDocModalOpen}
+    onClose={() => (isDocModalOpen = false)}
   />
 </main>
 
@@ -362,5 +442,11 @@
     flex-direction: column;
     height: 100vh;
     overflow: hidden;
+  }
+
+  .main-content-view {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
   }
 </style>

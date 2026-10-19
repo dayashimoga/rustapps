@@ -779,4 +779,112 @@ mod integration_tests {
         assert!(photos.join("vacation_101.JPG").exists());
         assert!(photos.join("vacation_102.JPG").exists());
     }
+
+    #[test]
+    fn test_ai_file_explorer_advanced_ocr_and_semantic_flow() {
+        use ai_file_explorer::models::{ContentSearchQuery, SearchMode};
+        use ai_file_explorer::screenshot::compute_hamming_distance;
+        use ai_file_explorer::FileExplorerService;
+        use std::fs::File;
+        use std::io::Write;
+        use tempfile::tempdir;
+
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+
+        // 1. Create multi-format test documents
+        let md_file = root.join("architecture.md");
+        let mut f1 = File::create(&md_file).unwrap();
+        f1.write_all(b"# Architecture Overview\n\nHigh-performance offline document indexing using Tantivy and 8-bit quantized embeddings.").unwrap();
+        f1.sync_all().unwrap();
+
+        let rs_file = root.join("pipeline.rs");
+        let mut f2 = File::create(&rs_file).unwrap();
+        f2.write_all(b"//! Asynchronous indexing pipeline\n\npub fn execute_pipeline() {\n    // zero-copy processing\n}\n").unwrap();
+        f2.sync_all().unwrap();
+
+        let service = FileExplorerService::new().unwrap();
+
+        // 2. Extract and index documents
+        let doc1 = service.extract_document(&md_file).unwrap();
+        assert_eq!(doc1.file_name, "architecture.md");
+        assert!(doc1.content_text.contains("quantized embeddings"));
+        service.index_extracted_document(&doc1).unwrap();
+
+        let doc2 = service.extract_document(&rs_file).unwrap();
+        assert_eq!(doc2.file_name, "pipeline.rs");
+        assert!(doc2.content_text.contains("zero-copy processing"));
+        service.index_extracted_document(&doc2).unwrap();
+
+        // 3. Keyword Content Search
+        let kw_query = ContentSearchQuery {
+            query: "quantized".to_string(),
+            mode: SearchMode::Keyword,
+            limit: 5,
+            extension_filter: None,
+        };
+        let kw_res = service.search_content(&kw_query).unwrap();
+        assert_eq!(kw_res.total_matches, 1);
+        assert_eq!(kw_res.items[0].file_name, "architecture.md");
+
+        // 4. Semantic Search
+        let sem_query = ContentSearchQuery {
+            query: "vector representation in memory".to_string(),
+            mode: SearchMode::Semantic,
+            limit: 5,
+            extension_filter: None,
+        };
+        let sem_res = service.search_content(&sem_query).unwrap();
+        assert_eq!(sem_res.total_matches, 2);
+        assert!(sem_res.items[0].score > 0.0);
+
+        // 5. Combined Search
+        let comb_query = ContentSearchQuery {
+            query: "pipeline".to_string(),
+            mode: SearchMode::Combined,
+            limit: 5,
+            extension_filter: Some("rs".to_string()),
+        };
+        let comb_res = service.search_content(&comb_query).unwrap();
+        assert_eq!(comb_res.total_matches, 1);
+        assert_eq!(comb_res.items[0].file_name, "pipeline.rs");
+
+        // 6. Test Screenshot Perceptual Hashing & Hamming Distance
+        let hash_a =
+            0b1010_1010_1010_1010_1010_1010_1010_1010_1010_1010_1010_1010_1010_1010_1010_1010u64;
+        let hash_b =
+            0b1010_1010_1010_1010_1010_1010_1010_1010_1010_1010_1010_1010_1010_1010_1010_1011u64; // 1 bit diff
+        let dist = compute_hamming_distance(hash_a, hash_b);
+        assert_eq!(dist, 1);
+
+        // 7. Test Offline OCR on synthetic raster buffer
+        let mut bmp = Vec::new();
+        bmp.extend_from_slice(b"BM");
+        bmp.extend_from_slice(&58u32.to_le_bytes()); // file size
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+        bmp.extend_from_slice(&54u32.to_le_bytes()); // offset
+        bmp.extend_from_slice(&40u32.to_le_bytes()); // header size
+        bmp.extend_from_slice(&4i32.to_le_bytes()); // width = 4
+        bmp.extend_from_slice(&4i32.to_le_bytes()); // height = 4
+        bmp.extend_from_slice(&1u16.to_le_bytes()); // planes
+        bmp.extend_from_slice(&24u16.to_le_bytes()); // 24 bpp
+        bmp.extend_from_slice(&0u32.to_le_bytes()); // uncompressed
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+        bmp.extend_from_slice(&0i32.to_le_bytes());
+        bmp.extend_from_slice(&0i32.to_le_bytes());
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+        // 16 pixels
+        for _ in 0..16 {
+            bmp.extend_from_slice(&[20, 20, 20]);
+        }
+
+        let img_file = root.join("screenshot.bmp");
+        let mut f_img = File::create(&img_file).unwrap();
+        f_img.write_all(&bmp).unwrap();
+        f_img.sync_all().unwrap();
+
+        let ocr_res = service.ocr_image(&img_file).unwrap();
+        assert!(ocr_res.processing_time_ms >= 0.0);
+    }
 }

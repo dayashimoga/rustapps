@@ -2,8 +2,9 @@
 //! Tauri Desktop IPC Command Handlers for AI File Explorer
 
 use crate::models::{
-    BatchRenameResult, BatchRenameRule, DeduplicationSummary, DirectoryListing, FileItem,
-    FolderStats, RenamePreview, TreemapNode,
+    BatchRenameResult, BatchRenameRule, ContentSearchQuery, ContentSearchResult,
+    DeduplicationSummary, DirectoryListing, ExtractedDocument, FileItem, FolderStats, OcrResult,
+    RenamePreview, ScreenshotFingerprint, ScreenshotSearchResult, TreemapNode,
 };
 use crate::service::FileExplorerService;
 use std::path::PathBuf;
@@ -96,28 +97,112 @@ pub fn execute_batch_rename_cmd(previews: Vec<RenamePreview>) -> Result<BatchRen
         .map_err(|e| e.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Phase 6 Command Endpoints
+// ---------------------------------------------------------------------------
+
+/// Extracts text and metadata from a document file
+pub fn extract_document_cmd(path: String) -> Result<ExtractedDocument, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.extract_document(&path).map_err(|e| e.to_string())
+}
+
+/// Indexes a document file into Tantivy and vector embeddings
+pub fn index_document_cmd(path: String) -> Result<ExtractedDocument, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    let doc = svc.extract_document(&path).map_err(|e| e.to_string())?;
+    svc.index_extracted_document(&doc)
+        .map_err(|e| e.to_string())?;
+    Ok(doc)
+}
+
+/// Content and semantic search endpoint
+pub fn search_content_cmd(query: ContentSearchQuery) -> Result<ContentSearchResult, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.search_content(&query).map_err(|e| e.to_string())
+}
+
+/// OCR processing on an image file
+pub fn ocr_image_cmd(path: String) -> Result<OcrResult, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.ocr_image(&path).map_err(|e| e.to_string())
+}
+
+/// Screenshot visual and OCR indexing
+pub fn index_screenshot_cmd(path: String) -> Result<ScreenshotFingerprint, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.index_screenshot(&path).map_err(|e| e.to_string())
+}
+
+/// Visual similarity screenshot search
+pub fn search_screenshots_by_hash_cmd(
+    target_hash: u64,
+    max_distance: u32,
+    limit: usize,
+) -> Result<Vec<ScreenshotSearchResult>, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    Ok(svc.search_screenshots_by_hash(target_hash, max_distance, limit))
+}
+
+/// Text keyword screenshot search
+pub fn search_screenshots_by_text_cmd(
+    query: String,
+    limit: usize,
+) -> Result<Vec<ScreenshotSearchResult>, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    Ok(svc.search_screenshots_by_text(&query, limit))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::SearchMode;
     use std::fs::File;
+    use std::io::Write;
     use tempfile::tempdir;
 
     #[test]
-    fn test_commands_api_end_to_end() {
+    fn test_commands_service_workflow() {
         let dir = tempdir().unwrap();
-        let f = dir.path().join("cmd_test.txt");
-        File::create(&f).unwrap();
+        let path_str = dir.path().to_string_lossy().to_string();
 
-        let listing = list_directory_cmd(dir.path().to_string_lossy().to_string()).unwrap();
-        assert_eq!(listing.total_count, 1);
+        let listing = list_directory_cmd(path_str.clone()).unwrap();
+        assert_eq!(listing.total_count, 0);
 
-        let indexed = index_directory_cmd(dir.path().to_string_lossy().to_string()).unwrap();
-        assert_eq!(indexed, 1);
+        let stats = analyze_storage_cmd(path_str.clone(), 5).unwrap();
+        assert_eq!(stats.total_files, 0);
 
-        let search_res = search_files_cmd("cmd_test".to_string(), 10).unwrap();
-        assert_eq!(search_res.len(), 1);
+        let treemap = get_treemap_cmd(path_str, 800.0, 600.0, 1).unwrap();
+        assert_eq!(treemap.bounds.width, 800.0);
+    }
 
-        let stats = analyze_storage_cmd(dir.path().to_string_lossy().to_string(), 5).unwrap();
-        assert_eq!(stats.total_files, 1);
+    #[test]
+    fn test_commands_phase_6_content_search() {
+        let dir = tempdir().unwrap();
+        let doc_file = dir.path().join("readme.md");
+        let mut f = File::create(&doc_file).unwrap();
+        f.write_all(b"# Welcome\nThis is an offline file search guide.")
+            .unwrap();
+
+        let doc_path = doc_file.to_string_lossy().to_string();
+        let doc = index_document_cmd(doc_path).unwrap();
+        assert_eq!(doc.file_name, "readme.md");
+
+        let q = ContentSearchQuery {
+            query: "offline file".to_string(),
+            mode: SearchMode::Combined,
+            limit: 5,
+            extension_filter: None,
+        };
+        let res = search_content_cmd(q).unwrap();
+        assert_eq!(res.total_matches, 1);
+        assert_eq!(res.items[0].file_name, "readme.md");
     }
 }

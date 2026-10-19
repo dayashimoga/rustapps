@@ -79,4 +79,79 @@ export interface BatchRenameResult {
   error_message: string | null;
 }
 
-export type ActiveTab = 'browser' | 'duplicates' | 'treemap' | 'batch_rename';
+// ---------------------------------------------------------------------------
+// Phase 6 Domain Types
+// ---------------------------------------------------------------------------
+
+export interface DocumentMetadata {
+  title: string | null;
+  author: string | null;
+  page_count: number | null;
+  word_count: number;
+  format: string;
+  creation_date: string | null;
+}
+
+export interface ExtractedDocument {
+  path: string;
+  file_name: string;
+  extension: string | null;
+  metadata: DocumentMetadata;
+  content_text: string;
+  language: string | null;
+  extracted_at_secs: number;
+}
+
+export interface OcrWord {
+  text: string;
+  confidence: number;
+  bbox: [number, number, number, number];
+}
+
+export interface OcrResult {
+  text: string;
+  words: OcrWord[];
+  confidence: number;
+  line_count: number;
+  processing_time_ms: number;
+}
+
+export interface ScreenshotFingerprint {
+  path: string;
+  dhash: number;
+  ocr_text: string;
+  dimensions: [number, number];
+}
+
+export interface ScreenshotSearchResult {
+  path: string;
+  dhash: number;
+  hamming_distance: number;
+  similarity_pct: number;
+  ocr_snippet: string | null;
+}
+
+export type SearchMode = 'Keyword' | 'Semantic' | 'Combined';
+
+export interface ContentSearchQuery {
+  query: string;
+  mode: SearchMode;
+  limit: number;
+  extension_filter: string | null;
+}
+
+export interface SemanticSearchResult {
+  path: string;
+  file_name: string;
+  score: number;
+  snippet: string;
+  format: string;
+}
+
+export interface ContentSearchResult {
+  items: SemanticSearchResult[];
+  total_matches: number;
+  execution_time_ms: number;
+}
+
+export type ActiveTab = 'browser' | 'duplicates' | 'treemap' | 'batch_rename' | 'content_search' | 'screenshots';
