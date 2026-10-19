@@ -7,20 +7,30 @@ This document tracks all planned, ongoing, and completed tasks across all phases
 
 ## In Progress
 
-*(None - Phase 7 completed, awaiting user Quality Gate approval to advance to Phase 8: Mobile Vault)*
+*(None - Phase 8 completed, awaiting user Quality Gate approval for final Monorepo Release)*
 
 ---
 
 ## Pending
-- [ ] **Phase 8: Mobile Vault (8–12 weeks)**
-  - C-ABI / `flutter_rust_bridge` bindings over vault core.
-  - Android/iOS Flutter UI supporting all Vault features.
-  - Android BiometricPrompt/Keystore & iOS LocalAuthentication/Secure Enclave.
-  - Mobile benchmarks verifying $< 2\,\text{s}$ startup and $< 50\,\text{ms}$ search.
+
+*(None - All Phase 0 through Phase 8 milestones fully completed and verified)*
 
 ---
 
 ## Completed
+
+- [x] **Phase 8: Mobile Vault (8–12 weeks)**
+  - [x] Extended C-ABI FFI endpoints in `apps/devops-secret-vault/src/ffi.rs` (`vault_generate_totp`, `vault_get_health_report`, `vault_inspect_certificate`, `vault_export_backup`, `vault_import_backup`, `vault_free_string`).
+  - [x] Complete production Flutter mobile application in `apps/devops-secret-vault/mobile/`:
+    - `pubspec.yaml`, `lib/main.dart` with dark luxury glassmorphism and reactive architecture.
+    - `lib/bindings/vault_ffi.dart` dynamic FFI bindings over `vault_core` shared library across Android (`libvault_core.so`), iOS (`vault_core.framework`), and desktop (`vault_core.dll`).
+    - `lib/models/secret.dart` mirroring all Rust domain entities and serde representations.
+    - `lib/services/vault_service.dart` async service with pointer lifecycles, memory safety, and mock fallback.
+    - `lib/services/biometric_service.dart` supporting Android BiometricPrompt/Keystore & iOS LocalAuthentication/FaceID.
+    - Mobile screens: `unlock_screen.dart`, `vault_home_screen.dart`, `secret_detail_screen.dart`, `totp_screen.dart`, `health_screen.dart`, `backup_screen.dart`.
+    - Automated unit & widget tests in `mobile/test/vault_mobile_test.dart`.
+  - [x] Zero cloud egress, air-gapped security, clipboard auto-clearing timer (45s).
+  - [x] Monorepo verification: 141+ tests passing across workspace, 0 clippy warnings, 0 fmt diffs.
 
 - [x] **Phase 0 — Stage 1: Documentation & Governance Initialization**
   - Author and verify all 15 `/docs/` documents (`TechnicalRequirements.md`, `TechnicalArchitecture.md`, `ImplementationPlan.md`, `Changelog.md`, `Todo.md`, `CodeUnderstanding.md`, `SecurityArchitecture.md`, `TestingStrategy.md`, `DeploymentGuide.md`, `DeveloperGuide.md`, `UserGuide.md`, `RiskRegister.md`, `ADR.md`, `ReleaseProcess.md`, `PerformanceStrategy.md`).

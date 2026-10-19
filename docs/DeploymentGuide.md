@@ -111,3 +111,42 @@ cross build --workspace --release --target aarch64-unknown-linux-gnu
 ```
 This produces clean, fully static GLIBC-compatible binaries runnable on any modern Linux ARM64 distribution without native ARM hardware or cross-toolchain installation on the host.
 
+---
+
+## 8. Mobile Vault Build & Deployment (Android & iOS)
+
+The mobile client for DevOps Secret Vault resides in `apps/devops-secret-vault/mobile/` and builds against compiled native `vault_core` shared libraries.
+
+### 8.1 Compile Rust Core for Mobile Architectures
+```bash
+# Add mobile targets
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+rustup target add aarch64-apple-ios x86_64-apple-ios
+
+# Build Android native libraries
+cargo build -p devops-secret-vault --release --target aarch64-linux-android
+cargo build -p devops-secret-vault --release --target armv7-linux-androideabi
+
+# Build iOS native framework
+cargo build -p devops-secret-vault --release --target aarch64-apple-ios
+```
+
+### 8.2 Flutter Mobile Assembly
+```bash
+cd apps/devops-secret-vault/mobile
+
+# Fetch Flutter dependencies
+flutter pub get
+
+# Run mobile tests
+flutter test
+
+# Build Android APK / App Bundle (AAB)
+flutter build apk --release
+flutter build appbundle --release
+
+# Build iOS Archive (IPA)
+flutter build ipa --release
+```
+
+

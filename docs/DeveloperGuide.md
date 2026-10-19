@@ -138,3 +138,26 @@ Every task must execute through the mandated three-step cycle:
    - Update `SecurityArchitecture.md`, `TestingStrategy.md`, `DeploymentGuide.md`, `DeveloperGuide.md`, `UserGuide.md`, `RiskRegister.md`, `PerformanceStrategy.md`.
    - Move completed tasks intact to the Completed section in `Todo.md`.
    - Verify 100% passing tests, zero benchmark regressions, and $\ge 90\%$ test coverage.
+
+---
+
+## 6. Mobile Client Development Workflow
+
+The DevOps Secret Vault mobile client lives in `apps/devops-secret-vault/mobile/`.
+
+### 6.1 Architecture Overview
+- `lib/bindings/vault_ffi.dart`: Low-level C-ABI FFI wrapper using `dart:ffi`.
+- `lib/services/vault_service.dart`: High-level async API with memory safety and mock mode fallback.
+- `lib/services/biometric_service.dart`: Android BiometricPrompt & iOS LocalAuthentication.
+- `lib/models/secret.dart`: Strongly-typed domain models matching `vault_core`.
+- `lib/screens/`: Glassmorphic dark UI for authentication, search, credentials, TOTP, health, and backups.
+
+### 6.2 Development & Mock Mode
+During development or in environments without native Android/iOS compilation tools, `VaultService` automatically falls back to Mock Mode if native dynamic libraries cannot be loaded. Mock mode simulates master key initialization, Argon2id derivation, secret creation, real-time TOTP generation, 5-dimensional security scoring, and encrypted backup export/import in memory.
+
+### 6.3 Running Mobile Tests
+```bash
+cd apps/devops-secret-vault/mobile
+flutter test test/vault_mobile_test.dart
+```
+

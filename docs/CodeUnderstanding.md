@@ -304,3 +304,31 @@ Application startup / biometric authorization request
 - Shared crates are versioned together in the Cargo workspace.
 - Changes to shared crates must pass cross-crate integration suites and benchmark regression suites.
 - Deprecations follow a strict two-minor-version grace period with migration documentation.
+
+---
+
+## 9. Mobile Architecture & FFI Integration (Phase 8)
+
+### C-ABI Foreign Function Interface (`ffi.rs`)
+The `vault_core` library is compiled as both an `rlib` and `cdylib`, exporting clean C-ABI symbols across the native boundary:
+- `vault_create_handle` / `vault_free_handle`: Allocates and frees the multi-threaded Tokio runtime and `VaultService` orchestrator behind an opaque pointer (`VaultHandle`).
+- `vault_initialize` / `vault_unlock` / `vault_lock`: Argon2id key derivation and AES-GCM master key encryption.
+- `vault_search` / `vault_create_secret` / `vault_get_secret`: Core CRUD and Tantivy full-text search operations serialized as UTF-8 JSON.
+- `vault_generate_totp`: Dynamic RFC 6238 token computation using Base32 secret decoding and time-step countdowns.
+- `vault_get_health_report`: 5-dimensional security risk scoring (entropy, key reuse, rotation hygiene, expiration, MFA coverage).
+- `vault_inspect_certificate`: X.509 ASN.1 certificate parsing and SAN verification.
+- `vault_export_backup` / `vault_import_backup`: Encrypted container export and import with Argon2id key derivation and SHA-256 verification.
+- `vault_free_string`: Safe CString reclamation via `CString::from_raw` preventing cross-heap memory leaks.
+
+### Flutter Mobile Architecture (`apps/devops-secret-vault/mobile/`)
+- **Bindings Layer (`lib/bindings/vault_ffi.dart`):** Utilizes `dart:ffi` to dynamically load `libvault_core.so` (Android), `vault_core.framework` (iOS), or `vault_core.dll` (Windows desktop).
+- **Service Layer (`lib/services/vault_service.dart`):** Wraps raw FFI pointers in asynchronous Dart APIs with automatic memory allocation (`toNativeUtf8`) and deallocation (`calloc.free`, `readAndFreeString`). Includes a fully featured mock mode for headless CI and widget tests.
+- **Biometric Layer (`lib/services/biometric_service.dart`):** Interfaces with Android Keystore (`BiometricPrompt`) and iOS Secure Enclave (`LocalAuthentication`) for one-touch biometric quick-unlock.
+- **Presentation Layer (`lib/screens/`):**
+  - `unlock_screen.dart`: Password validation, new vault creation, and biometric prompt integration.
+  - `vault_home_screen.dart`: Omnibar search, category filters, entropy badges, and secret creation modal.
+  - `secret_detail_screen.dart`: Masked credentials with reveal toggles, one-tap copy, and automated 45-second clipboard sanitizer timer.
+  - `totp_screen.dart`: Monospace token rendering (`XXX XXX`), circular progress countdown ring, and auto-refresh.
+  - `health_screen.dart`: Radial overall score meter, letter grade badge, 5D breakdown progress bars, and audit remediation cards.
+  - `backup_screen.dart`: Authenticated encrypted container export/restore with conflict resolution.
+

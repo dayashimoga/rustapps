@@ -494,3 +494,40 @@ This document records the foundational architectural decisions made for the mono
 - **Rationale:** Preserves native OS look, feel, conventions, and hardware security posture across all supported operating systems without compromising security boundaries or portability.
 - **Consequences:** Platform-specific FFI boundaries must be rigorously tested with mock adapters in headless CI environments.
 
+---
+
+## ADR-0032: C-ABI Dynamic FFI & Flutter Architecture for Mobile DevOps Secret Vault
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** DevOps Secret Vault must be accessible on Android and iOS mobile devices while maintaining zero code duplication of core cryptography (Argon2id, AES-256-GCM, Ed25519), SQLite storage, TOTP generation (RFC 6238), and 5-dimensional security risk scoring.
+- **Alternatives Considered:**
+  1. *Rewrite vault logic in Kotlin and Swift:* High risk of cryptographic divergence, audit overhead, and duplicated maintenance burdens.
+  2. *React Native with JavaScript bridge:* Slower startup, larger binary footprint, potential bridge overhead and memory leakage.
+  3. *Flutter UI with C-ABI FFI bindings (`dart:ffi`) to Rust `vault_core`:*
+     - Rust exposes a stable C-ABI (`pub unsafe extern "C"`) in `apps/devops-secret-vault/src/ffi.rs`.
+     - Raw pointers and JSON strings are passed across language boundaries with explicit allocation and zero-leak deallocation via `vault_free_string`.
+     - High-level Flutter/Dart service layer provides asynchronous API, reactive state management, and mock mode for tests and development.
+- **Decision:** Implement a C-ABI FFI dynamic binding architecture connecting a Flutter mobile application directly to compiled `vault_core` binaries (`libvault_core.so` on Android, `vault_core.framework` on iOS).
+- **Rationale:** Delivers 100% cryptographic parity, air-gapped security assurance, native 60/120fps UI rendering, and single-source-of-truth domain models.
+- **Consequences:** Mobile builds require compiled Rust target binaries (`aarch64-linux-android`, `armv7-linux-androideabi`, `aarch64-apple-ios`) bundled into application archives.
+
+---
+
+## ADR-0033: Mobile Hardware Biometric Security & Encrypted Container Persistence
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Mobile users require friction-free biometric authentication (fingerprint, Face ID) while ensuring master encryption keys are never stored in plaintext on disk or in shared memory.
+- **Alternatives Considered:**
+  1. *Plaintext key storage in SharedPreferences / UserDefaults:* Highly vulnerable to root/jailbreak inspection and physical extraction.
+  2. *Cloud-based token authentication:* Violates zero-cloud egress and offline-first architectural principles.
+  3. *Hardware-Backed Keystore with Biometric Authorization:*
+     - On Android: AndroidKeyStore with `KeyGenParameterSpec` backed by StrongBox / TEE requiring `BiometricPrompt` user authentication.
+     - On iOS: LocalAuthentication / Security framework with `kSecAccessControlBiometryAny` backed by Secure Enclave.
+     - Ephemeral Master Key is decrypted into memory upon biometric validation and zeroized immediately upon app backgrounding or explicit lock.
+- **Decision:** Implement hardware-backed biometric authentication in `biometric_service.dart` paired with automated clipboard clearing (45-second timer) and zeroized memory lifecycles.
+- **Rationale:** Balances enterprise-grade security with modern mobile ergonomics without sending data across network interfaces.
+- **Consequences:** Devices lacking biometric hardware or user enrollment gracefully fall back to master password entry.
+
+

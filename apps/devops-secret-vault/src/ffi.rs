@@ -4,6 +4,7 @@
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -255,6 +256,166 @@ pub unsafe extern "C" fn vault_get_secret(
     }
 }
 
+/// Generate real-time RFC 6238 TOTP code for a secret (returns TotpCodeResponse JSON or null on error)
+///
+/// # Safety
+/// `handle` and `secret_id` must be valid non-null pointers. Result must be freed with `vault_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn vault_generate_totp(
+    handle: *mut VaultHandle,
+    secret_id: *const c_char,
+) -> *mut c_char {
+    if handle.is_null() || secret_id.is_null() {
+        return std::ptr::null_mut();
+    }
+    let h = &*handle;
+    let id_str = match CStr::from_ptr(secret_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    match h.rt.block_on(h.service.generate_totp_code(id_str)) {
+        Ok(res) => match serde_json::to_string(&res) {
+            Ok(json) => match CString::new(json) {
+                Ok(c_str) => c_str.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            },
+            Err(_) => std::ptr::null_mut(),
+        },
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Generate a 5-dimensional Vault Security Health & Risk Report (returns VaultHealthReport JSON or null on error)
+///
+/// # Safety
+/// `handle` must be a valid non-null pointer. Result must be freed with `vault_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn vault_get_health_report(handle: *mut VaultHandle) -> *mut c_char {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+    let h = &*handle;
+
+    match h.rt.block_on(h.service.get_health_report()) {
+        Ok(report) => match serde_json::to_string(&report) {
+            Ok(json) => match CString::new(json) {
+                Ok(c_str) => c_str.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            },
+            Err(_) => std::ptr::null_mut(),
+        },
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Inspect an X.509 Certificate secret (returns CertInspectionReport JSON or null on error)
+///
+/// # Safety
+/// `handle` and `secret_id` must be valid non-null pointers. Result must be freed with `vault_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn vault_inspect_certificate(
+    handle: *mut VaultHandle,
+    secret_id: *const c_char,
+) -> *mut c_char {
+    if handle.is_null() || secret_id.is_null() {
+        return std::ptr::null_mut();
+    }
+    let h = &*handle;
+    let id_str = match CStr::from_ptr(secret_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    match h.rt.block_on(h.service.inspect_certificate(id_str)) {
+        Ok(report) => match serde_json::to_string(&report) {
+            Ok(json) => match CString::new(json) {
+                Ok(c_str) => c_str.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            },
+            Err(_) => std::ptr::null_mut(),
+        },
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Export an authenticated encrypted .vaultbackup archive (returns BackupExportSummary JSON or null on error)
+///
+/// # Safety
+/// `handle`, `passphrase`, and `output_path` must be valid non-null pointers. Result must be freed with `vault_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn vault_export_backup(
+    handle: *mut VaultHandle,
+    passphrase: *const c_char,
+    output_path: *const c_char,
+) -> *mut c_char {
+    if handle.is_null() || passphrase.is_null() || output_path.is_null() {
+        return std::ptr::null_mut();
+    }
+    let h = &*handle;
+    let pwd = match CStr::from_ptr(passphrase).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let path_str = match CStr::from_ptr(output_path).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    match h
+        .rt
+        .block_on(h.service.export_encrypted_backup(pwd, Path::new(path_str)))
+    {
+        Ok(summary) => match serde_json::to_string(&summary) {
+            Ok(json) => match CString::new(json) {
+                Ok(c_str) => c_str.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            },
+            Err(_) => std::ptr::null_mut(),
+        },
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Import and restore secrets from an authenticated encrypted .vaultbackup archive (returns BackupImportSummary JSON or null on error)
+///
+/// # Safety
+/// `handle`, `passphrase`, and `input_path` must be valid non-null pointers. Result must be freed with `vault_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn vault_import_backup(
+    handle: *mut VaultHandle,
+    passphrase: *const c_char,
+    input_path: *const c_char,
+    overwrite: i32,
+) -> *mut c_char {
+    if handle.is_null() || passphrase.is_null() || input_path.is_null() {
+        return std::ptr::null_mut();
+    }
+    let h = &*handle;
+    let pwd = match CStr::from_ptr(passphrase).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let path_str = match CStr::from_ptr(input_path).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    match h.rt.block_on(
+        h.service
+            .import_encrypted_backup(pwd, Path::new(path_str), overwrite != 0),
+    ) {
+        Ok(summary) => match serde_json::to_string(&summary) {
+            Ok(json) => match CString::new(json) {
+                Ok(c_str) => c_str.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            },
+            Err(_) => std::ptr::null_mut(),
+        },
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 /// Free a string returned by any `vault_*` function
 ///
 /// # Safety
@@ -294,6 +455,74 @@ mod tests {
             let res_ptr = vault_search(handle, query.as_ptr(), 10);
             assert!(!res_ptr.is_null());
             vault_free_string(res_ptr);
+
+            // Test secret creation via JSON
+            let secret_json = CString::new(
+                r#"{
+                "title": "Mobile AWS Key",
+                "tags": ["mobile", "aws"],
+                "payload": {
+                    "type": "aws_credential",
+                    "data": {
+                        "access_key_id": "AKIAIOSFODNN7EXAMPLE",
+                        "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                        "region": "us-east-1"
+                    }
+                }
+            }"#,
+            )
+            .unwrap();
+            let create_ptr = vault_create_secret(handle, secret_json.as_ptr());
+            assert!(!create_ptr.is_null());
+            vault_free_string(create_ptr);
+
+            // Test health report
+            let health_ptr = vault_get_health_report(handle);
+            assert!(!health_ptr.is_null());
+            let health_str = CStr::from_ptr(health_ptr).to_str().unwrap();
+            assert!(health_str.contains("overall_score"));
+            vault_free_string(health_ptr);
+
+            // Test TOTP creation and generation
+            let totp_json = CString::new(
+                r#"{
+                "title": "GitHub 2FA",
+                "tags": ["2fa", "mfa"],
+                "payload": {
+                    "type": "totp",
+                    "data": {
+                        "secret_base32": "JBSWY3DPEHPK3PXP",
+                        "account_name": "developer"
+                    }
+                }
+            }"#,
+            )
+            .unwrap();
+            let totp_create_ptr = vault_create_secret(handle, totp_json.as_ptr());
+            assert!(!totp_create_ptr.is_null());
+            let totp_meta: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(totp_create_ptr).to_str().unwrap()).unwrap();
+            let totp_id = totp_meta["id"].as_str().unwrap();
+            vault_free_string(totp_create_ptr);
+
+            let c_totp_id = CString::new(totp_id).unwrap();
+            let code_ptr = vault_generate_totp(handle, c_totp_id.as_ptr());
+            assert!(!code_ptr.is_null());
+            let code_str = CStr::from_ptr(code_ptr).to_str().unwrap();
+            assert!(code_str.contains("code"));
+            vault_free_string(code_ptr);
+
+            // Test backup export
+            let temp_dir = tempfile::tempdir().unwrap();
+            let backup_file = temp_dir.path().join("mobile_backup.vaultbackup");
+            let c_backup_path = CString::new(backup_file.to_str().unwrap()).unwrap();
+            let c_backup_pwd = CString::new("BackupPass123!").unwrap();
+
+            let backup_ptr =
+                vault_export_backup(handle, c_backup_pwd.as_ptr(), c_backup_path.as_ptr());
+            assert!(!backup_ptr.is_null());
+            vault_free_string(backup_ptr);
+            assert!(backup_file.exists());
 
             vault_free_handle(handle);
         }

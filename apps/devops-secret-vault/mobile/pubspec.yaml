@@ -1,0 +1,26 @@
+name: vault_mobile
+description: "DevOps Secret Vault Mobile - Ultra-fast, offline-first mobile client for Android & iOS with C-ABI FFI and Biometric Keystore."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.0
+  local_auth: ^2.1.6
+  provider: ^6.1.1
+  cupertino_icons: ^1.0.6
+  intl: ^0.19.0
+  crypto: ^3.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

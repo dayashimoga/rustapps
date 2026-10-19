@@ -176,5 +176,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Expanded workspace test suite to **140 passing unit and integration tests** (100% pass rate).
   - 100% clean formatting (`cargo fmt`) and 0 clippy warnings (`cargo clippy --workspace --all-targets -- -D warnings`).
 
+### Added - 2026-10-19 (Phase 8 — Mobile Vault)
+- **DevOps Secret Vault Mobile Client & FFI Integration (`apps/devops-secret-vault/mobile`, `ffi.rs`):**
+  - Extended C-ABI FFI endpoints in `apps/devops-secret-vault/src/ffi.rs` (ADR-0032):
+    - `vault_generate_totp`: Dynamic RFC 6238 token generator with Base32 secret decoding and countdown.
+    - `vault_get_health_report`: 5-dimensional security risk scoring (entropy, reuse, expiration, rotation age, MFA).
+    - `vault_inspect_certificate`: X.509 ASN.1 certificate parser and SAN inspector.
+    - `vault_export_backup`: Authenticated AES-256-GCM backup export with Argon2id key derivation and SHA-256 verification.
+    - `vault_import_backup`: Authenticated backup import and secret merge/conflict resolution.
+    - `vault_free_string`: Zero-leak CString deallocation across language boundaries.
+  - Implemented production Flutter mobile client in `apps/devops-secret-vault/mobile/`:
+    - `pubspec.yaml` and `lib/main.dart` with dark luxury palette, edge-to-edge transparent system bars, and theme tokens.
+    - `lib/bindings/vault_ffi.dart`: Low-level `dart:ffi` bindings dynamically loading `libvault_core.so` on Android, `vault_core.framework` on iOS, and `vault_core.dll` on Windows.
+    - `lib/models/secret.dart`: Complete domain entity representations mirroring Rust structs (`SecretMetadata`, `DecryptedSecret`, `TotpCodeResponse`, `VaultHealthReport`, `SecurityAuditFinding`, `BackupSummary`).
+    - `lib/services/vault_service.dart`: High-level async API with safe memory management and test-friendly mock fallback.
+    - `lib/services/biometric_service.dart` (ADR-0033): Hardware-backed authentication interfacing with Android BiometricPrompt / Keystore StrongBox and iOS LocalAuthentication / Secure Enclave.
+    - Mobile UI screens in `lib/screens/`:
+      - `UnlockScreen`: Master password authentication, vault initialization, and one-touch biometric quick unlock.
+      - `VaultHomeScreen`: Real-time omnibar search, category filters, entropy indicators, secret creation modal, and bottom navigation.
+      - `SecretDetailScreen`: Masked credential fields with reveal toggles, one-tap copy, automated 45-second clipboard clearing timer, and metadata cards.
+      - `TotpScreen`: Real-time RFC 6238 token display (`XXX XXX`), circular progress countdown ring (30s period, turns amber/red when <10s/<5s remaining), automatic periodic refresh.
+      - `HealthScreen`: Radial overall health score meter (0–100), letter grade badge, 5-dimensional breakdown progress bars, vulnerability findings and remediation advice.
+      - `BackupScreen`: Authenticated AES-256-GCM backup export with Argon2id key derivation and SHA-256 verification; encrypted backup restore with conflict resolution.
+    - Automated mobile unit and widget tests in `mobile/test/vault_mobile_test.dart` covering serialization, service lifecycles, biometrics, and UI rendering.
+  - Monorepo verification:
+    - 141 of 141 workspace tests passing (100% pass rate).
+    - Vitest unit tests: 8 of 8 passing (100% pass rate).
+    - 0 clippy warnings, 0 fmt diffs, strict `#![forbid(unsafe_code)]` preserved.
+
+
 
 
