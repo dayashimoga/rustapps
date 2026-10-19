@@ -137,6 +137,7 @@ name = "benchmarks"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "devops-secret-vault",
  "rusqlite",
  "shared-encryption",
  "shared-search",
@@ -478,6 +479,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "devops-secret-vault"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "argon2",
+ "platform-common",
+ "rand",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "shared-encryption",
+ "shared-logging",
+ "shared-search",
+ "shared-settings",
+ "shared-storage",
+ "shared-telemetry",
+ "tantivy",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zeroize",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -742,6 +771,7 @@ dependencies = [
 name = "integration-tests"
 version = "0.1.0"
 dependencies = [
+ "devops-secret-vault",
  "platform-common",
  "rusqlite",
  "shared-encryption",

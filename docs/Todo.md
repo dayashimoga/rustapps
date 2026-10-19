@@ -7,25 +7,20 @@ This document tracks all planned, ongoing, and completed tasks across all phases
 
 ## In Progress
 
-- [ ] **Phase 2: Universal Log Viewer Advanced (Quality Gate Review)**
-  - [x] Implement high-throughput streaming JSON/CSV zero-copy log parsers.
-  - [x] Implement offline AWS CloudWatch and Kubernetes log normalizers with multi-pod/container correlation.
-  - [x] Implement chronological timeline with log-volume/severity histograms and time-window filters.
-  - [x] Implement entirely local AI root-cause analysis: Drain log template mining, anomaly spike detection, error clustering, and failure tracing.
-  - [x] Implement sandboxed custom parser/highlighter/sink plugin integration via `shared-plugins`.
-  - [x] Implement desktop UI components for timeline histograms and AI insights drawer.
-  - [x] Implement 8-tier tests and Criterion benchmark suites verifying all SLAs.
+- [ ] **Phase 3: DevOps Secret Vault MVP (Quality Gate Review)**
+  - [x] Implement UI-agnostic `vault-core` library (`rlib`, `cdylib` with C-ABI FFI).
+  - [x] Implement Argon2id master key derivation ($m=64\,\text{MiB}, t=3, p=4$), AES-256-GCM payload encryption, and memory zeroization.
+  - [x] Implement domain models and schema validation (Passwords, SSH Keys, Certificates, API Keys, DB Credentials).
+  - [x] Implement encrypted storage layer with SQLCipher/SQLite in WAL mode, schema migrations, and audit logging.
+  - [x] Implement biometric/hardware authentication abstraction (Windows Hello, Touch ID, Linux Secret Service).
+  - [x] Implement secure clipboard manager with auto-clearing countdown timer (30s).
+  - [x] Implement encrypted in-memory Tantivy search engine for secrets ($< 50\,\text{ms}$ across 100,000 items).
+  - [x] Implement Tauri desktop commands and Svelte/TypeScript desktop UI with glassmorphic dark theme.
+  - [x] Implement 8-tier test suite and Criterion benchmarks verifying all SLAs.
 
 ---
 
 ## Pending
-
-- [ ] **Phase 3: DevOps Secret Vault MVP (6–8 weeks)**
-  - UI-agnostic `vault-core` library.
-  - SQLCipher encrypted database, AES-256-GCM authenticated encryption, Argon2id KDF, `zeroize`.
-  - Native hardware/biometric authentication (Windows Hello, macOS Touch ID, Linux Secret Service).
-  - Validated CRUD and secure auto-clearing clipboard for credentials.
-  - Encrypted/in-memory Tantivy search across 100,000+ secrets ($< 50\,\text{ms}$).
 - [ ] **Phase 4: DevOps Secret Vault Advanced (6 weeks)**
   - Schemas/parsers for AWS, Azure, Terraform secrets, and RFC 6238 TOTP engine.
   - Automated X.509 ASN.1/PEM certificate monitoring and expiration alerts.
@@ -84,3 +79,14 @@ This document tracks all planned, ongoing, and completed tasks across all phases
   - [x] Implement sandboxed custom parser/highlighter/sink plugin integration via `shared-plugins`.
   - [x] Implement desktop UI components for timeline histograms and AI insights drawer.
   - [x] Implement 8-tier tests and Criterion benchmark suites verifying all SLAs.
+- [x] **Phase 3: DevOps Secret Vault MVP (6–8 weeks)**
+  - [x] Implement UI-agnostic `vault-core` library (`rlib`, `cdylib` with C-ABI FFI).
+  - [x] Implement Argon2id master key derivation ($m=64\,\text{MiB}, t=3, p=4$), AES-256-GCM payload encryption, and memory zeroization.
+  - [x] Implement domain models and schema validation (Passwords, SSH Keys, Certificates, API Keys, DB Credentials).
+  - [x] Implement encrypted storage layer with SQLCipher/SQLite in WAL mode, schema migrations, and audit logging.
+  - [x] Implement biometric/hardware authentication abstraction (Windows Hello, Touch ID, Linux Secret Service).
+  - [x] Implement secure clipboard manager with auto-clearing countdown timer (30s).
+  - [x] Implement encrypted in-memory Tantivy search engine for secrets ($< 50\,\text{ms}$ across 100,000 items).
+  - [x] Implement Tauri desktop commands and Svelte/TypeScript desktop UI with glassmorphic dark theme.
+  - [x] Implement 8-tier test suite and Criterion benchmarks verifying all SLAs.
+

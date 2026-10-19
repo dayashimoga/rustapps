@@ -212,3 +212,49 @@ This document records the foundational architectural decisions made for the mono
 - **Rationale:** Delivers enterprise-grade correlation and timeline filtering entirely from exported disk archives with zero network egress.
 - **Consequences:** Requires users to supply raw log export directories or dump files.
 
+---
+
+## ADR-0015: UI-Agnostic Reusable `vault-core` Library with Unified Tauri & Flutter C-ABI FFI
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** DevOps Secret Vault must support desktop (Tauri v2 + Svelte on Windows, Linux, macOS) and mobile (Phase 8 Flutter on Android and iOS) without duplicating cryptographic, storage, or business logic.
+- **Alternatives Considered:**
+  1. *Dual implementations in Rust (desktop) and Dart/C++ (mobile):* Violates the single-source-of-truth invariant, doubles testing and security audit overhead, and risks cryptographic divergence.
+  2. *REST / Local IPC daemon between Rust and Mobile UI:* Adds network attack surfaces, background battery drain, and OS sandboxing failures on iOS.
+  3. *Pure UI-Agnostic Rust core (`vault-core`) with Dual Surface Bindings:* Structure the vault core as a standalone Rust crate compiled as `rlib` for Tauri desktop commands and `cdylib` / `staticlib` exporting clean C-ABI FFI endpoints for Flutter `dart:ffi`.
+- **Decision:** Architect `apps/devops-secret-vault` as a pure, UI-independent Rust library with high-level safe services and standardized C-ABI foreign function interface.
+- **Rationale:** Guarantees 100% cryptographic and data integrity parity between desktop and mobile while maintaining zero runtime overhead and zero network exposure.
+- **Consequences:** Internal structs and pointers passed across FFI boundaries require opaque handle encapsulation and deterministic lifecycle destruction methods.
+
+---
+
+## ADR-0016: Master Key Derivation via Argon2id and Strict In-Memory Zeroization Lifecycle
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Secrets stored in local databases and cached in memory are vulnerable to offline brute-force attacks and memory dump / cold-boot extraction.
+- **Alternatives Considered:**
+  1. *PBKDF2 or standard SHA-256:* Inadequate resistance against modern GPU/ASIC hardware acceleration.
+  2. *Plain string heap allocations for decrypted credentials:* Plaintext strings linger indeterminately in allocator memory pages, exposed to swap-file leaks and heap inspection.
+  3. *Argon2id KDF with Ephemeral Zeroizing Secret Wrappers:* Derive encryption keys using memory-hard Argon2id ($m=64\,\text{MiB}, t=3, p=4$) and wrap all plaintext credentials, intermediate keys, and decrypted buffers in `zeroize::Zeroizing<T>` types that overwrite memory with zeros immediately on drop.
+- **Decision:** Mandate Argon2id for all key derivation and enforce `zeroize` on all decrypted plaintext, symmetric keys, and clipboard buffers.
+- **Rationale:** Provides state-of-the-art resistance against GPU password cracking and guarantees that unencrypted sensitive materials never persist in RAM beyond their immediate functional scope.
+- **Consequences:** Key derivation takes approximately $100$–$200\,\text{ms}$ on startup, well within the $< 2,000\,\text{ms}$ cold start SLA.
+
+---
+
+## ADR-0017: Ephemeral Encrypted In-Memory Tantivy Indexing for Fast Secret Discovery
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Users with large secret databases (100,000+ items) require instant ($< 50\,\text{ms}$) search across metadata, titles, usernames, tags, and notes, but persisting plaintext search index tokens to disk would violate zero-knowledge local encryption.
+- **Alternatives Considered:**
+  1. *Sequential linear scan in SQLite via SQL LIKE queries:* Degradation to $> 500\,\text{ms}$ for large inventories, failing the 50ms SLA.
+  2. *Disk-persisted Tantivy index:* Exposes indexed secret metadata in plaintext files on disk or requires double-encryption layer complexity.
+  3. *Encrypted In-Memory Tantivy Index:* Build an ephemeral Tantivy RAM index populated during vault unlock and cleared on lock. Queries run against in-memory inverted indices in sub-millisecond time.
+- **Decision:** Implement ephemeral in-memory Tantivy indexing for secret search metadata populated on vault unlock and completely destroyed on lock.
+- **Rationale:** Achieves $< 2\,\text{ms}$ query latency across 100,000 items while ensuring zero unencrypted index files ever touch non-volatile disk.
+- **Consequences:** Vault unlock indexes metadata into RAM; bounded by $< 30\,\text{MB}$ memory footprint, easily satisfying the 300MB RAM limit.
+
+

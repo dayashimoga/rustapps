@@ -19,3 +19,4 @@ shared-updater.workspace = true
 shared-plugins.workspace = true
 shared-telemetry.workspace = true
 shared-settings.workspace = true
+devops-secret-vault = { path = "../apps/devops-secret-vault" }

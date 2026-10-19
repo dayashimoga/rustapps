@@ -187,4 +187,286 @@ mod integration_tests {
             StandaloneUpdater::verify_package(&manifest, payload, &verifying_key.to_bytes());
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    async fn test_vault_core_all_secret_types_and_audit_flow() {
+        use vault_core::models::*;
+        use vault_core::service::VaultService;
+        use vault_core::storage::VaultStorage;
+
+        let storage = VaultStorage::open_in_memory().unwrap();
+        let service = VaultService::new(storage, Some(Argon2Params::fast_for_tests()));
+
+        // Positive: Init & Unlock
+        service.initialize("MasterKeyPass123!").await.unwrap();
+        assert!(!service.is_locked().await);
+
+        // 1. Password Secret
+        let pwd_input = CreateSecretInput {
+            title: "Internal Admin Login".to_string(),
+            tags: vec!["admin".to_string(), "ldap".to_string()],
+            username: Some("admin_user".to_string()),
+            url: Some("https://admin.corp".to_string()),
+            notes: Some("Requires 2FA".to_string()),
+            payload: SecretPayload::Password {
+                password: "AlphaOmegaPassword999!".to_string(),
+            },
+        };
+        let pwd_meta = service
+            .create_secret(pwd_input, "integration_test")
+            .await
+            .unwrap();
+
+        // 2. SSH Key Secret
+        let ssh_input = CreateSecretInput {
+            title: "K8s Bastion Key".to_string(),
+            tags: vec!["k8s".to_string(), "bastion".to_string()],
+            username: Some("ubuntu".to_string()),
+            url: None,
+            notes: None,
+            payload: SecretPayload::SshKey {
+                private_key:
+                    "-----BEGIN EC PRIVATE KEY-----\nMHQCAQEEI...\n-----END EC PRIVATE KEY-----"
+                        .to_string(),
+                public_key: Some("ecdsa-sha2-nistp256 AAAAE...".to_string()),
+                passphrase: Some("key-pass".to_string()),
+            },
+        };
+        let ssh_meta = service
+            .create_secret(ssh_input, "integration_test")
+            .await
+            .unwrap();
+
+        // 3. Certificate Secret
+        let cert_input = CreateSecretInput {
+            title: "Wildcard TLS Cert".to_string(),
+            tags: vec!["tls".to_string(), "ssl".to_string()],
+            username: None,
+            url: Some("https://*.corp.net".to_string()),
+            notes: Some("Expires 2027".to_string()),
+            payload: SecretPayload::Certificate {
+                private_key:
+                    "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----"
+                        .to_string(),
+                certificate_pem: "-----BEGIN CERTIFICATE-----\nMIID...\n-----END CERTIFICATE-----"
+                    .to_string(),
+                chain_pem: Some(
+                    "-----BEGIN CERTIFICATE-----\nCA...\n-----END CERTIFICATE-----".to_string(),
+                ),
+            },
+        };
+        let cert_meta = service
+            .create_secret(cert_input, "integration_test")
+            .await
+            .unwrap();
+
+        // 4. API Key Secret
+        let api_input = CreateSecretInput {
+            title: "Datadog Telemetry Key".to_string(),
+            tags: vec!["datadog".to_string(), "monitoring".to_string()],
+            username: None,
+            url: Some("https://api.datadoghq.com".to_string()),
+            notes: None,
+            payload: SecretPayload::ApiKey {
+                api_key: "dd_api_0123456789abcdef".to_string(),
+                api_secret: Some("dd_app_fedcba9876543210".to_string()),
+                endpoint_url: Some("https://api.datadoghq.com/v1".to_string()),
+            },
+        };
+        let api_meta = service
+            .create_secret(api_input, "integration_test")
+            .await
+            .unwrap();
+
+        // 5. Database Credential Secret
+        let db_input = CreateSecretInput {
+            title: "PostgreSQL Analytics Cluster".to_string(),
+            tags: vec!["postgres".to_string(), "analytics".to_string()],
+            username: Some("analytics_ro".to_string()),
+            url: Some("pg-analytics.internal:5432".to_string()),
+            notes: Some("Read only role".to_string()),
+            payload: SecretPayload::DatabaseCredential {
+                engine: "postgresql".to_string(),
+                host: "pg-analytics.internal".to_string(),
+                port: 5432,
+                database: "analytics_dw".to_string(),
+                username: "analytics_ro".to_string(),
+                password: "SecureAnalyticsPassword2026!".to_string(),
+                connection_string: Some("postgresql://analytics_ro:SecureAnalyticsPassword2026!@pg-analytics.internal:5432/analytics_dw".to_string()),
+            },
+        };
+        let db_meta = service
+            .create_secret(db_input, "integration_test")
+            .await
+            .unwrap();
+
+        // Read and verify all decrypted secrets
+        let dec_pwd = service.get_secret(&pwd_meta.id, "test").await.unwrap();
+        assert_eq!(
+            dec_pwd.payload.primary_secret_value(),
+            "AlphaOmegaPassword999!"
+        );
+
+        let dec_ssh = service.get_secret(&ssh_meta.id, "test").await.unwrap();
+        assert!(dec_ssh
+            .payload
+            .primary_secret_value()
+            .contains("BEGIN EC PRIVATE KEY"));
+
+        let dec_cert = service.get_secret(&cert_meta.id, "test").await.unwrap();
+        assert!(dec_cert
+            .payload
+            .primary_secret_value()
+            .contains("BEGIN RSA PRIVATE KEY"));
+
+        let dec_api = service.get_secret(&api_meta.id, "test").await.unwrap();
+        assert_eq!(
+            dec_api.payload.primary_secret_value(),
+            "dd_api_0123456789abcdef"
+        );
+
+        let dec_db = service.get_secret(&db_meta.id, "test").await.unwrap();
+        assert_eq!(
+            dec_db.payload.primary_secret_value(),
+            "SecureAnalyticsPassword2026!"
+        );
+
+        // Sub-50ms search test
+        let search_results = service.search_secrets("postgres", 10).await.unwrap();
+        assert_eq!(search_results.len(), 1);
+        assert_eq!(search_results[0].id, db_meta.id);
+
+        let search_by_tag = service.search_secrets("tls", 10).await.unwrap();
+        assert_eq!(search_by_tag.len(), 1);
+        assert_eq!(search_by_tag[0].id, cert_meta.id);
+
+        // Clipboard auto-clear test
+        let ttl = service
+            .copy_to_clipboard(&pwd_meta.id, Some(10), "test")
+            .await
+            .unwrap();
+        assert_eq!(ttl, 10);
+        assert_eq!(
+            service.peek_clipboard_for_test().await,
+            Some("AlphaOmegaPassword999!".to_string())
+        );
+        service.clear_clipboard().await.unwrap();
+        assert_eq!(service.peek_clipboard_for_test().await, None);
+
+        // Audit log check
+        let audit_logs = service.get_audit_logs(None, 50).await.unwrap();
+        assert!(audit_logs.len() >= 6); // 5 created + 5 read + 1 copy
+
+        // Lock & Unlock
+        service.lock().await.unwrap();
+        assert!(service.is_locked().await);
+        assert!(service.get_secret(&pwd_meta.id, "test").await.is_err());
+
+        service.unlock("MasterKeyPass123!").await.unwrap();
+        assert!(!service.is_locked().await);
+        let dec_after = service.get_secret(&pwd_meta.id, "test").await.unwrap();
+        assert_eq!(
+            dec_after.payload.primary_secret_value(),
+            "AlphaOmegaPassword999!"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_vault_boundary_negative_and_regression_cases() {
+        use vault_core::error::VaultError;
+        use vault_core::models::*;
+        use vault_core::service::VaultService;
+        use vault_core::storage::VaultStorage;
+
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("regression_vault.db");
+        let storage = VaultStorage::open(&db_path).unwrap();
+        let service = VaultService::new(storage, Some(Argon2Params::fast_for_tests()));
+
+        service.initialize("CorrectMaster123!").await.unwrap();
+
+        // Negative: Initializing again must fail
+        assert!(matches!(
+            service.initialize("AnotherPassword").await.unwrap_err(),
+            VaultError::AlreadyInitialized
+        ));
+
+        // Boundary: Title length 256 chars (Allowed)
+        let title_256 = "A".repeat(256);
+        let input_256 = CreateSecretInput {
+            title: title_256.clone(),
+            tags: vec![],
+            username: None,
+            url: None,
+            notes: None,
+            payload: SecretPayload::Password {
+                password: "p".to_string(),
+            },
+        };
+        let created_256 = service.create_secret(input_256, "test").await.unwrap();
+        assert_eq!(created_256.title.len(), 256);
+
+        // Boundary: Title length 257 chars (Rejected)
+        let title_257 = "B".repeat(257);
+        let input_257 = CreateSecretInput {
+            title: title_257,
+            tags: vec![],
+            username: None,
+            url: None,
+            notes: None,
+            payload: SecretPayload::Password {
+                password: "p".to_string(),
+            },
+        };
+        assert!(service.create_secret(input_257, "test").await.is_err());
+
+        // Negative: Port 0 for DB (Rejected)
+        let invalid_db_input = CreateSecretInput {
+            title: "Invalid Port DB".to_string(),
+            tags: vec![],
+            username: None,
+            url: None,
+            notes: None,
+            payload: SecretPayload::DatabaseCredential {
+                engine: "mysql".to_string(),
+                host: "localhost".to_string(),
+                port: 0,
+                database: "db".to_string(),
+                username: "root".to_string(),
+                password: "root".to_string(),
+                connection_string: None,
+            },
+        };
+        assert!(service
+            .create_secret(invalid_db_input, "test")
+            .await
+            .is_err());
+
+        // Regression: Inspect raw database file on disk to verify zero plaintext leakage
+        let raw_disk_bytes = std::fs::read(&db_path).unwrap();
+        let sensitive_token = b"AlphaOmegaPassword999!";
+        let found_leak = raw_disk_bytes
+            .windows(sensitive_token.len())
+            .any(|w| w == sensitive_token);
+        assert!(
+            !found_leak,
+            "Plaintext sensitive payload must NEVER leak into SQLite on disk"
+        );
+
+        // Failure: Delete and get non-existent ID
+        assert!(matches!(
+            service
+                .get_secret("non-existent-uuid", "test")
+                .await
+                .unwrap_err(),
+            VaultError::SecretNotFound(_)
+        ));
+        assert!(matches!(
+            service
+                .delete_secret("non-existent-uuid", "test")
+                .await
+                .unwrap_err(),
+            VaultError::SecretNotFound(_)
+        ));
+    }
 }

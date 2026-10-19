@@ -1,0 +1,355 @@
+<script lang="ts">
+  import { createEventDispatcher } from 'svelte';
+
+  export let isInitialized: boolean = false;
+  export let errorMessage: string = '';
+  export let isLoading: boolean = false;
+  export let biometricAvailable: boolean = true;
+
+  let masterPassword = '';
+  let confirmPassword = '';
+  let showPassword = false;
+  let shakeError = false;
+
+  const dispatch = createEventDispatcher();
+
+  $: if (errorMessage) {
+    shakeError = true;
+    setTimeout(() => { shakeError = false; }, 600);
+  }
+
+  function handleSubmit() {
+    if (isInitialized) {
+      if (!masterPassword) return;
+      dispatch('unlock', { password: masterPassword });
+    } else {
+      if (!masterPassword || masterPassword !== confirmPassword) {
+        errorMessage = "Passwords do not match or are empty";
+        shakeError = true;
+        setTimeout(() => { shakeError = false; }, 600);
+        return;
+      }
+      dispatch('initialize', { password: masterPassword });
+    }
+  }
+
+  function handleBiometric() {
+    dispatch('biometricUnlock');
+  }
+</script>
+
+<div class="modal-backdrop">
+  <div class="unlock-card glass-panel {shakeError ? 'shake' : ''}">
+    <div class="card-icon-wrapper">
+      <div class="vault-shield">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" class="shield-svg">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+        </svg>
+      </div>
+    </div>
+
+    <h2 class="card-title">
+      {isInitialized ? 'Unlock DevOps Secret Vault' : 'Initialize New Master Vault'}
+    </h2>
+    <p class="card-subtitle">
+      {isInitialized
+        ? 'Enter your master passphrase or use hardware biometrics to decrypt in-memory keys.'
+        : 'Set a strong master passphrase. It will derive your 256-bit AES master key via Argon2id.'}
+    </p>
+
+    {#if errorMessage}
+      <div class="error-banner">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="16" height="16">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <span>{errorMessage}</span>
+      </div>
+    {/if}
+
+    <form on:submit|preventDefault={handleSubmit} class="unlock-form">
+      <div class="input-group">
+        <label for="master-password">
+          {isInitialized ? 'Master Passphrase' : 'New Master Passphrase'}
+        </label>
+        <div class="password-wrapper">
+          {#if showPassword}
+            <input
+              id="master-password"
+              type="text"
+              placeholder="••••••••••••••••••••"
+              bind:value={masterPassword}
+              disabled={isLoading}
+              autocomplete="current-password"
+            />
+          {:else}
+            <input
+              id="master-password"
+              type="password"
+              placeholder="••••••••••••••••••••"
+              bind:value={masterPassword}
+              disabled={isLoading}
+              autocomplete="current-password"
+            />
+          {/if}
+          <button
+            type="button"
+            class="toggle-vis-btn"
+            on:click={() => { showPassword = !showPassword; }}
+            title={showPassword ? 'Hide password' : 'Show password'}
+          >
+            {#if showPassword}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="16" height="16">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" />
+              </svg>
+            {:else}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="16" height="16">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+            {/if}
+          </button>
+        </div>
+      </div>
+
+      {#if !isInitialized}
+        <div class="input-group">
+          <label for="confirm-password">Confirm Master Passphrase</label>
+          {#if showPassword}
+            <input
+              id="confirm-password"
+              type="text"
+              placeholder="••••••••••••••••••••"
+              bind:value={confirmPassword}
+              disabled={isLoading}
+            />
+          {:else}
+            <input
+              id="confirm-password"
+              type="password"
+              placeholder="••••••••••••••••••••"
+              bind:value={confirmPassword}
+              disabled={isLoading}
+            />
+          {/if}
+        </div>
+      {/if}
+
+      <div class="actions">
+        <button type="submit" class="btn btn-primary submit-btn" disabled={isLoading}>
+          {#if isLoading}
+            <span class="spinner"></span>
+            Deriving Argon2id Key...
+          {:else}
+            {isInitialized ? 'Unlock Vault' : 'Initialize & Encrypt'}
+          {/if}
+        </button>
+
+        {#if isInitialized && biometricAvailable}
+          <button
+            type="button"
+            class="btn btn-biometric"
+            on:click={handleBiometric}
+            disabled={isLoading}
+            title="Authenticate with Windows Hello / Touch ID"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="18" height="18">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004.07 9m5.936 8.79A14.04 14.04 0 0112 11" />
+            </svg>
+            Unlock with Biometrics
+          </button>
+        {/if}
+      </div>
+    </form>
+
+    <div class="security-footer">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="13" height="13">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+      </svg>
+      <span>Argon2id (64MB RAM, 3 iterations) • AES-256-GCM • Zero-RAM Retention</span>
+    </div>
+  </div>
+</div>
+
+<style>
+  .modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(4, 7, 12, 0.85);
+    backdrop-filter: blur(20px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  .unlock-card {
+    width: 440px;
+    padding: 36px 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
+
+  .card-icon-wrapper {
+    margin-bottom: 18px;
+  }
+
+  .vault-shield {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 24px rgba(16, 185, 129, 0.25);
+  }
+
+  .shield-svg {
+    width: 28px;
+    height: 28px;
+    color: var(--accent-emerald);
+  }
+
+  .card-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #ffffff;
+    margin-bottom: 8px;
+  }
+
+  .card-subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin-bottom: 24px;
+  }
+
+  .error-banner {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #fca5a5;
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    margin-bottom: 18px;
+    text-align: left;
+  }
+
+  .unlock-form {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    text-align: left;
+  }
+
+  .input-group label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  .password-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .password-wrapper input {
+    width: 100%;
+    padding-right: 40px;
+  }
+
+  .toggle-vis-btn {
+    position: absolute;
+    right: 10px;
+    background: transparent;
+    border: none;
+    color: var(--text-faint);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+  }
+
+  .toggle-vis-btn:hover {
+    color: var(--text-main);
+  }
+
+  .actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 10px;
+  }
+
+  .submit-btn {
+    width: 100%;
+    padding: 12px;
+    font-size: 14px;
+  }
+
+  .btn-biometric {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-main);
+    padding: 10px;
+    font-size: 13px;
+  }
+
+  .btn-biometric:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  .security-footer {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--text-faint);
+    font-family: var(--font-mono);
+    margin-top: 24px;
+  }
+
+  .spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: #ffffff;
+    animation: spin 0.8s linear infinite;
+    display: inline-block;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .shake {
+    animation: shakeAnim 0.5s cubic-bezier(.36,.07,.19,.97) both;
+  }
+
+  @keyframes shakeAnim {
+    10%, 90% { transform: translate3d(-2px, 0, 0); }
+    20%, 80% { transform: translate3d(3px, 0, 0); }
+    30%, 50%, 70% { transform: translate3d(-5px, 0, 0); }
+    40%, 60% { transform: translate3d(5px, 0, 0); }
+  }
+</style>

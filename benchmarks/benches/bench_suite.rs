@@ -274,6 +274,79 @@ fn benchmark_timeline_histogram(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_vault_search_and_crypto(c: &mut Criterion) {
+    use vault_core::crypto::{decrypt_secret_payload, encrypt_secret_payload, VaultMasterKey};
+    use vault_core::models::*;
+    use vault_core::search::VaultSearchIndex;
+
+    let index = VaultSearchIndex::new().unwrap();
+
+    // Populate 2,000 synthetic secret metadata records
+    let mut batch = Vec::with_capacity(2000);
+    for i in 0..2000 {
+        let (stype, tag) = match i % 4 {
+            0 => (SecretType::Password, "web"),
+            1 => (SecretType::SshKey, "bastion"),
+            2 => (SecretType::Certificate, "tls"),
+            _ => (SecretType::DatabaseCredential, "database"),
+        };
+
+        batch.push(SecretMetadata {
+            id: format!("sec-bench-{}", i),
+            title: format!("Production Server {} Access Secret", i),
+            secret_type: stype,
+            tags: vec!["prod".to_string(), tag.to_string()],
+            username: Some(format!("user_{}", i)),
+            url: Some(format!("https://server-{}.internal", i)),
+            notes: Some(format!("Auto-generated secret benchmark entry {}", i)),
+            version: 1,
+            created_at: 1729300000 + i as i64,
+            updated_at: 1729300000 + i as i64,
+        });
+    }
+    index.index_batch(&batch).unwrap();
+
+    let mut group = c.benchmark_group("vault_core");
+
+    // Benchmark sub-50ms search SLA across 2,000 in-memory indexed secrets
+    group.bench_function("vault_tantivy_search_sub_50ms", |b| {
+        b.iter(|| {
+            let hits = index.search(black_box("database"), black_box(20)).unwrap();
+            black_box(hits.len());
+        });
+    });
+
+    // Benchmark structured AES-256-GCM secret payload roundtrip
+    let master_key = VaultMasterKey([0x77u8; 32]);
+    let payload = SecretPayload::DatabaseCredential {
+        engine: "postgresql".to_string(),
+        host: "postgres-cluster.internal".to_string(),
+        port: 5432,
+        database: "primary_db".to_string(),
+        username: "super_admin".to_string(),
+        password: "VeryLongAndSecureDatabasePassword!#2026".to_string(),
+        connection_string: Some("postgresql://super_admin:VeryLongAndSecureDatabasePassword!#2026@postgres-cluster.internal:5432/primary_db".to_string()),
+    };
+
+    let encrypted = encrypt_secret_payload(&master_key, &payload).unwrap();
+
+    group.bench_function("vault_payload_encrypt_aes_gcm", |b| {
+        b.iter(|| {
+            let res = encrypt_secret_payload(black_box(&master_key), black_box(&payload));
+            black_box(res).unwrap();
+        });
+    });
+
+    group.bench_function("vault_payload_decrypt_aes_gcm", |b| {
+        b.iter(|| {
+            let res = decrypt_secret_payload(black_box(&master_key), black_box(&encrypted));
+            black_box(res).unwrap();
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -284,6 +357,7 @@ criterion_group!(
     benchmark_log_regex_search,
     benchmark_json_streaming_parser,
     benchmark_drain_template_mining,
-    benchmark_timeline_histogram
+    benchmark_timeline_histogram,
+    benchmark_vault_search_and_crypto
 );
 criterion_main!(benches);

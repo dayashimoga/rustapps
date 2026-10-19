@@ -73,6 +73,17 @@ The monorepo employs a clean hexagonal / ports-and-adapters architecture impleme
     - `workspace`: SQLite WAL backed store for open files, bookmarks, and scroll state.
     - `commands`: Tauri IPC service boundary with Serde models.
     - `ui`: Svelte/TS frontend with 60 FPS virtualized viewport, `TimelineHistogram.svelte`, `AiInsightsDrawer.svelte`, and live telemetry indicators.
+12. **`vault_core` / `devops-secret-vault` (`apps/devops-secret-vault`):**
+    - `crypto`: Argon2id master key derivation ($m=64\,\text{MiB}, t=3, p=4$), AES-256-GCM authenticated payload encryption, verifier token, and memory zeroization.
+    - `models`: Domain entities (Password, SSH Key, Certificate, API Key, Database Credential), validation rules, UUID generator, and Shannon bit entropy calculator.
+    - `storage`: SQLite WAL encrypted storage with automated schema migrations and tamper-evident audit logging.
+    - `search`: Ephemeral in-memory Tantivy full-text and structured index (<50ms query time across 100k items) created on unlock and completely destroyed on lock.
+    - `clipboard`: Thread-safe auto-clearing clipboard manager with 30s background countdown timer and zeroization.
+    - `biometrics`: Hardware and biometric authentication abstraction (Windows Hello, Touch ID, Linux Secret Service).
+    - `service`: `VaultService` orchestrator managing unlocked sessions, CRUD, and audit trail.
+    - `ffi`: C-ABI endpoints for Tauri desktop and Phase 8 Flutter mobile (`vault_create_handle`, `vault_unlock`, `vault_search`, etc.).
+    - `commands`: Tauri desktop IPC command handlers.
+    - `ui`: Svelte/TypeScript desktop UI with glassmorphic dark theme, unlock modal, secrets explorer, entropy meter, and masked detail views.
 
 ---
 

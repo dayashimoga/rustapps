@@ -12,6 +12,7 @@ members = [
     "shared/telemetry",
     "shared/settings",
     "apps/universal-log-viewer",
+    "apps/devops-secret-vault",
     "tests",
     "benchmarks",
 ]

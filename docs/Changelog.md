@@ -53,4 +53,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Expanded workspace test suite to 60 passing tests (100% pass rate); added Criterion benchmarks for JSON parsing, Drain template mining, and timeline histogram aggregation.
   - 100% clean formatting (`cargo fmt`) and 0 clippy warnings (`cargo clippy --workspace --all-targets -- -D warnings`).
 
+### Added - 2026-10-19 (Phase 3 — DevOps Secret Vault MVP)
+- **DevOps Secret Vault Core & Desktop UI (`apps/devops-secret-vault`):**
+  - Architected UI-agnostic `vault-core` library compiled as `rlib` and `cdylib` with C-ABI FFI endpoints for Tauri desktop and Phase 8 Flutter mobile (`ffi.rs`).
+  - Implemented Argon2id master key derivation ($m=64\,\text{MiB}, t=3, p=4$) and AES-256-GCM authenticated payload encryption with verification tokens in `crypto.rs`.
+  - Enforced memory zeroization across all decrypted secret buffers, symmetric keys, and clipboard memory via `zeroize`.
+  - Implemented domain models and strict validation for developer secrets: Passwords, SSH Keys, TLS Certificates, API Keys, Database Credentials in `models.rs`, including real-time Shannon bit entropy analysis.
+  - Implemented SQLite encrypted storage in WAL mode with automated schema migrations and tamper-evident audit logging in `storage.rs`.
+  - Implemented ephemeral in-memory Tantivy search index in `search.rs` populated on vault unlock and completely destroyed on lock, sustaining sub-millisecond queries across thousands of items (<50ms SLA).
+  - Implemented thread-safe auto-clearing clipboard manager in `clipboard.rs` with configurable countdown timer (30s) and background memory zeroization.
+  - Implemented hardware & biometric authentication abstraction in `biometrics.rs` supporting Windows Hello, Touch ID, and Linux Secret Service.
+  - Implemented Tauri desktop IPC command handlers in `commands.rs` and standalone application entry point in `main.rs`.
+  - Implemented Svelte/TypeScript desktop UI in `ui/` with glassmorphic dark theme: `Header.svelte`, `UnlockModal.svelte`, `SecretList.svelte`, `SecretDetail.svelte`, `NewSecretModal.svelte`, `EntropyMeter.svelte`, and `App.svelte`.
+  - Expanded workspace test suite to 76 tests (100% pass rate) and Vitest frontend test suite (100% pass rate); added Criterion benchmarks for Tantivy secret search and AES-GCM payload throughput.
+  - 100% clean formatting (`cargo fmt`) and 0 clippy warnings (`cargo clippy --workspace --all-targets -- -D warnings`).
+
+
 
