@@ -469,4 +469,201 @@ mod integration_tests {
             VaultError::SecretNotFound(_)
         ));
     }
+
+    #[tokio::test]
+    async fn test_vault_advanced_cloud_creds_and_totp_flow() {
+        use vault_core::models::*;
+        use vault_core::service::VaultService;
+        use vault_core::storage::VaultStorage;
+
+        let _temp = tempfile::tempdir().unwrap();
+        let storage = VaultStorage::open_in_memory().unwrap();
+        let service = VaultService::new(storage, Some(Argon2Params::fast_for_tests()));
+
+        service.initialize("AdvancedMasterKey2026!").await.unwrap();
+
+        // 1. AWS Credential
+        let aws_input = CreateSecretInput {
+            title: "AWS Production Deployer".to_string(),
+            tags: vec!["aws".to_string(), "cloud".to_string()],
+            username: Some("deployer".to_string()),
+            url: Some("https://aws.amazon.com".to_string()),
+            notes: Some("Requires IAM MFA".to_string()),
+            payload: SecretPayload::AwsCredential {
+                access_key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
+                secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+                session_token: None,
+                region: Some("us-east-1".to_string()),
+                profile_name: Some("default".to_string()),
+            },
+        };
+        let aws_meta = service.create_secret(aws_input, "test").await.unwrap();
+        assert_eq!(aws_meta.secret_type, SecretType::AwsCredential);
+
+        // 2. Azure Credential
+        let az_input = CreateSecretInput {
+            title: "Azure AKS Cluster SP".to_string(),
+            tags: vec!["azure".to_string(), "k8s".to_string()],
+            username: Some("sp-aks".to_string()),
+            url: None,
+            notes: None,
+            payload: SecretPayload::AzureCredential {
+                subscription_id: "11111111-2222-3333-4444-555555555555".to_string(),
+                tenant_id: "22222222-3333-4444-5555-666666666666".to_string(),
+                client_id: "33333333-4444-5555-6666-777777777777".to_string(),
+                client_secret: "SuperSecretAzureClientTokenXYZ789!".to_string(),
+                cloud_environment: Some("AzureCloud".to_string()),
+            },
+        };
+        let az_meta = service.create_secret(az_input, "test").await.unwrap();
+        assert_eq!(az_meta.secret_type, SecretType::AzureCredential);
+
+        // 3. Terraform Secret
+        let tf_input = CreateSecretInput {
+            title: "Terraform State & Vars".to_string(),
+            tags: vec!["terraform".to_string(), "iac".to_string()],
+            username: None,
+            url: None,
+            notes: None,
+            payload: SecretPayload::TerraformSecret {
+                state_key: Some("prod.tfstate.enc".to_string()),
+                tf_vars: Some("db_password = \"Secret123!\"\nnode_count = 5".to_string()),
+                provider_token: Some("tfp_cloud_token_abc123".to_string()),
+                backend_config: Some("bucket = \"corp-tfstate-bucket\"".to_string()),
+            },
+        };
+        let tf_meta = service.create_secret(tf_input, "test").await.unwrap();
+        assert_eq!(tf_meta.secret_type, SecretType::TerraformSecret);
+
+        // 4. TOTP Secret
+        let totp_input = CreateSecretInput {
+            title: "GitHub 2FA Authenticator".to_string(),
+            tags: vec!["2fa".to_string(), "totp".to_string()],
+            username: Some("devops-lead".to_string()),
+            url: Some("https://github.com".to_string()),
+            notes: None,
+            payload: SecretPayload::Totp {
+                secret_base32: "JBSWY3DPEHPK3PXP".to_string(),
+                issuer: Some("GitHub".to_string()),
+                account_name: Some("devops-lead".to_string()),
+                algorithm: Some("SHA1".to_string()),
+                digits: Some(6),
+                period_seconds: Some(30),
+            },
+        };
+        let totp_meta = service.create_secret(totp_input, "test").await.unwrap();
+        assert_eq!(totp_meta.secret_type, SecretType::Totp);
+
+        // 5. Test Live TOTP generation
+        let totp_code = service.generate_totp_code(&totp_meta.id).await.unwrap();
+        assert_eq!(totp_code.code.len(), 6);
+        assert!(totp_code.remaining_seconds <= 30);
+        assert!(totp_code.progress_ratio >= 0.0 && totp_code.progress_ratio <= 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_vault_advanced_health_scoring_and_backup_integrity() {
+        use vault_core::models::*;
+        use vault_core::risk_scoring::Severity;
+        use vault_core::service::VaultService;
+        use vault_core::storage::VaultStorage;
+
+        let temp = tempfile::tempdir().unwrap();
+        let backup_file = temp.path().join("full_vault_backup.vaultbackup");
+
+        let storage1 = VaultStorage::open_in_memory().unwrap();
+        let service1 = VaultService::new(storage1, Some(Argon2Params::fast_for_tests()));
+        service1.initialize("OriginalMasterKey123!").await.unwrap();
+
+        // 1. Add secret with default compromised password
+        let sec1 = CreateSecretInput {
+            title: "MySQL Default Root".to_string(),
+            tags: vec![],
+            username: Some("root".to_string()),
+            url: None,
+            notes: None,
+            payload: SecretPayload::Password {
+                password: "admin".to_string(), // Default credential
+            },
+        };
+        service1.create_secret(sec1, "test").await.unwrap();
+
+        // 2. Add secret with shared/reused password
+        let sec2 = CreateSecretInput {
+            title: "Redis Cache".to_string(),
+            tags: vec![],
+            username: None,
+            url: None,
+            notes: None,
+            payload: SecretPayload::Password {
+                password: "admin".to_string(), // Reused with sec1!
+            },
+        };
+        service1.create_secret(sec2, "test").await.unwrap();
+
+        // 3. Add strong unique password
+        let sec3 = CreateSecretInput {
+            title: "Vault Admin Master".to_string(),
+            tags: vec![],
+            username: Some("admin".to_string()),
+            url: None,
+            notes: None,
+            payload: SecretPayload::Password {
+                password: "Kx9#mP2$vL7!qR4@wZ8*yN".to_string(),
+            },
+        };
+        service1.create_secret(sec3, "test").await.unwrap();
+
+        // 4. Run Risk Scoring & Health Report
+        let health = service1.get_health_report().await.unwrap();
+        assert_eq!(health.total_secrets, 3);
+        assert_eq!(health.compromised_count, 2);
+        assert_eq!(health.reused_count, 2);
+        assert!(health.overall_score < 70);
+        assert!(health
+            .recommendations
+            .iter()
+            .any(|r| r.severity == Severity::Critical));
+
+        // 5. Export Encrypted Backup
+        let export_summary = service1
+            .export_encrypted_backup("BackupKeyStrongPassphrase999!", &backup_file)
+            .await
+            .unwrap();
+        assert_eq!(export_summary.total_secrets, 3);
+        assert!(export_summary.file_size_bytes > 72);
+
+        // 6. Restore into a new Vault
+        let storage2 = VaultStorage::open_in_memory().unwrap();
+        let service2 = VaultService::new(storage2, Some(Argon2Params::fast_for_tests()));
+        service2
+            .initialize("NewVaultMasterPassword456!")
+            .await
+            .unwrap();
+
+        let import_summary = service2
+            .import_encrypted_backup("BackupKeyStrongPassphrase999!", &backup_file, false)
+            .await
+            .unwrap();
+        assert_eq!(import_summary.total_imported, 3);
+        assert_eq!(import_summary.total_skipped, 0);
+
+        // Check restored search works
+        let restored_hits = service2.search_secrets("Redis", 10).await.unwrap();
+        assert_eq!(restored_hits.len(), 1);
+        assert_eq!(restored_hits[0].title, "Redis Cache");
+
+        // 7. Tampered Backup Detection
+        let mut tampered_bytes = std::fs::read(&backup_file).unwrap();
+        let len = tampered_bytes.len();
+        tampered_bytes[len - 5] ^= 0xAA; // Corrupt ciphertext byte
+        let tampered_file = temp.path().join("tampered.vaultbackup");
+        std::fs::write(&tampered_file, tampered_bytes).unwrap();
+
+        // Restore of tampered file must fail
+        assert!(service2
+            .import_encrypted_backup("BackupKeyStrongPassphrase999!", &tampered_file, false)
+            .await
+            .is_err());
+    }
 }

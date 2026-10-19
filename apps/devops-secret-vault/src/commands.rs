@@ -146,3 +146,79 @@ pub async fn get_audit_logs(
         .await
         .map_err(|e| e.to_string())
 }
+
+/// Get on-device security risk scoring and health report
+pub async fn get_health_report(
+    service: &VaultService,
+) -> Result<crate::risk_scoring::VaultHealthReport, String> {
+    service.get_health_report().await.map_err(|e| e.to_string())
+}
+
+/// Generate live RFC 6238 TOTP code for a secret
+pub async fn generate_totp_code(
+    service: &VaultService,
+    secret_id: &str,
+) -> Result<crate::totp::TotpCodeResponse, String> {
+    service
+        .generate_totp_code(secret_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Inspect X.509 certificate for expiry and weak algorithms
+pub async fn inspect_certificate(
+    service: &VaultService,
+    secret_id: &str,
+) -> Result<crate::cert_monitor::CertInspectionReport, String> {
+    service
+        .inspect_certificate(secret_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Export encrypted .vaultbackup archive
+pub async fn export_backup(
+    service: &VaultService,
+    passphrase: &str,
+    output_path: &str,
+) -> Result<crate::backup::BackupExportSummary, String> {
+    service
+        .export_encrypted_backup(passphrase, std::path::Path::new(output_path))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Import encrypted .vaultbackup archive
+pub async fn import_backup(
+    service: &VaultService,
+    passphrase: &str,
+    input_path: &str,
+    overwrite: bool,
+) -> Result<crate::backup::BackupImportSummary, String> {
+    service
+        .import_encrypted_backup(passphrase, std::path::Path::new(input_path), overwrite)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Parse AWS credentials from INI syntax
+pub fn parse_aws_ini(
+    content: &str,
+    target_profile: Option<&str>,
+) -> Result<Vec<crate::cloud_creds::AwsCredential>, String> {
+    crate::cloud_creds::AwsCredential::parse_ini(content, target_profile).map_err(|e| e.to_string())
+}
+
+/// Parse Azure service principal credentials from az cli JSON output
+pub fn parse_azure_json(
+    json_str: &str,
+    subscription_id: &str,
+) -> Result<crate::cloud_creds::AzureCredential, String> {
+    crate::cloud_creds::AzureCredential::parse_az_cli_json(json_str, subscription_id)
+        .map_err(|e| e.to_string())
+}
+
+/// Parse Terraform .tfvars content into key-value map
+pub fn parse_terraform_vars(content: &str) -> std::collections::HashMap<String, String> {
+    crate::cloud_creds::TerraformSecret::parse_tfvars(content)
+}

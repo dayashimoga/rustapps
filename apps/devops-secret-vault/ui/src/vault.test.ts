@@ -36,6 +36,10 @@ function getPrimarySecretValue(payload: SecretPayload): string {
     case 'certificate': return payload.data.private_key;
     case 'api_key': return payload.data.api_key;
     case 'database_credential': return payload.data.password;
+    case 'aws_credential': return payload.data.secret_access_key;
+    case 'azure_credential': return payload.data.client_secret;
+    case 'terraform_secret': return payload.data.tf_vars ?? '';
+    case 'totp': return payload.data.secret_base32;
   }
 }
 
@@ -87,6 +91,49 @@ describe('DevOps Secret Vault Frontend Utilities', () => {
       },
     };
     expect(getPrimarySecretValue(db)).toBe('db-pass-456');
+
+    const aws: SecretPayload = {
+      type: 'aws_credential',
+      data: {
+        access_key_id: 'AKIAIOSFODNN7EXAMPLE',
+        secret_access_key: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+        region: 'us-east-1',
+        session_token: null,
+      },
+    };
+    expect(getPrimarySecretValue(aws)).toBe('wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY');
+
+    const az: SecretPayload = {
+      type: 'azure_credential',
+      data: {
+        subscription_id: 'sub-001',
+        tenant_id: 'tenant-123',
+        client_id: 'app-456',
+        client_secret: 'azure-secret-value-789',
+      },
+    };
+    expect(getPrimarySecretValue(az)).toBe('azure-secret-value-789');
+
+    const tf: SecretPayload = {
+      type: 'terraform_secret',
+      data: {
+        tf_vars: 'db_password = "supersecretpassword"\napi_key = "tf-api-key"',
+      },
+    };
+    expect(getPrimarySecretValue(tf)).toContain('supersecretpassword');
+
+    const totp: SecretPayload = {
+      type: 'totp',
+      data: {
+        secret_base32: 'JBSWY3DPEHPK3PXP',
+        issuer: 'GitHub',
+        account_name: 'devops-admin',
+        algorithm: 'SHA1',
+        digits: 6,
+        period_seconds: 30,
+      },
+    };
+    expect(getPrimarySecretValue(totp)).toBe('JBSWY3DPEHPK3PXP');
   });
 
   it('filters secrets by type and search query correctly', () => {

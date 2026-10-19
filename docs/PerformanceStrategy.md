@@ -59,7 +59,7 @@ The `/benchmarks/` directory houses statistical Criterion benchmarks measuring:
 ### Regression Threshold Enforcement
 During CI execution:
 - Any benchmark exhibiting a regression greater than $5\%$ ($p < 0.05$) triggers an automatic pipeline failure.
-- In Phase 2, benchmark suites cover:
+- In Phase 4, 16 benchmark suites cover:
   1. `aes_256_gcm_encrypt_4kb` and `aes_256_gcm_decrypt_4kb`
   2. `tantivy_query_latency` (<50ms SLA)
   3. `sqlite_wal_insert_and_query`
@@ -70,6 +70,12 @@ During CI execution:
   8. `drain_template_mining_1k_logs` (sub-millisecond template mining)
   9. `timeline_histogram_50_buckets` (<5ms aggregation)
   10. `timeline_filter_timerange_sub_50ms` (sub-millisecond binary search range query)
+  11. `vault_core/vault_tantivy_search_sub_50ms` (26.2 µs — 1,900x faster than 50ms SLA)
+  12. `vault_core/vault_payload_encrypt_aes_gcm` (715 ns per secret payload)
+  13. `vault_core/vault_payload_decrypt_aes_gcm` (1.22 µs per secret payload)
+  14. `vault_advanced/totp_generate_100_codes` (77.8 µs — 778 ns per RFC 6238 token)
+  15. `vault_advanced/vault_risk_scoring_500_secrets` (322.5 µs — 0.32 ms for 500 secrets)
+  16. `vault_advanced/vault_encrypted_backup_roundtrip_50_secrets` (11.2 ms roundtrip)
 
 - Criterion compares new results against the committed baseline in `benchmarks/baseline.json`.
 - A statistically significant degradation $> 5\%$ in query latency or throughput triggers an immediate CI failure.

@@ -347,6 +347,100 @@ fn benchmark_vault_search_and_crypto(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_vault_advanced_features(c: &mut Criterion) {
+    use shared_encryption::Argon2Params;
+    use vault_core::backup::{export_vault_backup, read_vault_backup};
+    use vault_core::models::{DecryptedSecret, SecretMetadata, SecretPayload, SecretType};
+    use vault_core::risk_scoring::evaluate_vault_health;
+    use vault_core::totp::{TotpAlgorithm, TotpConfig};
+
+    let mut group = c.benchmark_group("vault_advanced");
+
+    // 1. TOTP code generation throughput (RFC 6238 HMAC-SHA1 + dynamic truncation)
+    let totp_cfg = TotpConfig {
+        secret_base32: "JBSWY3DPEHPK3PXP".to_string(),
+        issuer: Some("Google".to_string()),
+        account_name: Some("user@gmail.com".to_string()),
+        algorithm: TotpAlgorithm::Sha1,
+        digits: 6,
+        step_seconds: 30,
+    };
+
+    group.bench_function("totp_generate_100_codes", |b| {
+        b.iter(|| {
+            for t in 0..100 {
+                let code = totp_cfg
+                    .generate_at_timestamp(black_box(1700000000 + t * 30))
+                    .unwrap();
+                black_box(code);
+            }
+        });
+    });
+
+    // 2. Risk scoring across 500 secrets (entropy, zero-knowledge reuse, default checks)
+    let mut secrets = Vec::with_capacity(500);
+    for i in 0..500 {
+        secrets.push(DecryptedSecret {
+            metadata: SecretMetadata {
+                id: format!("bench-sec-{}", i),
+                title: format!("Database Cluster {}", i),
+                secret_type: SecretType::Password,
+                tags: vec!["db".to_string()],
+                username: Some(format!("user_{}", i)),
+                url: None,
+                notes: None,
+                version: 1,
+                created_at: 1729300000,
+                updated_at: 1729300000 - (i as i64 * 86400),
+            },
+            payload: SecretPayload::Password {
+                password: if i % 10 == 0 {
+                    "admin".to_string()
+                } else if i % 5 == 0 {
+                    "SharedPassword#2026!".to_string()
+                } else {
+                    format!("StrongRandomPassphrase!#{}", i)
+                },
+            },
+        });
+    }
+
+    group.bench_function("vault_risk_scoring_500_secrets", |b| {
+        b.iter(|| {
+            let report = evaluate_vault_health(black_box(&secrets));
+            black_box(report.overall_score);
+        });
+    });
+
+    // 3. Encrypted backup archive roundtrip (Argon2id + AES-256-GCM + integrity check)
+    let sample_secrets = secrets[..50].to_vec();
+    let temp_file = tempfile::NamedTempFile::new().unwrap();
+    let backup_path = temp_file.path();
+    let test_params = Argon2Params::fast_for_tests();
+
+    group.bench_function("vault_encrypted_backup_roundtrip_50_secrets", |b| {
+        b.iter(|| {
+            let summary = export_vault_backup(
+                black_box(&sample_secrets),
+                black_box("BenchBackupPassphrase999!"),
+                black_box(backup_path),
+                black_box(Some(test_params.clone())),
+            )
+            .unwrap();
+            black_box(summary.file_size_bytes);
+
+            let env = read_vault_backup(
+                black_box(backup_path),
+                black_box("BenchBackupPassphrase999!"),
+            )
+            .unwrap();
+            black_box(env.secrets.len());
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -358,6 +452,7 @@ criterion_group!(
     benchmark_json_streaming_parser,
     benchmark_drain_template_mining,
     benchmark_timeline_histogram,
-    benchmark_vault_search_and_crypto
+    benchmark_vault_search_and_crypto,
+    benchmark_vault_advanced_features
 );
 criterion_main!(benches);

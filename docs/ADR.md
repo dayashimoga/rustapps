@@ -257,4 +257,63 @@ This document records the foundational architectural decisions made for the mono
 - **Rationale:** Achieves $< 2\,\text{ms}$ query latency across 100,000 items while ensuring zero unencrypted index files ever touch non-volatile disk.
 - **Consequences:** Vault unlock indexes metadata into RAM; bounded by $< 30\,\text{MB}$ memory footprint, easily satisfying the 300MB RAM limit.
 
+---
+
+## ADR-0018: RFC 6238 TOTP Engine with Zero-External Clock Sync
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Two-factor authentication (TOTP) codes must be generated and verified accurately without external NTP network queries in strictly air-gapped offline environments.
+- **Alternatives Considered:**
+  1. *Network NTP time synchronization:* Violates strict offline/standalone nonnegotiable constraint.
+  2. *OS monotonic / system clock with sliding tolerance window:* Read OS system timestamp and evaluate standard 30-second epoch counter with configurable drift tolerance ($\pm 1$ step).
+- **Decision:** Implement native RFC 6238 TOTP generator with Base32 decoding, HMAC-SHA1/SHA256 support, and zero external network queries.
+- **Rationale:** Guarantees 100% offline compliance while maintaining compatibility with standard authenticator apps and services.
+- **Consequences:** Relies on local OS system time synchronization.
+
+---
+
+## ADR-0019: Automated X.509 Certificate Chain Inspection & Cryptographic Weakness Detection
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Developers manage TLS/SSL certificates and SSH keys that expire unnoticed or use deprecated algorithms (e.g. SHA-1, MD5, RSA-1024), causing production outages.
+- **Alternatives Considered:**
+  1. *Shelling out to external OpenSSL binary:* Incompatible across platforms; violates zero external dependency rule.
+  2. *Native Rust X.509 ASN.1/DER/PEM parser embedded in vault-core:* Directly parse certificate structures, extract validity dates, Subject Alternative Names (SANs), key lengths, and flag weak algorithms offline.
+- **Decision:** Implement embedded X.509 certificate parsing and weakness detection directly in `vault-core`.
+- **Rationale:** Provides instant, offline expiration alerts and security posture evaluation within sub-millisecond execution times and zero external binaries.
+- **Consequences:** Parses standard X.509 v3 certificates and PEM formatting; unsupported proprietary certificate formats are flagged gracefully.
+
+---
+
+## ADR-0020: On-Device Vault Risk Scoring & Differential Credential Reuse Detection
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Users need comprehensive visibility into credential hygiene (entropy, reuse, age, default passwords) without exposing plaintext secrets to inspection.
+- **Alternatives Considered:**
+  1. *Cloud-based credential audit APIs (e.g. HaveIBeenPwned API):* Violates offline-first constraint and leaks hashes over the network.
+  2. *Plaintext cross-matching in memory:* Risks lingering sensitive string allocations in RAM.
+  3. *Local Differential Risk Scoring with Zero-Knowledge Hash Bucketing:* Calculate Shannon entropy, rotation age, evaluate against a curated offline list of default developer credentials, and hash secret payloads with an ephemeral in-memory salt to identify duplicates without storing plaintext matches.
+- **Decision:** Implement local zero-knowledge risk scoring and Health Dashboard evaluation in `vault-core`.
+- **Rationale:** Delivers enterprise-grade security posture analysis entirely on-device with zero data exfiltration.
+- **Consequences:** Risk scoring runs on-demand during vault unlock or audit requests in $< 20\,\text{ms}$.
+
+---
+
+## ADR-0021: Tamper-Evident Encrypted Backup Archive Format with Argon2id + AES-256-GCM
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Users require portable encrypted backup archives to migrate or preserve secret inventories across machines without risk of tampering or corruption.
+- **Alternatives Considered:**
+  1. *Plain JSON/CSV exports:* Extremely high security risk if saved unencrypted on shared or untrusted storage.
+  2. *Standard ZIP password encryption (ZipCrypto/PKZIP):* Trivially breakable.
+  3. *Authenticated `.vaultbackup` Archive Envelope:* Standardized binary envelope with magic bytes (`VAULT_BACKUP_V1`), salt, Argon2id parameters, AES-256-GCM ciphertext, and cryptographic integrity verification.
+- **Decision:** Implement authenticated `.vaultbackup` archive format using Argon2id key derivation and AES-256-GCM encryption.
+- **Rationale:** Guarantees that backups cannot be decrypted without the backup passphrase and cannot be tampered with or corrupted without immediate cryptographic detection.
+- **Consequences:** Backups are self-contained, offline-first portable binary files.
+
+
 

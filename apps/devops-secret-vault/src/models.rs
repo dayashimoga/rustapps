@@ -17,6 +17,10 @@ pub enum SecretType {
     Certificate,
     ApiKey,
     DatabaseCredential,
+    AwsCredential,
+    AzureCredential,
+    TerraformSecret,
+    Totp,
 }
 
 impl SecretType {
@@ -27,6 +31,10 @@ impl SecretType {
             Self::Certificate => "certificate",
             Self::ApiKey => "api_key",
             Self::DatabaseCredential => "database_credential",
+            Self::AwsCredential => "aws_credential",
+            Self::AzureCredential => "azure_credential",
+            Self::TerraformSecret => "terraform_secret",
+            Self::Totp => "totp",
         }
     }
 
@@ -36,6 +44,10 @@ impl SecretType {
             "certificate" | "cert" | "tls" => Self::Certificate,
             "api_key" | "api" => Self::ApiKey,
             "database_credential" | "database" | "db" => Self::DatabaseCredential,
+            "aws_credential" | "aws" => Self::AwsCredential,
+            "azure_credential" | "azure" => Self::AzureCredential,
+            "terraform_secret" | "terraform" | "tf" => Self::TerraformSecret,
+            "totp" | "2fa" | "mfa" => Self::Totp,
             _ => Self::Password,
         }
     }
@@ -103,6 +115,34 @@ pub enum SecretPayload {
         password: String,
         connection_string: Option<String>,
     },
+    AwsCredential {
+        access_key_id: String,
+        secret_access_key: String,
+        session_token: Option<String>,
+        region: Option<String>,
+        profile_name: Option<String>,
+    },
+    AzureCredential {
+        subscription_id: String,
+        tenant_id: String,
+        client_id: String,
+        client_secret: String,
+        cloud_environment: Option<String>,
+    },
+    TerraformSecret {
+        state_key: Option<String>,
+        tf_vars: Option<String>,
+        provider_token: Option<String>,
+        backend_config: Option<String>,
+    },
+    Totp {
+        secret_base32: String,
+        issuer: Option<String>,
+        account_name: Option<String>,
+        algorithm: Option<String>,
+        digits: Option<u32>,
+        period_seconds: Option<u64>,
+    },
 }
 
 impl SecretPayload {
@@ -113,6 +153,10 @@ impl SecretPayload {
             Self::Certificate { .. } => SecretType::Certificate,
             Self::ApiKey { .. } => SecretType::ApiKey,
             Self::DatabaseCredential { .. } => SecretType::DatabaseCredential,
+            Self::AwsCredential { .. } => SecretType::AwsCredential,
+            Self::AzureCredential { .. } => SecretType::AzureCredential,
+            Self::TerraformSecret { .. } => SecretType::TerraformSecret,
+            Self::Totp { .. } => SecretType::Totp,
         }
     }
 
@@ -123,6 +167,27 @@ impl SecretPayload {
             Self::Certificate { private_key, .. } => private_key.as_str(),
             Self::ApiKey { api_key, .. } => api_key.as_str(),
             Self::DatabaseCredential { password, .. } => password.as_str(),
+            Self::AwsCredential {
+                secret_access_key, ..
+            } => secret_access_key.as_str(),
+            Self::AzureCredential { client_secret, .. } => client_secret.as_str(),
+            Self::TerraformSecret {
+                state_key,
+                tf_vars,
+                provider_token,
+                ..
+            } => {
+                if let Some(t) = provider_token {
+                    t.as_str()
+                } else if let Some(s) = state_key {
+                    s.as_str()
+                } else if let Some(v) = tf_vars {
+                    v.as_str()
+                } else {
+                    ""
+                }
+            }
+            Self::Totp { secret_base32, .. } => secret_base32.as_str(),
         }
     }
 
@@ -181,6 +246,58 @@ impl SecretPayload {
                 if *port == 0 {
                     return Err(VaultError::ValidationError(
                         "Database port must be valid (>0)".to_string(),
+                    ));
+                }
+            }
+            Self::AwsCredential {
+                access_key_id,
+                secret_access_key,
+                ..
+            } => {
+                if access_key_id.trim().is_empty() || secret_access_key.trim().is_empty() {
+                    return Err(VaultError::ValidationError(
+                        "AWS credential requires both Access Key ID and Secret Access Key"
+                            .to_string(),
+                    ));
+                }
+            }
+            Self::AzureCredential {
+                subscription_id,
+                tenant_id,
+                client_id,
+                client_secret,
+                ..
+            } => {
+                if subscription_id.trim().is_empty()
+                    || tenant_id.trim().is_empty()
+                    || client_id.trim().is_empty()
+                    || client_secret.trim().is_empty()
+                {
+                    return Err(VaultError::ValidationError(
+                        "Azure credential requires subscription ID, tenant ID, client ID, and client secret".to_string(),
+                    ));
+                }
+            }
+            Self::TerraformSecret {
+                state_key,
+                tf_vars,
+                provider_token,
+                backend_config,
+            } => {
+                if state_key.is_none()
+                    && tf_vars.is_none()
+                    && provider_token.is_none()
+                    && backend_config.is_none()
+                {
+                    return Err(VaultError::ValidationError(
+                        "Terraform secret must contain at least one state key, variable set, token, or backend config".to_string(),
+                    ));
+                }
+            }
+            Self::Totp { secret_base32, .. } => {
+                if secret_base32.trim().is_empty() {
+                    return Err(VaultError::ValidationError(
+                        "TOTP secret base32 key cannot be empty".to_string(),
                     ));
                 }
             }

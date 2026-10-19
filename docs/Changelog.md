@@ -68,5 +68,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Expanded workspace test suite to 76 tests (100% pass rate) and Vitest frontend test suite (100% pass rate); added Criterion benchmarks for Tantivy secret search and AES-GCM payload throughput.
   - 100% clean formatting (`cargo fmt`) and 0 clippy warnings (`cargo clippy --workspace --all-targets -- -D warnings`).
 
-
-
+### Added - 2026-10-19 (Phase 4 — DevOps Secret Vault Advanced)
+- **DevOps Secret Vault Advanced Features & Security Tooling (`apps/devops-secret-vault`):**
+  - Implemented specialized domain schemas, validation rules, and syntax parsers for cloud & infrastructure secrets in `cloud_creds.rs`:
+    - AWS credentials with `~/.aws/credentials` INI syntax parsing (`aws_access_key_id`, `aws_secret_access_key`, `aws_session_token`, `region`).
+    - Azure credentials with JSON service principal parsing (`az ad sp create-for-rbac` output) with tenant, subscription, and client secret validation.
+    - Terraform secrets with HCL-compatible `.tfvars` key-value parser and environment variable interpolation.
+  - Implemented RFC 6238 real-time Time-Based One-Time Password (TOTP) engine in `totp.rs`:
+    - RFC 4648 Base32 decoder, pure Rust `#![forbid(unsafe_code)]` RFC 3174 SHA-1 and HMAC-SHA1/SHA256 implementations with zero unvetted external crate dependencies.
+    - Dynamic truncation algorithm, remaining step time countdown, and `otpauth://totp/...` URI parser with official RFC 6238 Appendix B test vectors verified.
+  - Implemented automated X.509 ASN.1/PEM certificate monitoring in `cert_monitor.rs`:
+    - Offline parser extracting Subject, Issuer, Validity period, Expiry status (`Valid`, `ExpiringSoon`, `Expired`), Subject Alternative Names (SANs).
+    - Weak cryptography flags (MD5/SHA-1 signatures, RSA keys < 2048 bits) with automated warning banners.
+  - Implemented 5-dimensional local security posture risk scoring in `risk_scoring.rs`:
+    - Shannon entropy assessment, zero-knowledge credential reuse detection via ephemeral in-memory SHA-256 keyed hashes, rotation age tracking (>90d, >180d), offline default password dictionary check, and certificate hygiene.
+    - Overall posture score (0–100), letter grade (A+ through F), and interactive prioritized recommendations with direct navigation links.
+  - Implemented tamper-evident portable encrypted backup/export archives in `backup.rs`:
+    - Specification: `VAULT_BACKUP_V1\0` header, 16-byte cryptographic salt, Argon2id parameters, AES-256-GCM ciphertext, embedded SHA-256 integrity checksum, zero-knowledge passphrase encryption.
+  - Extended Tauri IPC bridge and service in `service.rs`, `storage.rs`, and `commands.rs` with `get_health_report`, `generate_totp_code`, `inspect_certificate`, `export_encrypted_backup`, and `import_encrypted_backup`.
+  - Expanded Svelte/TypeScript desktop UI in `ui/`:
+    - `TotpDisplay.svelte`: SVG circular timer dial, monospace formatted token (`123 456`), live pulse, 1-click clipboard copy.
+    - `CertMonitor.svelte`: Expiry status badge, remaining days, weak crypto warnings, Subject, Issuer, and SAN chips.
+    - `HealthDashboard.svelte`: Glassmorphic posture dashboard with radial score gauge, 5 category metric cards, prioritized risk recommendations.
+    - `BackupModal.svelte`: Encrypted export and restore wizard with passphrase confirmation, checksum verification, and overwrite toggle.
+    - Extended `SecretDetail.svelte`, `NewSecretModal.svelte`, `Header.svelte`, and `App.svelte` supporting all new secret types.
+  - Expanded workspace test suite to 90 passing tests (100% pass rate) and Vitest frontend test suite (100% pass rate).
+  - Added Criterion performance benchmarks in `benchmarks/benches/bench_suite.rs`:
+    - `totp_generate_100_codes`: 77.8 µs (778 ns per token).
+    - `vault_risk_scoring_500_secrets`: 322.5 µs (0.32 ms for 500 secrets).
+    - `vault_encrypted_backup_roundtrip_50_secrets`: 11.2 ms.
+    - `vault_tantivy_search_sub_50ms`: 26.2 µs (SLA < 50,000 µs — 1,900x faster than required).
+  - 100% clean formatting (`cargo fmt`) and 0 clippy warnings (`cargo clippy --workspace --all-targets -- -D warnings`).

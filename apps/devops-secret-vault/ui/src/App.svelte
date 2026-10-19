@@ -5,7 +5,20 @@
   import SecretDetail from './components/SecretDetail.svelte';
   import UnlockModal from './components/UnlockModal.svelte';
   import NewSecretModal from './components/NewSecretModal.svelte';
-  import type { DecryptedSecret, SecretAuditEntry, SecretMetadata, SecretPayload, SecretType } from './types';
+  import HealthDashboard from './components/HealthDashboard.svelte';
+  import BackupModal from './components/BackupModal.svelte';
+  import type {
+    BackupExportSummary,
+    BackupImportSummary,
+    CertInspectionReport,
+    DecryptedSecret,
+    SecretAuditEntry,
+    SecretMetadata,
+    SecretPayload,
+    SecretType,
+    TotpCodeResponse,
+    VaultHealthReport,
+  } from './types';
 
   let isInitialized = false;
   let isLocked = true;
@@ -21,6 +34,8 @@
   let filterType: SecretType | 'all' = 'all';
 
   let isNewSecretModalOpen = false;
+  let isHealthDashboardOpen = false;
+  let isBackupModalOpen = false;
   let clipboardSeconds: number | null = null;
   let clipboardTimer: number | null = null;
 
@@ -368,6 +383,82 @@
     selectedSecretId = null;
     await loadSecrets();
   }
+
+  async function handleFetchHealthReport(): Promise<VaultHealthReport> {
+    if (isTauri) {
+      return await (window as any).__TAURI__.invoke('get_health_report');
+    }
+    return {
+      overall_score: 92,
+      grade: 'A',
+      total_secrets: mockSecrets.length,
+      compromised_count: 0,
+      reused_count: 0,
+      weak_count: 0,
+      stale_count: 0,
+      cert_issues_count: 0,
+      recommendations: [],
+    };
+  }
+
+  async function handleGenerateTotp(secretId: string): Promise<TotpCodeResponse> {
+    if (isTauri) {
+      return await (window as any).__TAURI__.invoke('generate_totp_code', { secretId });
+    }
+    const elapsed = Math.floor(Date.now() / 1000) % 30;
+    return {
+      code: '849201',
+      remaining_seconds: 30 - elapsed,
+      total_step_seconds: 30,
+      progress_ratio: elapsed / 30,
+    };
+  }
+
+  async function handleInspectCert(secretId: string): Promise<CertInspectionReport> {
+    if (isTauri) {
+      return await (window as any).__TAURI__.invoke('inspect_certificate', { secretId });
+    }
+    return {
+      subject_cn: 'api.vault.internal',
+      issuer_cn: 'DigiCert Global Root CA',
+      not_before_epoch: Math.floor(Date.now() / 1000) - 86400 * 30,
+      not_after_epoch: Math.floor(Date.now() / 1000) + 86400 * 335,
+      days_until_expiration: 335,
+      status: 'valid',
+      is_self_signed: false,
+      signature_algorithm: 'SHA256withRSA',
+      is_weak_signature: false,
+      public_key_algorithm: 'RSA',
+      key_size_bits: 2048,
+      is_weak_key: false,
+      subject_alt_names: ['api.vault.internal', 'gateway.vault.internal'],
+      serial_number: '12:34:56:78:9A:BC:DE:F0',
+    };
+  }
+
+  async function handleExportBackup(passphrase: string, outputPath: string): Promise<BackupExportSummary> {
+    if (isTauri) {
+      return await (window as any).__TAURI__.invoke('export_backup', { passphrase, outputPath });
+    }
+    return {
+      output_path: outputPath,
+      total_secrets: mockSecrets.length,
+      file_size_bytes: 4096,
+      exported_at: Math.floor(Date.now() / 1000),
+    };
+  }
+
+  async function handleImportBackup(passphrase: string, inputPath: string, overwrite: boolean): Promise<BackupImportSummary> {
+    if (isTauri) {
+      return await (window as any).__TAURI__.invoke('import_backup', { passphrase, inputPath, overwrite });
+    }
+    return {
+      total_imported: 3,
+      total_skipped: 0,
+      total_overwritten: 0,
+      original_exported_at: Math.floor(Date.now() / 1000) - 86400,
+    };
+  }
 </script>
 
 <div class="app-layout">
@@ -380,6 +471,8 @@
     on:search={handleSearch}
     on:filterChange={e => { filterType = e.detail; }}
     on:openNewSecretModal={() => { isNewSecretModalOpen = true; }}
+    on:openHealthDashboard={() => { isHealthDashboardOpen = true; }}
+    on:openBackupModal={() => { isBackupModalOpen = true; }}
     on:lockVault={handleLock}
     on:clearClipboard={handleClearClipboard}
   />
@@ -403,6 +496,8 @@
           auditLogs={activeAuditLogs}
           {isLoading}
           {clipboardSeconds}
+          onGenerateTotp={handleGenerateTotp}
+          onInspectCert={handleInspectCert}
           on:copySecret={handleCopySecret}
           on:deleteSecret={handleDeleteSecret}
         />
@@ -429,6 +524,28 @@
     on:close={() => { isNewSecretModalOpen = false; }}
     on:createSecret={handleCreateSecret}
   />
+
+  <!-- Health Dashboard Modal -->
+  {#if isHealthDashboardOpen}
+    <HealthDashboard
+      onFetchHealth={handleFetchHealthReport}
+      onSelectSecret={(id) => {
+        selectSecret(id);
+        isHealthDashboardOpen = false;
+      }}
+      onClose={() => { isHealthDashboardOpen = false; }}
+    />
+  {/if}
+
+  <!-- Backup & Portability Modal -->
+  {#if isBackupModalOpen}
+    <BackupModal
+      onExport={handleExportBackup}
+      onImport={handleImportBackup}
+      onClose={() => { isBackupModalOpen = false; }}
+      onRefreshVault={loadSecrets}
+    />
+  {/if}
 
   <!-- Toast Notification -->
   {#if toastMessage}

@@ -3,7 +3,11 @@ export type SecretType =
   | 'ssh_key'
   | 'certificate'
   | 'api_key'
-  | 'database_credential';
+  | 'database_credential'
+  | 'aws_credential'
+  | 'azure_credential'
+  | 'terraform_secret'
+  | 'totp';
 
 export interface SecretMetadata {
   id: string;
@@ -54,6 +58,46 @@ export type SecretPayload =
         username: string;
         password: string;
         connection_string?: string | null;
+      };
+    }
+  | {
+      type: 'aws_credential';
+      data: {
+        access_key_id: string;
+        secret_access_key: string;
+        session_token?: string | null;
+        region?: string | null;
+        profile_name?: string | null;
+      };
+    }
+  | {
+      type: 'azure_credential';
+      data: {
+        subscription_id: string;
+        tenant_id: string;
+        client_id: string;
+        client_secret: string;
+        cloud_environment?: string | null;
+      };
+    }
+  | {
+      type: 'terraform_secret';
+      data: {
+        state_key?: string | null;
+        tf_vars?: string | null;
+        provider_token?: string | null;
+        backend_config?: string | null;
+      };
+    }
+  | {
+      type: 'totp';
+      data: {
+        secret_base32: string;
+        issuer?: string | null;
+        account_name?: string | null;
+        algorithm?: string | null;
+        digits?: number | null;
+        period_seconds?: number | null;
       };
     };
 
@@ -108,4 +152,71 @@ export interface SecretAuditEntry {
 export interface VaultStatusResponse {
   is_initialized: boolean;
   is_locked: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: Advanced Features
+// ---------------------------------------------------------------------------
+
+export interface TotpCodeResponse {
+  code: string;
+  remaining_seconds: number;
+  total_step_seconds: number;
+  progress_ratio: number;
+}
+
+export type CertStatus = 'valid' | 'expiring_soon' | 'expired';
+
+export interface CertInspectionReport {
+  subject_cn: string;
+  issuer_cn: string;
+  not_before_epoch: number;
+  not_after_epoch: number;
+  days_until_expiration: number;
+  status: CertStatus;
+  is_self_signed: boolean;
+  signature_algorithm: string;
+  is_weak_signature: boolean;
+  public_key_algorithm: string;
+  key_size_bits?: number | null;
+  is_weak_key: boolean;
+  subject_alt_names: string[];
+  serial_number: string;
+}
+
+export type Severity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+export interface SecurityRecommendation {
+  id: string;
+  severity: Severity;
+  title: string;
+  description: string;
+  secret_id: string;
+  secret_title: string;
+}
+
+export interface VaultHealthReport {
+  overall_score: number;
+  grade: string;
+  total_secrets: number;
+  compromised_count: number;
+  reused_count: number;
+  weak_count: number;
+  stale_count: number;
+  cert_issues_count: number;
+  recommendations: SecurityRecommendation[];
+}
+
+export interface BackupExportSummary {
+  output_path: string;
+  total_secrets: number;
+  file_size_bytes: number;
+  exported_at: number;
+}
+
+export interface BackupImportSummary {
+  total_imported: number;
+  total_skipped: number;
+  total_overwritten: number;
+  original_exported_at: number;
 }

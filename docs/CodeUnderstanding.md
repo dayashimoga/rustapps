@@ -75,15 +75,20 @@ The monorepo employs a clean hexagonal / ports-and-adapters architecture impleme
     - `ui`: Svelte/TS frontend with 60 FPS virtualized viewport, `TimelineHistogram.svelte`, `AiInsightsDrawer.svelte`, and live telemetry indicators.
 12. **`vault_core` / `devops-secret-vault` (`apps/devops-secret-vault`):**
     - `crypto`: Argon2id master key derivation ($m=64\,\text{MiB}, t=3, p=4$), AES-256-GCM authenticated payload encryption, verifier token, and memory zeroization.
-    - `models`: Domain entities (Password, SSH Key, Certificate, API Key, Database Credential), validation rules, UUID generator, and Shannon bit entropy calculator.
+    - `models`: Domain entities (Password, SSH Key, Certificate, API Key, Database Credential, AWS Credential, Azure Credential, Terraform Secret, TOTP), validation rules, UUID generator, and Shannon bit entropy calculator.
+    - `cloud_creds`: Specialized domain schemas and syntax parsers for AWS credentials (`~/.aws/credentials` INI format), Azure service principals (`az ad sp create-for-rbac` JSON format), and Terraform `.tfvars` key-value pairs.
+    - `totp`: Pure Rust RFC 6238 real-time TOTP token generator, RFC 4648 Base32 decoder, `#![forbid(unsafe_code)]` RFC 3174 SHA-1 and HMAC-SHA1/SHA256, dynamic truncation, remaining step countdown, and `otpauth://totp/...` URI parser (778 ns per token).
+    - `cert_monitor`: Offline X.509 ASN.1 DER and PEM certificate parser extracting validity windows, expiry states (`Valid`, `ExpiringSoon`, `Expired`), weak cryptography flags (MD5/SHA-1, RSA < 2048), Subject, Issuer, and SANs.
+    - `risk_scoring`: 5-dimensional security posture scoring (entropy, zero-knowledge credential reuse detection via ephemeral in-memory SHA-256 keyed hashes, rotation age > 90/180 days, curated offline default password list, certificate hygiene) generating 0–100 score, grade (A+ through F), and prioritized remediation items.
+    - `backup`: Tamper-evident portable `.vaultbackup` archive bundle engine (`VAULT_BACKUP_V1\0`, 16-byte salt, Argon2id parameters, AES-256-GCM ciphertext, embedded SHA-256 integrity checksum).
     - `storage`: SQLite WAL encrypted storage with automated schema migrations and tamper-evident audit logging.
     - `search`: Ephemeral in-memory Tantivy full-text and structured index (<50ms query time across 100k items) created on unlock and completely destroyed on lock.
     - `clipboard`: Thread-safe auto-clearing clipboard manager with 30s background countdown timer and zeroization.
     - `biometrics`: Hardware and biometric authentication abstraction (Windows Hello, Touch ID, Linux Secret Service).
-    - `service`: `VaultService` orchestrator managing unlocked sessions, CRUD, and audit trail.
+    - `service`: `VaultService` orchestrator managing unlocked sessions, CRUD, audit trail, health audits, TOTP generation, certificate analysis, and encrypted backup export/restore.
     - `ffi`: C-ABI endpoints for Tauri desktop and Phase 8 Flutter mobile (`vault_create_handle`, `vault_unlock`, `vault_search`, etc.).
     - `commands`: Tauri desktop IPC command handlers.
-    - `ui`: Svelte/TypeScript desktop UI with glassmorphic dark theme, unlock modal, secrets explorer, entropy meter, and masked detail views.
+    - `ui`: Svelte/TypeScript desktop UI with glassmorphic dark theme, unlock modal, secrets explorer, entropy meter, masked detail views, `TotpDisplay.svelte`, `CertMonitor.svelte`, `HealthDashboard.svelte`, and `BackupModal.svelte`.
 
 ---
 
@@ -100,7 +105,53 @@ User Request (UI)
   --> Transferred via secure IPC to UI or copied to secure clipboard with auto-clear timer
 ```
 
-### 4.2 Log Viewer Large File Inspection Flow
+### 4.2 Vault TOTP Generation Flow
+```text
+User views TOTP secret / requests code
+  --> Svelte component TotpDisplay requests code via IPC: generate_totp_code(secret_id)
+  --> VaultService verifies unlocked session and retrieves encrypted TOTP payload
+  --> shared-encryption decrypts Base32 secret key into zeroizing memory
+  --> RFC 6238 engine decodes Base32, computes time step counter (T = current_time / period)
+  --> In-memory HMAC-SHA1 computes digest, applies dynamic truncation (778 ns execution)
+  --> Formats 6-digit code ("123 456") and calculates remaining seconds in 30s window
+  --> Returns code + remaining seconds to UI; SVG circular timer renders live countdown
+```
+
+### 4.3 Vault On-Device Security Risk Scoring Flow
+```text
+User opens Health Dashboard
+  --> Tauri IPC command: get_health_report()
+  --> VaultService fetches all encrypted secret payloads and decrypts in memory
+  --> Ephemeral 32-byte salt generated in volatile memory
+  --> Reuse Detector computes SHA-256(salt || secret_value) to identify duplicate credentials without comparing plaintexts
+  --> Entropy calculator scores Shannon bit strength across all passwords
+  --> Rotation age evaluator inspects updated_at timestamps against 90-day and 180-day thresholds
+  --> Offline dictionary detector compares passwords against curated default credential list
+  --> Certificate monitor inspects X.509 chains for expiry status and weak cryptographic ciphers
+  --> 5 scores weighted into overall score (0-100) and letter grade (A+ through F)
+  --> Ephemeral salt and decrypted payloads zeroized immediately
+  --> HealthReport returned to Svelte UI and displayed in HealthDashboard.svelte (< 1ms execution)
+```
+
+### 4.4 Vault Encrypted Backup Export & Restore Flow
+```text
+User initiates Encrypted Backup Export
+  --> User provides backup passphrase in BackupModal.svelte
+  --> VaultService retrieves all secret metadata and payloads
+  --> Serializes secrets array to canonical JSON bytes
+  --> Computes SHA-256 integrity checksum over plaintext JSON
+  --> Derives 256-bit encryption key via Argon2id from user passphrase and fresh 16-byte random salt
+  --> Encrypts JSON bytes with AES-256-GCM authenticated cipher
+  --> Packages binary bundle: 16-byte magic header, salt, Argon2id parameters, AES-GCM ciphertext, SHA-256 checksum
+  --> Writes tamper-evident .vaultbackup file to disk; zeroizes sensitive buffers
+Restore:
+  --> Reads bundle, verifies magic header and structure
+  --> Derives key from passphrase + salt, decrypts ciphertext via AES-256-GCM
+  --> Verifies SHA-256 integrity checksum against decrypted payload before database commit
+  --> Upserts secrets into local SQLite store; audit event logged
+```
+
+### 4.5 Log Viewer Large File Inspection Flow
 ```text
 User opens 100GB log file
   --> Universal Log Viewer requests mmap handle via shared-storage/mmap engine
@@ -111,7 +162,7 @@ User opens 100GB log file
   --> Raw byte slice converted to UTF-8 lossy and returned via IPC in < 1ms
 ```
 
-### 4.3 AI File Explorer Duplicate Detection Flow
+### 4.6 AI File Explorer Duplicate Detection Flow
 ```text
 Crawl directory
   --> shared-indexing streams file metadata to dedupe engine

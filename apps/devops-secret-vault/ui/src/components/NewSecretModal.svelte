@@ -42,6 +42,30 @@
   let dbPassword = '';
   let dbConnString = '';
 
+  // Cloud & Advanced fields
+  let awsAccessKey = '';
+  let awsSecretKey = '';
+  let awsSessionToken = '';
+  let awsRegion = 'us-east-1';
+  let awsProfile = 'default';
+
+  let azSubId = '';
+  let azTenantId = '';
+  let azClientId = '';
+  let azClientSecret = '';
+  let azCloudEnv = 'AzureCloud';
+
+  let tfStateKey = '';
+  let tfVars = '';
+  let tfToken = '';
+  let tfBackend = '';
+
+  let totpSecretBase32 = '';
+  let totpIssuer = '';
+  let totpAccount = '';
+  let totpDigits = 6;
+  let totpPeriod = 30;
+
   // Generator settings
   let genLength = 24;
   let genIncludeSymbols = true;
@@ -162,6 +186,54 @@
           },
         };
         break;
+      case 'aws_credential':
+        payload = {
+          type: 'aws_credential',
+          data: {
+            access_key_id: awsAccessKey,
+            secret_access_key: awsSecretKey,
+            session_token: awsSessionToken || null,
+            region: awsRegion || null,
+            profile_name: awsProfile || null,
+          },
+        };
+        break;
+      case 'azure_credential':
+        payload = {
+          type: 'azure_credential',
+          data: {
+            subscription_id: azSubId,
+            tenant_id: azTenantId,
+            client_id: azClientId,
+            client_secret: azClientSecret,
+            cloud_environment: azCloudEnv || null,
+          },
+        };
+        break;
+      case 'terraform_secret':
+        payload = {
+          type: 'terraform_secret',
+          data: {
+            state_key: tfStateKey || null,
+            tf_vars: tfVars || null,
+            provider_token: tfToken || null,
+            backend_config: tfBackend || null,
+          },
+        };
+        break;
+      case 'totp':
+        payload = {
+          type: 'totp',
+          data: {
+            secret_base32: totpSecretBase32,
+            issuer: totpIssuer || null,
+            account_name: totpAccount || null,
+            algorithm: 'SHA1',
+            digits: Number(totpDigits) || 6,
+            period_seconds: Number(totpPeriod) || 30,
+          },
+        };
+        break;
     }
 
     const tags = tagsStr
@@ -237,6 +309,34 @@
               on:click={() => { secretType = 'database_credential'; }}
             >
               Database
+            </button>
+            <button
+              type="button"
+              class="type-btn {secretType === 'aws_credential' ? 'active' : ''}"
+              on:click={() => { secretType = 'aws_credential'; }}
+            >
+              AWS
+            </button>
+            <button
+              type="button"
+              class="type-btn {secretType === 'azure_credential' ? 'active' : ''}"
+              on:click={() => { secretType = 'azure_credential'; }}
+            >
+              Azure
+            </button>
+            <button
+              type="button"
+              class="type-btn {secretType === 'terraform_secret' ? 'active' : ''}"
+              on:click={() => { secretType = 'terraform_secret'; }}
+            >
+              Terraform
+            </button>
+            <button
+              type="button"
+              class="type-btn {secretType === 'totp' ? 'active' : ''}"
+              on:click={() => { secretType = 'totp'; }}
+            >
+              2FA / TOTP
             </button>
           </div>
         </div>
@@ -422,6 +522,106 @@
             <div class="input-field">
               <label for="db-pwd">Database Password</label>
               <input id="db-pwd" type="password" bind:value={dbPassword} class="mono" required />
+            </div>
+          </div>
+
+        {:else if secretType === 'aws_credential'}
+          <div class="payload-section">
+            <div class="grid-2">
+              <div class="input-field">
+                <label for="aws-key">Access Key ID *</label>
+                <input id="aws-key" type="text" placeholder="AKIA..." bind:value={awsAccessKey} class="mono" required />
+              </div>
+              <div class="input-field">
+                <label for="aws-secret">Secret Access Key *</label>
+                <input id="aws-secret" type="password" placeholder="wJalrXUtn..." bind:value={awsSecretKey} class="mono" required />
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="input-field">
+                <label for="aws-region">Region</label>
+                <input id="aws-region" type="text" placeholder="us-east-1" bind:value={awsRegion} />
+              </div>
+              <div class="input-field">
+                <label for="aws-profile">Profile Name</label>
+                <input id="aws-profile" type="text" placeholder="default" bind:value={awsProfile} />
+              </div>
+            </div>
+            <div class="input-field">
+              <label for="aws-token">Session Token (Optional STS)</label>
+              <textarea id="aws-token" rows="2" placeholder="AQoDYXdz..." bind:value={awsSessionToken} class="mono"></textarea>
+            </div>
+          </div>
+
+        {:else if secretType === 'azure_credential'}
+          <div class="payload-section">
+            <div class="grid-2">
+              <div class="input-field">
+                <label for="az-sub">Subscription ID (UUID) *</label>
+                <input id="az-sub" type="text" placeholder="00000000-0000-0000-0000-000000000000" bind:value={azSubId} class="mono" required />
+              </div>
+              <div class="input-field">
+                <label for="az-tenant">Tenant ID (UUID) *</label>
+                <input id="az-tenant" type="text" placeholder="00000000-0000-0000-0000-000000000000" bind:value={azTenantId} class="mono" required />
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="input-field">
+                <label for="az-client">Client (App) ID *</label>
+                <input id="az-client" type="text" placeholder="00000000-0000-0000-0000-000000000000" bind:value={azClientId} class="mono" required />
+              </div>
+              <div class="input-field">
+                <label for="az-secret">Client Secret *</label>
+                <input id="az-secret" type="password" placeholder="Client secret token" bind:value={azClientSecret} class="mono" required />
+              </div>
+            </div>
+            <div class="input-field">
+              <label for="az-env">Cloud Environment</label>
+              <input id="az-env" type="text" placeholder="AzureCloud" bind:value={azCloudEnv} />
+            </div>
+          </div>
+
+        {:else if secretType === 'terraform_secret'}
+          <div class="payload-section">
+            <div class="input-field">
+              <label for="tf-token">Provider / Cloud Token</label>
+              <input id="tf-token" type="password" placeholder="tfp_xxxxxxxxxxxxxxxx" bind:value={tfToken} class="mono" />
+            </div>
+            <div class="input-field">
+              <label for="tf-vars">Terraform Variables (.tfvars)</label>
+              <textarea id="tf-vars" rows="3" placeholder="db_password = &quot;...&quot;" bind:value={tfVars} class="mono"></textarea>
+            </div>
+            <div class="input-field">
+              <label for="tf-state">State Encryption Key</label>
+              <input id="tf-state" type="password" placeholder="State pass/key" bind:value={tfStateKey} class="mono" />
+            </div>
+          </div>
+
+        {:else if secretType === 'totp'}
+          <div class="payload-section">
+            <div class="input-field">
+              <label for="totp-key">Base32 Secret Key *</label>
+              <input id="totp-key" type="text" placeholder="JBSWY3DPEHPK3PXP" bind:value={totpSecretBase32} class="mono" required />
+            </div>
+            <div class="grid-2">
+              <div class="input-field">
+                <label for="totp-issuer">Issuer</label>
+                <input id="totp-issuer" type="text" placeholder="e.g. GitHub, AWS, Google" bind:value={totpIssuer} />
+              </div>
+              <div class="input-field">
+                <label for="totp-acc">Account Name</label>
+                <input id="totp-acc" type="text" placeholder="user@example.com" bind:value={totpAccount} />
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="input-field">
+                <label for="totp-digits">Digits</label>
+                <input id="totp-digits" type="number" bind:value={totpDigits} min="6" max="8" />
+              </div>
+              <div class="input-field">
+                <label for="totp-period">Step (Seconds)</label>
+                <input id="totp-period" type="number" bind:value={totpPeriod} min="15" max="120" />
+              </div>
             </div>
           </div>
         {/if}

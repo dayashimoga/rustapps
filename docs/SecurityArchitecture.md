@@ -57,6 +57,25 @@ The applications in this monorepo handle highly sensitive operational data (pass
 - Plaintext secrets are dropped immediately upon UI transfer or clipboard handoff.
 - The clipboard manager implements an automated securely scrubbed timer (default 30 seconds) that clears secrets from system clipboard memory.
 
+### 3.5 Pure Rust RFC 6238 TOTP Engine Security
+- **Algorithm:** RFC 6238 Time-Based One-Time Password with RFC 4648 Base32 decoding and RFC 2104 HMAC.
+- **In-House Cryptographic Implementation:** Built natively in `#![forbid(unsafe_code)]` Rust using only workspace cryptographic dependencies (`sha2`). Implements RFC 3174 SHA-1 with exact Big-Endian word processing and RFC 6238 dynamic truncation.
+- **Supply Chain Elimination:** Avoids pulling in third-party unvetted TOTP or Base32 crates, maintaining zero supply chain vulnerability risk.
+- **Anti-Replay & Time Windows:** Computes counter $T = \lfloor \frac{\text{unix\_time}}{\text{period}} \rfloor$; supports configurable window drift tolerance for verification while remaining strictly offline.
+
+### 3.6 Zero-Knowledge In-Memory Credential Reuse Detection
+- **Threat Vector:** Auditing all vault credentials for reuse could expose plaintexts to heap inspection or side-channel leakage if plaintexts are compared directly in memory.
+- **Mitigation:** Ephemeral Keyed Hashing. During security risk assessment, an ephemeral 256-bit cryptographically random salt is generated in volatile memory (`salt = OsRng`).
+- **Hash Identifier:** For each credential, a zero-knowledge duplicate identifier is calculated: $H = \text{HMAC-SHA256}(\text{salt}, \text{secret\_value})$ or $\text{SHA-256}(\text{salt} \mathbin{\Vert} \text{secret\_value})$.
+- Identical secrets generate identical buckets with mathematical certainty; distinct secrets are cryptographically unlinkable.
+- The ephemeral salt is immediately zeroized upon health assessment completion, making cross-audit correlation or forensic reconstruction impossible.
+
+### 3.7 Tamper-Evident Portable `.vaultbackup` Specification
+- **Magic Header:** 16-byte fixed binary signature (`VAULT_BACKUP_V1\0\0`).
+- **Key Derivation:** Argon2id ($m=64\,\text{MiB}, t=3, p=4$) with dedicated 16-byte CSPRNG random salt per backup file.
+- **Authenticated Payload:** AES-256-GCM authenticated ciphertext wrapping canonical JSON representation of vault metadata and encrypted secret payloads.
+- **Embedded Integrity Checksum:** Plaintext JSON SHA-256 digest verified post-decryption before any records are committed to the local database, guaranteeing protection against corrupted or manipulated archives.
+
 ---
 
 ## 4. Native OS Biometric Integration

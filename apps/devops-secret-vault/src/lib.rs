@@ -10,22 +10,32 @@
 //! - Hardware & biometric authentication integration
 //! - C-ABI FFI endpoints for Tauri desktop and Flutter mobile
 
+pub mod backup;
 pub mod biometrics;
+pub mod cert_monitor;
 pub mod clipboard;
+pub mod cloud_creds;
 pub mod commands;
 pub mod crypto;
 pub mod error;
 pub mod ffi;
 pub mod models;
+pub mod risk_scoring;
 pub mod search;
 pub mod service;
 pub mod storage;
+pub mod totp;
 
+pub use backup::{BackupEnvelope, BackupExportSummary, BackupImportSummary};
 pub use biometrics::BiometricService;
+pub use cert_monitor::{CertInspectionReport, CertStatus};
 pub use clipboard::SecureClipboard;
+pub use cloud_creds::{AwsCredential, AzureCredential, TerraformSecret};
 pub use crypto::{VaultKeyDerivationMetadata, VaultMasterKey};
 pub use error::VaultError;
 pub use models::*;
+pub use risk_scoring::{SecurityRecommendation, Severity, VaultHealthReport};
 pub use search::VaultSearchIndex;
 pub use service::VaultService;
 pub use storage::VaultStorage;
+pub use totp::{TotpAlgorithm, TotpCodeResponse, TotpConfig};

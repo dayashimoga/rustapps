@@ -7,25 +7,11 @@ This document tracks all planned, ongoing, and completed tasks across all phases
 
 ## In Progress
 
-- [ ] **Phase 3: DevOps Secret Vault MVP (Quality Gate Review)**
-  - [x] Implement UI-agnostic `vault-core` library (`rlib`, `cdylib` with C-ABI FFI).
-  - [x] Implement Argon2id master key derivation ($m=64\,\text{MiB}, t=3, p=4$), AES-256-GCM payload encryption, and memory zeroization.
-  - [x] Implement domain models and schema validation (Passwords, SSH Keys, Certificates, API Keys, DB Credentials).
-  - [x] Implement encrypted storage layer with SQLCipher/SQLite in WAL mode, schema migrations, and audit logging.
-  - [x] Implement biometric/hardware authentication abstraction (Windows Hello, Touch ID, Linux Secret Service).
-  - [x] Implement secure clipboard manager with auto-clearing countdown timer (30s).
-  - [x] Implement encrypted in-memory Tantivy search engine for secrets ($< 50\,\text{ms}$ across 100,000 items).
-  - [x] Implement Tauri desktop commands and Svelte/TypeScript desktop UI with glassmorphic dark theme.
-  - [x] Implement 8-tier test suite and Criterion benchmarks verifying all SLAs.
+- *(None currently — Phase 4 completed; awaiting Quality Gate Review before proceeding to Phase 5)*
 
 ---
 
 ## Pending
-- [ ] **Phase 4: DevOps Secret Vault Advanced (6 weeks)**
-  - Schemas/parsers for AWS, Azure, Terraform secrets, and RFC 6238 TOTP engine.
-  - Automated X.509 ASN.1/PEM certificate monitoring and expiration alerts.
-  - Local entropy and risk scoring dashboard.
-  - Portable encrypted backup/export archive bundles.
 - [ ] **Phase 5: AI File Explorer MVP (8–12 weeks)**
   - Concurrent filesystem crawler/indexer for 10M files ($< 50\,\text{ms}$ search, $< 300\,\text{MB}$ RAM).
   - Tauri/Svelte/TS file browser with real-time filesystem watcher.
@@ -89,4 +75,12 @@ This document tracks all planned, ongoing, and completed tasks across all phases
   - [x] Implement encrypted in-memory Tantivy search engine for secrets ($< 50\,\text{ms}$ across 100,000 items).
   - [x] Implement Tauri desktop commands and Svelte/TypeScript desktop UI with glassmorphic dark theme.
   - [x] Implement 8-tier test suite and Criterion benchmarks verifying all SLAs.
+- [x] **Phase 4: DevOps Secret Vault Advanced (6 weeks)**
+  - [x] Implement specialized schemas & parsers for AWS, Azure, and Terraform secrets (`cloud_creds.rs`).
+  - [x] Implement RFC 6238 real-time TOTP generation engine with Base32 decoding and live countdown (`totp.rs`).
+  - [x] Implement automated X.509 ASN.1 and PEM certificate chain monitoring for expiration & weak algorithms (`cert_monitor.rs`).
+  - [x] Implement on-device security risk scoring (entropy, zero-knowledge reuse detection, rotation age, exposed defaults) (`risk_scoring.rs`).
+  - [x] Implement portable encrypted backup & export archive bundles with Argon2id + AES-256-GCM integrity (`backup.rs`).
+  - [x] Implement interactive desktop UI components (`TotpDisplay.svelte`, `CertMonitor.svelte`, `HealthDashboard.svelte`, `BackupModal.svelte`).
+  - [x] Implement 8-tier test suite and Criterion benchmark suites verifying all SLAs.
 

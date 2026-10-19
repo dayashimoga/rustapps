@@ -16,6 +16,10 @@
     { id: 'certificate', label: 'Certificates' },
     { id: 'api_key', label: 'API Keys' },
     { id: 'database_credential', label: 'Databases' },
+    { id: 'aws_credential', label: 'AWS' },
+    { id: 'azure_credential', label: 'Azure' },
+    { id: 'terraform_secret', label: 'Terraform' },
+    { id: 'totp', label: '2FA / TOTP' },
   ];
 </script>
 
@@ -76,6 +80,20 @@
           <button class="clip-clear-btn" on:click={() => dispatch('clearClipboard')}>Clear</button>
         </div>
       {/if}
+
+      <button class="btn btn-secondary" on:click={() => dispatch('openHealthDashboard')} title="View security risk score & posture">
+        <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+          <path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35-.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+        </svg>
+        Health
+      </button>
+
+      <button class="btn btn-secondary" on:click={() => dispatch('openBackupModal')} title="Export or restore encrypted .vaultbackup archive">
+        <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+          <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z" />
+        </svg>
+        Backup
+      </button>
 
       <button class="btn btn-primary" on:click={() => dispatch('openNewSecretModal')}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="16" height="16">

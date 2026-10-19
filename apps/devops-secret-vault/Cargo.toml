@@ -30,6 +30,7 @@ zeroize = { workspace = true }
 rand = { workspace = true }
 tantivy = { workspace = true }
 regex = { workspace = true }
+sha2 = { workspace = true }
 
 # Workspace dependencies
 platform-common = { workspace = true }

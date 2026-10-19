@@ -2,11 +2,16 @@
 //! DevOps Secret Vault - Main Application Service
 
 use shared_encryption::Argon2Params;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
+use crate::backup::{
+    export_vault_backup, read_vault_backup, BackupExportSummary, BackupImportSummary,
+};
 use crate::biometrics::BiometricService;
+use crate::cert_monitor::{inspect_x509_pem, CertInspectionReport};
 use crate::clipboard::SecureClipboard;
 use crate::crypto::{
     decrypt_secret_payload, encrypt_secret_payload, VaultKeyDerivationMetadata, VaultMasterKey,
@@ -14,10 +19,12 @@ use crate::crypto::{
 use crate::error::VaultError;
 use crate::models::{
     generate_uuid, CreateSecretInput, DecryptedSecret, EncryptedSecretRecord, SecretAuditAction,
-    SecretAuditEntry, SecretMetadata, SecretSearchResult, UpdateSecretInput,
+    SecretAuditEntry, SecretMetadata, SecretPayload, SecretSearchResult, UpdateSecretInput,
 };
+use crate::risk_scoring::{evaluate_vault_health, VaultHealthReport};
 use crate::search::VaultSearchIndex;
 use crate::storage::VaultStorage;
+use crate::totp::{TotpAlgorithm, TotpCodeResponse, TotpConfig};
 
 /// Active in-memory session when the vault is unlocked
 struct UnlockedSession {
@@ -373,6 +380,172 @@ impl VaultService {
     /// Peek clipboard value for tests
     pub async fn peek_clipboard_for_test(&self) -> Option<String> {
         self.clipboard.peek_for_test().await
+    }
+
+    /// Generate a 5-dimensional Vault Security Health & Risk Report
+    pub async fn get_health_report(&self) -> Result<VaultHealthReport, VaultError> {
+        let guard = self.session.read().await;
+        let session = guard.as_ref().ok_or(VaultError::Locked)?;
+
+        let encrypted_records = self.storage.list_all_encrypted_secrets()?;
+        let mut decrypted_secrets = Vec::with_capacity(encrypted_records.len());
+
+        for record in encrypted_records {
+            let payload = decrypt_secret_payload(&session.master_key, &record.encrypted_payload)?;
+            decrypted_secrets.push(DecryptedSecret {
+                metadata: record.metadata,
+                payload,
+            });
+        }
+
+        let report = evaluate_vault_health(&decrypted_secrets);
+        Ok(report)
+    }
+
+    /// Generate real-time RFC 6238 TOTP code for a secret
+    pub async fn generate_totp_code(
+        &self,
+        secret_id: &str,
+    ) -> Result<TotpCodeResponse, VaultError> {
+        let guard = self.session.read().await;
+        let session = guard.as_ref().ok_or(VaultError::Locked)?;
+
+        let record = self
+            .storage
+            .get_secret(secret_id)?
+            .ok_or_else(|| VaultError::SecretNotFound(secret_id.to_string()))?;
+
+        let payload = decrypt_secret_payload(&session.master_key, &record.encrypted_payload)?;
+        match &payload {
+            SecretPayload::Totp {
+                secret_base32,
+                issuer,
+                account_name,
+                algorithm,
+                digits,
+                period_seconds,
+            } => {
+                let alg = algorithm
+                    .as_deref()
+                    .map(TotpAlgorithm::from_str_lossy)
+                    .unwrap_or(TotpAlgorithm::Sha1);
+                let config = TotpConfig {
+                    secret_base32: secret_base32.clone(),
+                    issuer: issuer.clone(),
+                    account_name: account_name.clone(),
+                    algorithm: alg,
+                    digits: digits.unwrap_or(6),
+                    step_seconds: period_seconds.unwrap_or(30),
+                };
+                config.generate_current()
+            }
+            _ => Err(VaultError::ValidationError(
+                "Secret is not a TOTP credential".to_string(),
+            )),
+        }
+    }
+
+    /// Inspect an X.509 Certificate secret
+    pub async fn inspect_certificate(
+        &self,
+        secret_id: &str,
+    ) -> Result<CertInspectionReport, VaultError> {
+        let guard = self.session.read().await;
+        let session = guard.as_ref().ok_or(VaultError::Locked)?;
+
+        let record = self
+            .storage
+            .get_secret(secret_id)?
+            .ok_or_else(|| VaultError::SecretNotFound(secret_id.to_string()))?;
+
+        let payload = decrypt_secret_payload(&session.master_key, &record.encrypted_payload)?;
+        match &payload {
+            SecretPayload::Certificate {
+                certificate_pem, ..
+            } => inspect_x509_pem(certificate_pem),
+            _ => Err(VaultError::ValidationError(
+                "Secret is not an X.509 certificate".to_string(),
+            )),
+        }
+    }
+
+    /// Export an authenticated encrypted .vaultbackup archive
+    pub async fn export_encrypted_backup(
+        &self,
+        passphrase: &str,
+        output_path: &Path,
+    ) -> Result<BackupExportSummary, VaultError> {
+        let guard = self.session.read().await;
+        let session = guard.as_ref().ok_or(VaultError::Locked)?;
+
+        let encrypted_records = self.storage.list_all_encrypted_secrets()?;
+        let mut decrypted_secrets = Vec::with_capacity(encrypted_records.len());
+
+        for record in encrypted_records {
+            let payload = decrypt_secret_payload(&session.master_key, &record.encrypted_payload)?;
+            decrypted_secrets.push(DecryptedSecret {
+                metadata: record.metadata,
+                payload,
+            });
+        }
+
+        export_vault_backup(
+            &decrypted_secrets,
+            passphrase,
+            output_path,
+            Some(self.argon_params.clone()),
+        )
+    }
+
+    /// Import and restore secrets from an authenticated encrypted .vaultbackup archive
+    pub async fn import_encrypted_backup(
+        &self,
+        passphrase: &str,
+        input_path: &Path,
+        overwrite: bool,
+    ) -> Result<BackupImportSummary, VaultError> {
+        let guard = self.session.read().await;
+        let session = guard.as_ref().ok_or(VaultError::Locked)?;
+
+        let envelope = read_vault_backup(input_path, passphrase)?;
+
+        let mut total_imported = 0;
+        let mut total_skipped = 0;
+        let mut total_overwritten = 0;
+
+        for secret in envelope.secrets {
+            let exists = self.storage.get_secret(&secret.metadata.id)?.is_some();
+            if exists && !overwrite {
+                total_skipped += 1;
+                continue;
+            }
+
+            secret.metadata.validate()?;
+            secret.payload.validate()?;
+
+            let encrypted_payload = encrypt_secret_payload(&session.master_key, &secret.payload)?;
+            let record = EncryptedSecretRecord {
+                metadata: secret.metadata.clone(),
+                encrypted_payload,
+            };
+
+            if exists {
+                self.storage.update_secret(&record)?;
+                total_overwritten += 1;
+            } else {
+                self.storage.insert_secret(&record)?;
+                total_imported += 1;
+            }
+
+            let _ = session.search_index.index_secret(&secret.metadata);
+        }
+
+        Ok(BackupImportSummary {
+            total_imported,
+            total_skipped,
+            total_overwritten,
+            original_exported_at: envelope.exported_at,
+        })
     }
 }
 

@@ -1,11 +1,15 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import type { DecryptedSecret, SecretAuditEntry } from '../types';
+  import type { DecryptedSecret, SecretAuditEntry, TotpCodeResponse, CertInspectionReport } from '../types';
+  import TotpDisplay from './TotpDisplay.svelte';
+  import CertMonitor from './CertMonitor.svelte';
 
   export let secret: DecryptedSecret | null = null;
   export let auditLogs: SecretAuditEntry[] = [];
   export let isLoading: boolean = false;
   export let clipboardSeconds: number | null = null;
+  export let onGenerateTotp: ((id: string) => Promise<TotpCodeResponse>) | undefined = undefined;
+  export let onInspectCert: ((id: string) => Promise<CertInspectionReport>) | undefined = undefined;
 
   let showSensitive = false;
   let activeTab: 'secret' | 'audit' = 'secret';
@@ -149,6 +153,11 @@
               <span class="field-label">Certificate PEM</span>
               <pre class="code-block mono">{secret.payload.data.certificate_pem}</pre>
             </div>
+            {#if onInspectCert}
+              <div class="field-card full-width no-bg">
+                <CertMonitor secretId={secret.metadata.id} onInspect={onInspectCert} />
+              </div>
+            {/if}
 
           {:else if secret.payload.type === 'api_key'}
             <div class="field-card full-width">
@@ -203,6 +212,98 @@
                   </span>
                   <button class="btn btn-primary" on:click={() => copyField('connection_string')}>Copy URI</button>
                 </div>
+              </div>
+            {/if}
+
+          {:else if secret.payload.type === 'aws_credential'}
+            <div class="field-card">
+              <span class="field-label">Access Key ID</span>
+              <div class="field-val-row">
+                <span class="field-val mono">{secret.payload.data.access_key_id}</span>
+                <button class="mini-copy-btn" on:click={() => copyField('access_key_id')}>Copy</button>
+              </div>
+            </div>
+            <div class="field-card">
+              <span class="field-label">Secret Access Key</span>
+              <div class="field-val-row">
+                <span class="field-val mono">{showSensitive ? secret.payload.data.secret_access_key : '••••••••••••••••••••••••••••••••'}</span>
+                <button class="mini-copy-btn" on:click={() => copyField('secret_access_key')}>Copy</button>
+              </div>
+            </div>
+            <div class="field-card">
+              <span class="field-label">Region</span>
+              <span class="field-val mono">{secret.payload.data.region || 'us-east-1'}</span>
+            </div>
+            <div class="field-card">
+              <span class="field-label">Profile Name</span>
+              <span class="field-val mono">{secret.payload.data.profile_name || 'default'}</span>
+            </div>
+            {#if secret.payload.data.session_token}
+              <div class="field-card full-width">
+                <span class="field-label">Session Token (STS)</span>
+                <pre class="code-block mono">{showSensitive ? secret.payload.data.session_token : '••••••••••••••••••••••••••••••••••••••••'}</pre>
+              </div>
+            {/if}
+
+          {:else if secret.payload.type === 'azure_credential'}
+            <div class="field-card">
+              <span class="field-label">Subscription ID</span>
+              <span class="field-val mono">{secret.payload.data.subscription_id}</span>
+            </div>
+            <div class="field-card">
+              <span class="field-label">Tenant ID</span>
+              <span class="field-val mono">{secret.payload.data.tenant_id}</span>
+            </div>
+            <div class="field-card">
+              <span class="field-label">Client (App) ID</span>
+              <span class="field-val mono">{secret.payload.data.client_id}</span>
+            </div>
+            <div class="field-card">
+              <span class="field-label">Client Secret</span>
+              <div class="field-val-row">
+                <span class="field-val mono">{showSensitive ? secret.payload.data.client_secret : '••••••••••••••••••••••••'}</span>
+                <button class="mini-copy-btn" on:click={() => copyField('client_secret')}>Copy</button>
+              </div>
+            </div>
+
+          {:else if secret.payload.type === 'terraform_secret'}
+            {#if secret.payload.data.provider_token}
+              <div class="field-card full-width">
+                <span class="field-label">Provider Token</span>
+                <div class="field-val-row">
+                  <span class="field-val mono">{showSensitive ? secret.payload.data.provider_token : '••••••••••••••••'}</span>
+                  <button class="mini-copy-btn" on:click={() => copyField('provider_token')}>Copy</button>
+                </div>
+              </div>
+            {/if}
+            {#if secret.payload.data.tf_vars}
+              <div class="field-card full-width">
+                <span class="field-label">Terraform Variables (.tfvars)</span>
+                <pre class="code-block mono">{showSensitive ? secret.payload.data.tf_vars : '# Secret variable blocks masked\n••••••••••••••••'}</pre>
+              </div>
+            {/if}
+            {#if secret.payload.data.state_key}
+              <div class="field-card full-width">
+                <span class="field-label">State Encryption Key</span>
+                <pre class="code-block mono">{showSensitive ? secret.payload.data.state_key : '••••••••••••••••'}</pre>
+              </div>
+            {/if}
+
+          {:else if secret.payload.type === 'totp'}
+            <div class="field-card full-width">
+              <span class="field-label">Base32 Secret Key</span>
+              <div class="field-val-row">
+                <span class="field-val mono">{showSensitive ? secret.payload.data.secret_base32 : '••••••••••••••••'}</span>
+                <button class="mini-copy-btn" on:click={() => copyField('secret_base32')}>Copy Secret</button>
+              </div>
+            </div>
+            {#if onGenerateTotp}
+              <div class="field-card full-width no-bg">
+                <TotpDisplay
+                  secretId={secret.metadata.id}
+                  onGenerate={onGenerateTotp}
+                  onCopy={(code) => dispatch('copySecret', { id: secret ? secret.metadata.id : '', value: code, directValue: true })}
+                />
               </div>
             {/if}
           {/if}

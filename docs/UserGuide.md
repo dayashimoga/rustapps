@@ -67,6 +67,18 @@ Welcome to the next generation of developer utilities. This suite comprises thre
 ### 3.3 Certificate Expiration Monitoring
 - Import SSL/TLS or SSH certificates.
 - The vault automatically parses validity dates, alerting you 30, 14, and 7 days prior to expiration.
+- Weak cryptographic algorithms (MD5, SHA-1 signatures, RSA keys < 2048 bits) are automatically flagged with warning banners.
+
+### 3.4 Security Posture Health Dashboard
+- Click **Health Dashboard** in the navigation header to view your overall security posture.
+- An interactive radial dial displays your overall score (0–100) and letter grade (A+ through F).
+- Review 5 distinct health dimensions: Password Entropy, Zero-Knowledge Credential Reuse, Rotation Age (>90d, >180d), Default Password exposure, and Certificate Hygiene.
+- Click **Jump to Secret** on any prioritized recommendation to remediate high-risk credentials directly.
+
+### 3.5 Tamper-Evident Encrypted Backup & Restore
+- Click **Backup & Restore** in the top navigation.
+- **Export:** Enter a strong backup passphrase to generate an encrypted `.vaultbackup` bundle. All secret payloads and metadata are encrypted with Argon2id + AES-256-GCM and verified with an embedded SHA-256 integrity checksum.
+- **Restore:** Select a `.vaultbackup` archive and input the passphrase. The system verifies the cryptographic signature and integrity checksum before applying updates, with optional overwrite protection.
 
 ---
 
