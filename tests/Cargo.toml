@@ -1,0 +1,21 @@
+[package]
+name = "integration-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tempfile.workspace = true
+rusqlite.workspace = true
+platform-common.workspace = true
+shared-logging.workspace = true
+shared-storage.workspace = true
+shared-indexing.workspace = true
+shared-encryption.workspace = true
+shared-search.workspace = true
+shared-updater.workspace = true
+shared-plugins.workspace = true
+shared-telemetry.workspace = true
+shared-settings.workspace = true

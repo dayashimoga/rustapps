@@ -1,0 +1,49 @@
+name: Code Coverage Verification
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  coverage:
+    name: Code Coverage (≥90% Threshold)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev
+
+      - name: Generate Coverage Report
+        run: |
+          cargo llvm-cov --workspace --all-targets --lcov --output-path target/coverage/lcov.info --html --output-dir target/coverage/html
+
+      - name: Enforce Coverage Threshold (>= 90%)
+        run: |
+          cargo llvm-cov --workspace --all-targets --fail-under-lines 90
+
+      - name: Upload Coverage Reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: target/coverage/
+          retention-days: 90

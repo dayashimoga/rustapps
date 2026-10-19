@@ -1,0 +1,17 @@
+[package]
+name = "shared-updater"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+shared-encryption = { path = "../encryption" }
+shared-storage = { path = "../storage" }
+
+[dev-dependencies]
+tempfile.workspace = true

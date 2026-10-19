@@ -1,0 +1,41 @@
+name: Security & Supply Chain Verification
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  security:
+    name: Security Scans, Audits & SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit & cargo-deny & cargo-cyclonedx
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny,cargo-cyclonedx
+
+      - name: Cargo Audit (Vulnerability Check)
+        run: cargo audit
+
+      - name: Cargo Deny Check (Licenses, Bans, Advisories)
+        run: cargo deny check
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          mkdir -p target/sbom
+          cargo cyclonedx --format json --output-pattern "target/sbom/sbom-cyclonedx.json"
+
+      - name: Upload SBOM & Security Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-sbom
+          path: target/sbom/
+          retention-days: 90

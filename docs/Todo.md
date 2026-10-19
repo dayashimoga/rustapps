@@ -1,0 +1,74 @@
+# Master Todo & Task Tracking (Append-Only History)
+
+This document tracks all planned, ongoing, and completed tasks across all phases of the monorepo.
+**Governance Rule:** Tasks are never deleted. Completed tasks are moved intact from *In Progress* or *Pending* to the *Completed* section to preserve historical traceability.
+
+---
+
+## In Progress
+
+*(None - Awaiting Quality Gate review before advancing to Phase 1)*
+
+---
+
+## Pending
+
+- [ ] **Phase 1: Universal Log Viewer MVP (6–8 weeks)**
+  - Zero-copy mmap engine in app/shared storage supporting 500GB logs with $< 300\,\text{MB}$ RAM.
+  - Lock-free sparse line-offset indexing; SIMD/Tantivy search (100GB $< 2\,\text{s}$, search $< 50\,\text{ms}$).
+  - Nonblocking live Tail Mode with file watching and appended line streaming.
+  - Persistent bookmarks and workspaces via shared SQLite/settings.
+  - Tauri/Svelte/TypeScript virtualized viewport rendering at 60 FPS.
+- [ ] **Phase 2: Universal Log Viewer Advanced (6 weeks)**
+  - Streaming JSON/CSV parsers and offline AWS CloudWatch / Kubernetes log bundle normalizers.
+  - Chronological timeline with log volume/severity histograms.
+  - Local AI anomaly detection, log template mining, and error clustering.
+  - Sandboxed custom parser/highlighter/sink plugins.
+- [ ] **Phase 3: DevOps Secret Vault MVP (6–8 weeks)**
+  - UI-agnostic `vault-core` library.
+  - SQLCipher encrypted database, AES-256-GCM authenticated encryption, Argon2id KDF, `zeroize`.
+  - Native hardware/biometric authentication (Windows Hello, macOS Touch ID, Linux Secret Service).
+  - Validated CRUD and secure auto-clearing clipboard for credentials.
+  - Encrypted/in-memory Tantivy search across 100,000+ secrets ($< 50\,\text{ms}$).
+- [ ] **Phase 4: DevOps Secret Vault Advanced (6 weeks)**
+  - Schemas/parsers for AWS, Azure, Terraform secrets, and RFC 6238 TOTP engine.
+  - Automated X.509 ASN.1/PEM certificate monitoring and expiration alerts.
+  - Local entropy and risk scoring dashboard.
+  - Portable encrypted backup/export archive bundles.
+- [ ] **Phase 5: AI File Explorer MVP (8–12 weeks)**
+  - Concurrent filesystem crawler/indexer for 10M files ($< 50\,\text{ms}$ search, $< 300\,\text{MB}$ RAM).
+  - Tauri/Svelte/TS file browser with real-time filesystem watcher.
+  - Multi-stage duplicate detection (size $\rightarrow$ 4KB header/footer $\rightarrow$ BLAKE3).
+  - Storage analytics treemap and transactional atomic batch rename.
+- [ ] **Phase 6: AI File Explorer Advanced (8 weeks)**
+  - Offline OCR indexing for images/scanned PDFs.
+  - Instant screenshot search with visual fingerprints and OCR.
+  - Document text/metadata extraction from PDF, DOCX, Markdown, code, archives.
+  - Embedded local quantized CPU/NPU vector embedding inference.
+- [ ] **Phase 7: Cross-Platform Expansion (6 weeks)**
+  - Windows ARM64, Linux x64/ARM64, macOS Intel/Apple Silicon matrix builds.
+  - Native packaging (MSI/EXE, AppImage/DEB/RPM, DMG/tarball).
+  - Native platform integrations (macOS Touch ID/Keychain, Linux Secret Service/Polkit).
+- [ ] **Phase 8: Mobile Vault (8–12 weeks)**
+  - C-ABI / `flutter_rust_bridge` bindings over vault core.
+  - Android/iOS Flutter UI supporting all Vault features.
+  - Android BiometricPrompt/Keystore & iOS LocalAuthentication/Secure Enclave.
+  - Mobile benchmarks verifying $< 2\,\text{s}$ startup and $< 50\,\text{ms}$ search.
+
+---
+
+## Completed
+
+- [x] **Phase 0 — Stage 1: Documentation & Governance Initialization**
+  - Author and verify all 15 `/docs/` documents (`TechnicalRequirements.md`, `TechnicalArchitecture.md`, `ImplementationPlan.md`, `Changelog.md`, `Todo.md`, `CodeUnderstanding.md`, `SecurityArchitecture.md`, `TestingStrategy.md`, `DeploymentGuide.md`, `DeveloperGuide.md`, `UserGuide.md`, `RiskRegister.md`, `ADR.md`, `ReleaseProcess.md`, `PerformanceStrategy.md`).
+- [x] **Phase 0 — Stage 2: Workspace Scaffolding & Tooling**
+  - Scaffold root `Cargo.toml`, frontend `package.json`, `tsconfig.json`.
+  - Configure `deny.toml`, `rustfmt.toml`, `clippy.toml`.
+  - Implement 7 GitHub Actions workflows (`build.yml`, `test.yml`, `coverage.yml`, `security.yml`, `benchmark.yml`, `documentation.yml`, `release.yml`).
+  - Configure Playwright & Vitest harnesses and automation scripts in `/scripts/`.
+- [x] **Phase 0 — Stage 3: Shared Crates Implementation & Verification**
+  - Implement all 9 shared crates (`logging`, `storage`, `indexing`, `encryption`, `search`, `updater`, `plugins`, `telemetry`, `settings`) and `platform-common`.
+  - Enforce `#![forbid(unsafe_code)]` and `thiserror` error domain hierarchies.
+  - Implement 8 test tiers and 6 test case types per feature; achieve $\ge 90\%$ test coverage.
+  - Implement Criterion benchmark harness across all shared crates.
+  - Verify Phase 0 Quality Gate exit criteria.

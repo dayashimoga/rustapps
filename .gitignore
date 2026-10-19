@@ -1,0 +1,15 @@
+/target
+/node_modules
+/.pnp
+.pnp.js
+dist
+coverage
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
+*.old
+*.bak
+.portable
+portable.flag
+target/

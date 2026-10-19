@@ -1,0 +1,17 @@
+[package]
+name = "shared-settings"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+shared-storage = { path = "../storage" }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,57 @@
+name: Documentation Validation
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  docs:
+    name: Validate Markdown Documentation & Rustdoc
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify All 15 Docs Exist
+        run: |
+          REQUIRED_DOCS=(
+            "TechnicalRequirements.md"
+            "TechnicalArchitecture.md"
+            "ImplementationPlan.md"
+            "Changelog.md"
+            "Todo.md"
+            "CodeUnderstanding.md"
+            "SecurityArchitecture.md"
+            "TestingStrategy.md"
+            "DeploymentGuide.md"
+            "DeveloperGuide.md"
+            "UserGuide.md"
+            "RiskRegister.md"
+            "ADR.md"
+            "ReleaseProcess.md"
+            "PerformanceStrategy.md"
+          )
+          for doc in "${REQUIRED_DOCS[@]}"; do
+            if [ ! -f "docs/$doc" ]; then
+              echo "Missing required document: docs/$doc"
+              exit 1
+            fi
+          done
+          echo "All 15 governance documents successfully verified."
+
+      - name: Validate Rustdoc Build
+        run: cargo doc --workspace --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+      - name: Upload Rustdoc HTML Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdoc-html
+          path: target/doc/
+          retention-days: 90

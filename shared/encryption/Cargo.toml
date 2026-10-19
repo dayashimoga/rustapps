@@ -1,0 +1,19 @@
+[package]
+name = "shared-encryption"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+aes-gcm.workspace = true
+argon2.workspace = true
+zeroize.workspace = true
+rand.workspace = true
+ed25519-dalek.workspace = true
+sha2.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
