@@ -16,12 +16,27 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: windows-x64
+            use_cross: false
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: windows-arm64
+            use_cross: false
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: linux-x64
+            use_cross: false
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: linux-arm64
+            use_cross: true
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact_name: macos-x64
+            use_cross: false
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: macos-arm64
+            use_cross: false
 
     steps:
       - name: Checkout Repository
@@ -43,11 +58,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libappindicator3-dev
 
-      - name: Run Full Test Suite
+      - name: Install cross-rs (for containerized cross-compilation)
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Run Full Test Suite (Standard)
+        if: "!matrix.use_cross"
         run: cargo test --workspace --all-targets --release
 
-      - name: Build Release Binaries
+      - name: Build Release Binaries (Standard)
+        if: "!matrix.use_cross"
         run: cargo build --workspace --release --target ${{ matrix.target }}
+
+      - name: Build Release Binaries (Cross)
+        if: matrix.use_cross
+        run: cross build --workspace --release --target ${{ matrix.target }}
 
       - name: Compute Checksums
         shell: bash

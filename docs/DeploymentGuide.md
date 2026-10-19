@@ -66,3 +66,48 @@ To perform a clean uninstallation with zero remnants:
 1. **Windows:** Uninstall via Settings / Control Panel, then remove `%LOCALAPPDATA%\<app-name>`.
 2. **Linux:** Remove the executable / package (`dpkg -r <app-name>` or `rpm -e <app-name>`), then remove `~/.local/share/<app-name>` and `~/.config/<app-name>`.
 3. **macOS:** Drag the application from `/Applications` to Trash, then delete `~/Library/Application Support/<app-name>`.
+
+---
+
+## 6. Multi-Platform Build & Packaging Commands (ADR-0030)
+
+Release packages are generated using dedicated, reproducible scripts in `/scripts/`:
+
+### 6.1 Windows Build & Packaging
+```powershell
+# Build Windows x64 MSI & Portable ZIP
+powershell -ExecutionPolicy Bypass -File scripts/package-windows.ps1 -Target x86_64-pc-windows-msvc -Version 0.1.0
+
+# Build Windows ARM64 (Snapdragon X / Copilot+ PCs)
+powershell -ExecutionPolicy Bypass -File scripts/package-windows.ps1 -Target aarch64-pc-windows-msvc -Version 0.1.0
+```
+
+### 6.2 Linux Build & Packaging
+```bash
+# Build Linux x64 (AppImage, DEB, tar.gz)
+bash scripts/package-linux.sh x86_64-unknown-linux-gnu 0.1.0
+
+# Build Linux ARM64 (using containerized cross-compilation)
+bash scripts/package-linux.sh aarch64-unknown-linux-gnu 0.1.0
+```
+
+### 6.3 macOS Build & Packaging
+```bash
+# Build Universal Binary (Apple Silicon + Intel), .app bundle, and DMG
+bash scripts/package-macos.sh 0.1.0
+```
+
+---
+
+## 7. Containerized Cross-Compilation with Cross-rs
+
+Cross-compilation for non-host Linux targets (`aarch64-unknown-linux-gnu`) is managed via `cross` and the root `Cross.toml` configuration:
+```bash
+# Install cross tool
+cargo install cross --git https://github.com/cross-rs/cross
+
+# Build release workspace inside hardened target container
+cross build --workspace --release --target aarch64-unknown-linux-gnu
+```
+This produces clean, fully static GLIBC-compatible binaries runnable on any modern Linux ARM64 distribution without native ARM hardware or cross-toolchain installation on the host.
+

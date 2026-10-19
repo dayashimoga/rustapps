@@ -454,3 +454,43 @@ This document records the foundational architectural decisions made for the mono
 - **Decision:** Implement an in-memory 8-bit quantized embedding inference engine and vector similarity index in `embeddings.rs`.
 - **Rationale:** 100,000 document vectors occupy only $6.4\,\text{MB}$ of resident RAM; vector query across 100,000 items executes in $< 2\,\text{ms}$ on standard CPU cores; 100% offline and zero cloud dependencies.
 - **Consequences:** Calibrated for technical documentation, code, file paths, and general English corpus search.
+
+---
+
+## ADR-0030: Cross-Platform Multi-Target Matrix & Deterministic Packaging Pipelines
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** All three applications (DevOps Secret Vault, AI File Explorer, Universal Log Viewer) must compile and distribute as first-class native standalone binaries across the complete tier-1 desktop platform matrix: Windows x64 and ARM64, Linux x64 and ARM64, and macOS Intel and Apple Silicon, packaged into native distribution bundles (MSI/EXE, AppImage/DEB/RPM, DMG/Universal binary).
+- **Alternatives Considered:**
+  1. *Electron or Web Container:* Massive memory footprint (>200MB baseline per app), high startup latency (>2s), violates strict memory SLAs.
+  2. *Single-target x86_64 host compilation only:* Leaves Apple Silicon, Windows ARM64 Copilot+ PCs, and Linux ARM64 workstations dependent on translation layers (Rosetta, Prism), sacrificing performance.
+  3. *6-Target GitHub Actions Matrix + Cross-Compilation Pipelines:*
+     - `x86_64-pc-windows-msvc` (Windows x64): Native MSVC compilation, WiX Toolset MSI installer, portable ZIP.
+     - `aarch64-pc-windows-msvc` (Windows ARM64): Native MSVC cross-compilation, MSI installer.
+     - `x86_64-unknown-linux-gnu` (Linux x64): Native GNU compilation, AppImage bundle, DEB package, RPM package.
+     - `aarch64-unknown-linux-gnu` (Linux ARM64): `cross` Docker cross-compilation, DEB, RPM, tarball.
+     - `x86_64-apple-darwin` (macOS Intel): Clang cross-target compilation.
+     - `aarch64-apple-darwin` (macOS Apple Silicon): Native Xcode/Clang compilation, `lipo` Universal Binary generation, `.app` bundle, and signed DMG creation.
+- **Decision:** Standardize CI/CD on a 6-target build and release matrix with scripted reproducible packaging harnesses in `scripts/`.
+- **Rationale:** Guarantees zero runtime performance penalties from emulation across ARM64 hardware (MacBook M-series, Snapdragon X Elite, Raspberry Pi / AWS Graviton desktops) while keeping 100% open-source toolchain integrity.
+- **Consequences:** CI pipelines must manage multi-architecture cross-compilation dependencies (LLVM/Clang sysroots for ARM64).
+
+---
+
+## ADR-0031: Native Platform Integrations & Security Keyring Abstraction
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Desktop applications require native OS integration for standard directory resolution, dark/light theme synchronization, power/sleep lifecycle telemetry, and hardware-backed biometric security (Touch ID, Windows Hello, Secret Service), while strictly maintaining `#![forbid(unsafe_code)]` in portable crates and zero cloud dependencies.
+- **Alternatives Considered:**
+  1. *Hardcoded fallback paths (`~/.appname`):* Violates OS platform design guidelines (Apple App Store rules, XDG specification, Windows Known Folders).
+  2. *Proprietary cloud keystores (AWS KMS, Azure Key Vault):* Violates nonnegotiable air-gap and zero-cost constraints.
+  3. *Tiered Platform Abstraction in `platform-common` and `shared-encryption`:*
+     - *Directory Resolution:* Canonical mapping: XDG Base Directory Specification on Linux, Apple Standard Paths (`~/Library/Application Support`, `~/Library/Caches`) on macOS, and Windows Known Folders (`%APPDATA%`, `%LOCALAPPDATA%`).
+     - *Theme Detection:* Real-time queries for OS dark/light mode across Windows Registry (`AppsUseLightTheme`), macOS `defaults read -g AppleInterfaceStyle`, and Linux D-Bus `org.freedesktop.portal.Settings`.
+     - *Keyring & Biometrics:* Uniform trait abstraction delegating to Windows Credential Manager / Windows Hello on Windows, macOS Keychain / LocalAuthentication (Touch ID) on macOS, and Freedesktop Secret Service API / Polkit on Linux.
+- **Decision:** Implement a clean, decoupled platform integration and keyring abstraction layer in `platform-common` and `shared-encryption`.
+- **Rationale:** Preserves native OS look, feel, conventions, and hardware security posture across all supported operating systems without compromising security boundaries or portability.
+- **Consequences:** Platform-specific FFI boundaries must be rigorously tested with mock adapters in headless CI environments.
+

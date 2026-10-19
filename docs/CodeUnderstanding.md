@@ -59,7 +59,13 @@ The monorepo employs a clean hexagonal / ports-and-adapters architecture impleme
 7. **`shared-telemetry`:** Tracks local execution metrics. Remains completely inert unless explicitly activated by user.
 8. **`shared-updater`:** Validates Ed25519 signatures on update bundles and swaps executables atomically.
 9. **`shared-plugins`:** Dispatches events to registered plugins inside bounded memory and CPU quotas.
-10. **`platform-common`:** Resolves OS paths and samples instantaneous RAM and CPU metrics.
+10. **`platform-common`:** Native OS subsystem abstraction layer and cross-platform runtime foundation:
+    - `AppPaths`: Platform-canonical directory resolver adhering to Windows Known Folders, macOS Apple Standard Paths, Linux XDG Base Directory specification, and zero-footprint portable mode (`.portable` / `portable.flag`).
+    - `theme`: Native system appearance detection (`ThemePreference`, `ThemeDetector`) querying Windows Registry (`AppsUseLightTheme`), macOS `AppleInterfaceStyle`, and Linux Freedesktop portals.
+    - `keyring`: Hardware-backed credential storage and biometric authentication abstraction (`PlatformKeyring`, `PlatformKeyringFactory`) with native adapters for Windows Hello / Credential Manager, macOS Keychain / Touch ID (LocalAuthentication), and Linux Freedesktop Secret Service / Polkit.
+    - `power`: System power source and battery degradation/charge telemetry (`PowerStatus`, `PowerTelemetry`).
+    - `packaging`: Multi-target desktop distribution matrix modeling (`TargetArchitecture`), manifest generation (`PackageManifest`), and package integrity validation (`PackagingValidator`).
+    - `ProcessResourceUsage`: Instantaneous RSS memory and CPU metric sampling.
 11. **`universal-log-viewer` (`apps/universal-log-viewer`):**
     - `mmap_engine`: Manages zero-copy virtual memory mappings with bounds checking and reload-on-append.
     - `sparse_index`: SIMD newline scanner building $K=128$ sparse checkpoints for sub-microsecond line seeking and $< 300\,\text{MB}$ RAM consumption on 500GB files.
@@ -235,6 +241,25 @@ User drags screenshot or queries visual catalog in ScreenshotGallery.svelte
   --> Sub-microsecond Hamming distance matching compares query hash: (h1 ^ h2).count_ones()
   --> Screenshots with distance <= max_distance ranked by visual match percentage: (64 - dist) / 64
   --> Gallery view displays matching screenshots with dHash badges, OCR previews, and visual similarity triggers
+```
+
+### 4.11 Cross-Platform Native Subsystem Integration & Keyring Authorization Flow
+```text
+Application startup / biometric authorization request
+  --> AppPaths resolves standard directories:
+        Windows: %LOCALAPPDATA%\<app> / %APPDATA%\<app>
+        macOS:   ~/Library/Application Support/<app> / ~/Library/Caches/<app>
+        Linux:   $XDG_DATA_HOME (~/.local/share) / $XDG_CONFIG_HOME (~/.config)
+        Portable: ./data/<app> adjacent to executable (if .portable exists)
+  --> ThemeDetector inspects host appearance (Windows Registry, macOS defaults, Linux portal)
+  --> PowerTelemetry queries power status and battery charge percentage
+  --> PlatformKeyringFactory instantiates native keyring:
+        Windows: WindowsCredentialKeyring -> Windows Credential Manager / Windows Hello
+        macOS:   MacOsKeychainKeyring -> Keychain Services / LocalAuthentication (Touch ID)
+        Linux:   LinuxSecretServiceKeyring -> Freedesktop Secret Service (D-Bus) / Polkit
+  --> User prompts for biometric authorization: keyring.prompt_biometric_auth(reason)
+  --> Native OS UI prompts user (fingerprint / face / hardware PIN)
+  --> Result grants ephemeral decryption token in volatile zeroizing memory
 ```
 
 ---

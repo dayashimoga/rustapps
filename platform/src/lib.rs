@@ -7,6 +7,19 @@
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+pub mod keyring;
+pub mod packaging;
+pub mod power;
+pub mod theme;
+
+pub use keyring::{
+    InMemoryKeyring, KeyringItem, LinuxSecretServiceKeyring, MacOsKeychainKeyring, PlatformKeyring,
+    PlatformKeyringFactory, WindowsCredentialKeyring,
+};
+pub use packaging::{PackageFormat, PackageManifest, PackagingValidator, TargetArchitecture};
+pub use power::{BatteryState, PowerSource, PowerStatus, PowerTelemetry};
+pub use theme::{ThemeDetector, ThemePreference};
+
 /// Platform error definitions
 #[derive(Debug, Error)]
 pub enum PlatformError {
@@ -262,5 +275,40 @@ mod tests {
         let usage = ProcessResourceUsage::sample();
         assert!(usage.resident_set_size_bytes > 0);
         assert!(usage.cpu_percentage >= 0.0 && usage.cpu_percentage <= 100.0);
+    }
+
+    #[test]
+    fn test_platform_full_integration() {
+        // Theme detection
+        let theme = ThemeDetector::detect_theme();
+        assert!(theme.is_dark() || theme.is_light());
+
+        // Native Keyring
+        let keyring = PlatformKeyringFactory::create_keyring();
+        assert!(keyring.is_biometric_supported());
+        keyring.set_secret("test.svc", "admin", "token123").unwrap();
+        assert_eq!(
+            keyring.get_secret("test.svc", "admin").unwrap(),
+            Some("token123".to_string())
+        );
+
+        // Power telemetry
+        let power = PowerTelemetry::query_power_status();
+        assert!(matches!(
+            power.source,
+            PowerSource::AcPower | PowerSource::Battery | PowerSource::Ups | PowerSource::Unknown
+        ));
+
+        // Packaging manifest
+        let manifest = PackageManifest::new(
+            "universal-log-viewer",
+            "1.0.0",
+            TargetArchitecture::LinuxX64,
+            PackageFormat::AppImage,
+        );
+        assert_eq!(
+            manifest.output_filename,
+            "universal-log-viewer_1.0.0_linux-x64.AppImage"
+        );
     }
 }

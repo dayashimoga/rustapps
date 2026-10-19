@@ -887,4 +887,119 @@ mod integration_tests {
         let ocr_res = service.ocr_image(&img_file).unwrap();
         assert!(ocr_res.processing_time_ms >= 0.0);
     }
+
+    #[test]
+    fn test_cross_platform_integration_and_packaging_flow() {
+        use platform_common::keyring::*;
+        use platform_common::packaging::*;
+        use platform_common::power::*;
+        use platform_common::theme::*;
+        use platform_common::*;
+
+        // 1. Platform Detection
+        let info = PlatformInfo::current();
+        assert_ne!(info.os, OsType::Unknown);
+        assert_ne!(info.arch, ArchType::Unknown);
+
+        // 2. Standard Directory Resolution
+        let paths = AppPaths::from_app_name("universal-log-viewer").unwrap();
+        assert!(paths.data_dir.ends_with("data"));
+        assert!(paths.config_dir.ends_with("config"));
+        assert!(paths.cache_dir.ends_with("cache"));
+        assert!(paths.log_dir.ends_with("logs"));
+
+        // 3. Native Theme Query
+        let theme = ThemeDetector::detect_theme();
+        assert!(matches!(
+            theme,
+            ThemePreference::Dark | ThemePreference::Light | ThemePreference::HighContrast
+        ));
+
+        // 4. Keyring & Hardware Biometrics
+        let keyring = PlatformKeyringFactory::create_keyring();
+        assert!(keyring.is_biometric_supported());
+        let svc = "vault.enterprise";
+        let acct = "ci_deployer";
+        let secret = "sec_abc123xyz789";
+
+        keyring.set_secret(svc, acct, secret).unwrap();
+        assert_eq!(
+            keyring.get_secret(svc, acct).unwrap(),
+            Some(secret.to_string())
+        );
+        let auth_res = keyring
+            .prompt_biometric_auth("Authenticate deployment")
+            .unwrap();
+        assert!(auth_res);
+        keyring.delete_secret(svc, acct).unwrap();
+        assert_eq!(keyring.get_secret(svc, acct).unwrap(), None);
+
+        // 5. System Power Telemetry
+        let power = PowerTelemetry::query_power_status();
+        assert!(matches!(
+            power.source,
+            PowerSource::AcPower | PowerSource::Battery | PowerSource::Ups | PowerSource::Unknown
+        ));
+
+        // 6. Complete 6-Target Packaging Matrix Validation
+        let targets = [
+            (
+                TargetArchitecture::WindowsX64,
+                PackageFormat::Msi,
+                "devops-secret-vault_0.1.0_win-x64.msi",
+            ),
+            (
+                TargetArchitecture::WindowsArm64,
+                PackageFormat::PortableZip,
+                "devops-secret-vault_0.1.0_win-arm64.zip",
+            ),
+            (
+                TargetArchitecture::LinuxX64,
+                PackageFormat::AppImage,
+                "ai-file-explorer_0.1.0_linux-x64.AppImage",
+            ),
+            (
+                TargetArchitecture::LinuxArm64,
+                PackageFormat::Deb,
+                "ai-file-explorer_0.1.0_linux-arm64.deb",
+            ),
+            (
+                TargetArchitecture::MacOsIntel,
+                PackageFormat::MacOsApp,
+                "universal-log-viewer_0.1.0_macos-x64.app",
+            ),
+            (
+                TargetArchitecture::MacOsAppleSilicon,
+                PackageFormat::MacOsDmg,
+                "universal-log-viewer_0.1.0_macos-arm64.dmg",
+            ),
+            (
+                TargetArchitecture::MacOsUniversal,
+                PackageFormat::MacOsDmg,
+                "universal-log-viewer_0.1.0_macos-universal.dmg",
+            ),
+        ];
+
+        for (target, format, expected_name) in targets {
+            let manifest = PackageManifest::new(
+                if expected_name.starts_with("devops") {
+                    "devops-secret-vault"
+                } else if expected_name.starts_with("ai-file") {
+                    "ai-file-explorer"
+                } else {
+                    "universal-log-viewer"
+                },
+                "0.1.0",
+                target,
+                format,
+            );
+            assert_eq!(manifest.output_filename, expected_name);
+            assert!(!manifest.target.target_triple().is_empty());
+            assert!(!manifest.target.display_name().is_empty());
+        }
+
+        // 7. Checksum validation
+        let sample_hash = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+        assert!(PackagingValidator::verify_checksum_format(sample_hash));
+    }
 }

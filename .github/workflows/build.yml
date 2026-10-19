@@ -16,10 +16,22 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            use_cross: false
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            use_cross: false
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            use_cross: false
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            use_cross: true
+          - os: macos-13
+            target: x86_64-apple-darwin
+            use_cross: false
           - os: macos-latest
             target: aarch64-apple-darwin
+            use_cross: false
 
     steps:
       - name: Checkout Repository
@@ -56,8 +68,17 @@ jobs:
       - name: Clippy Linter
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Compile Release Workspace
+      - name: Install cross-rs (for containerized cross-compilation)
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Compile Release Workspace (Standard)
+        if: "!matrix.use_cross"
         run: cargo build --workspace --release --target ${{ matrix.target }}
+
+      - name: Compile Release Workspace (Cross)
+        if: matrix.use_cross
+        run: cross build --workspace --release --target ${{ matrix.target }}
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4

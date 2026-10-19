@@ -80,6 +80,31 @@ npm run dev --workspace=apps/devops-secret-vault
 npm run dev --workspace=apps/ai-file-explorer
 ```
 
+### 3.4 Multi-Platform Cross-Target Compilation
+Install required target toolchains via `rustup`:
+```bash
+# Windows ARM64
+rustup target add aarch64-pc-windows-msvc
+
+# Linux x64 and ARM64
+rustup target add x86_64-unknown-linux-gnu
+rustup target add aarch64-unknown-linux-gnu
+
+# macOS Apple Silicon and Intel
+rustup target add aarch64-apple-darwin
+rustup target add x86_64-apple-darwin
+```
+
+Compile for a specific target architecture:
+```bash
+# Local host or toolchain build
+cargo build --workspace --release --target <target-triple>
+
+# Containerized cross-compilation for Linux targets
+cargo install cross --git https://github.com/cross-rs/cross
+cross build --workspace --release --target aarch64-unknown-linux-gnu
+```
+
 ---
 
 ## 4. Coding Conventions & Invariants

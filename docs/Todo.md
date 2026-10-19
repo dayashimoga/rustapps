@@ -7,16 +7,11 @@ This document tracks all planned, ongoing, and completed tasks across all phases
 
 ## In Progress
 
-*(None - Phase 6 completed, awaiting user Quality Gate approval to advance to Phase 7)*
+*(None - Phase 7 completed, awaiting user Quality Gate approval to advance to Phase 8: Mobile Vault)*
 
 ---
 
 ## Pending
-- [ ] **Phase 7: Cross-Platform Expansion (6 weeks)**
-
-  - Windows ARM64, Linux x64/ARM64, macOS Intel/Apple Silicon matrix builds.
-  - Native packaging (MSI/EXE, AppImage/DEB/RPM, DMG/tarball).
-  - Native platform integrations (macOS Touch ID/Keychain, Linux Secret Service/Polkit).
 - [ ] **Phase 8: Mobile Vault (8–12 weeks)**
   - C-ABI / `flutter_rust_bridge` bindings over vault core.
   - Android/iOS Flutter UI supporting all Vault features.
@@ -93,3 +88,23 @@ This document tracks all planned, ongoing, and completed tasks across all phases
   - [x] Extend `FileExplorerService` and Tauri IPC `commands.rs` with semantic and content search endpoints.
   - [x] Implement desktop UI components: `ContentSearch.svelte`, `ScreenshotGallery.svelte`, and `DocumentModal.svelte`.
   - [x] Implement 8-tier tests and Criterion benchmark suites verifying all SLAs (< 50ms search, < 300MB RAM, 100% offline).
+- [x] **Phase 7: Cross-Platform Expansion (6 weeks)**
+  - [x] Extend CI build and release matrix across all 6 targets: Windows x64/ARM64, Linux x64/ARM64, macOS Intel/Apple Silicon (`build.yml`, `release.yml`).
+  - [x] Configure cross-compilation harness (`Cross.toml`) and multi-arch packaging pipelines.
+  - [x] Implement native platform detection and system integration APIs in `platform-common`:
+    - OS and architecture detection (Windows x64/ARM64, macOS Intel/Apple Silicon, Linux x64/ARM64, Android, iOS).
+    - Platform-canonical standard directory resolution (XDG Base Directory on Linux, Apple Standard Paths on macOS, Known Folders on Windows).
+    - Native dark/light system theme detection across Windows Registry, macOS defaults, and Linux Freedesktop portal.
+    - System sleep/wake and power status telemetry integration stubs.
+  - [x] Implement native platform credential storage & biometric hardware authentication adapters:
+    - macOS Keychain and LocalAuthentication (Touch ID) abstraction (`shared-encryption`, `platform-common`).
+    - Linux Secret Service API (Freedesktop D-Bus Secret Service) and Polkit authorization abstraction.
+    - Windows Hello / Credential Manager abstraction.
+  - [x] Create multi-platform release packaging scripts in `scripts/`:
+    - `package-windows.ps1` (MSI / portable ZIP / checksum generation).
+    - `package-linux.sh` (AppImage, DEB, RPM, and tar.gz bundles).
+    - `package-macos.sh` (Apple Silicon & Intel Universal binary creation via `lipo`, `.app` bundle, DMG creation).
+  - [x] Update `docs/DeploymentGuide.md` and `docs/DeveloperGuide.md` with multi-target cross-compilation and packaging instructions.
+  - [x] Implement unit tests and integration tests verifying platform detection, directory mapping, theme queries, and packaging validations (140 tests passing across workspace).
+  - [x] Verify formatting, clippy (`-D warnings`), and test suite across workspace.
+
