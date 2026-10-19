@@ -315,5 +315,70 @@ This document records the foundational architectural decisions made for the mono
 - **Rationale:** Guarantees that backups cannot be decrypted without the backup passphrase and cannot be tampered with or corrupted without immediate cryptographic detection.
 - **Consequences:** Backups are self-contained, offline-first portable binary files.
 
+---
+
+## ADR-0022: Deterministic 3-Tier Duplicate Detection Pipeline
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Detecting duplicate files across hundreds of gigabytes or millions of files by computing cryptographic hashes for every file creates devastating disk I/O bottlenecks and saturates system storage busses.
+- **Alternatives Considered:**
+  1. *Full cryptographic hashing of every file:* Disastrous performance on multi-gigabyte or millions of files; reads 100% of data from disk.
+  2. *Filename and timestamp matching:* Extremely high false-negative and false-positive rate; unreliable.
+  3. *Deterministic 3-Tier Multi-Stage Pipeline:*
+     - **Stage 1 (Metadata Grouping):** Group all candidate files by exact file size in bytes ($O(1)$ stat lookup). Discard unique file sizes immediately without reading a single byte.
+     - **Stage 2 (4KB Boundary Hashing):** For candidate groups with identical size, read only the first 4KB and last 4KB into memory and compute an ultra-fast boundary hash. Discard mismatches.
+     - **Stage 3 (Full Cryptographic BLAKE3 Verification):** For matching partial-hash candidate pairs, stream full-file contents through BLAKE3 SIMD hashing ($> 3\,\text{GB/s}$) to guarantee zero false positives.
+- **Decision:** Implement the 3-Tier Multi-Stage Duplicate Detection Pipeline (Size $\rightarrow$ 4KB Header/Footer $\rightarrow$ Full BLAKE3).
+- **Rationale:** Eliminates $> 95\%$ of unnecessary disk I/O on typical filesystems while delivering 100% cryptographically guaranteed duplicate accuracy.
+- **Consequences:** Files with identical sizes and identical headers/footers require streaming the entire file; BLAKE3's tree-hashing minimizes CPU overhead.
+
+---
+
+## ADR-0023: High-Throughput Concurrent Filesystem Indexing within 300MB RAM SLA
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Indexing 10,000,000 files in traditional desktop search engines consumes gigabytes of heap memory and freezes the UI thread, breaching the $< 300\,\text{MB}$ RAM and $< 50\,\text{ms}$ query SLAs.
+- **Alternatives Considered:**
+  1. *In-memory vectors and structs for all 10M files:* Consumes $> 2\,\text{GB}$ of heap RAM, breaching the 300MB SLA.
+  2. *SQLite database table for metadata:* Slower full-text search across filenames and paths; higher disk write overhead.
+  3. *Embedded Tantivy Index with Streaming Worker Batches:* Traversal streams metadata through bounded Tokio mpsc channels ($1,024$ items) into a dedicated Tantivy indexing pipeline. Writer commits are batched every 50,000 records or 500ms. Queries execute against memory-mapped Tantivy segments.
+- **Decision:** Use `shared-indexing` bounded crawler streaming into `shared-search` Tantivy index with dedicated schema for file metadata (path, filename, extension, size, modified timestamp, is_directory).
+- **Rationale:** Keeps memory usage strictly bounded ($< 150\,\text{MB}$ working RAM) while indexing $> 100,000\,\text{files/s}$ and executing complex multi-field searches in $< 50\,\text{ms}$.
+- **Consequences:** Initial full-drive crawl runs asynchronously in the background with cooperative yielding.
+
+---
+
+## ADR-0024: Transactional Atomic Batch Renaming with Rollback Journal
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Batch renaming hundreds or thousands of files using regex or numbering rules can fail mid-operation (e.g. permission error, naming collision, disk full), leaving the filesystem in a corrupted, half-renamed state.
+- **Alternatives Considered:**
+  1. *Immediate direct renaming:* Any mid-run failure corrupts state with no automatic recovery.
+  2. *Copy-and-delete:* Massive disk I/O and doubles storage space consumption.
+  3. *Transactional Two-Phase Rename with Rollback Journal:*
+     - Phase 1 (Dry-Run Validation): Validate all source paths exist, target names have no collisions with each other or existing disk files, and permissions are valid.
+     - Phase 2 (Execution with Step-by-Step Journal): Record each completed rename step in an in-memory journal. If an I/O error occurs at step $N$, automatically roll back steps $N-1 \dots 1$ in reverse order.
+- **Decision:** Implement a transactional atomic batch rename engine with dry-run collision detection and automatic reverse-journal rollback.
+- **Rationale:** Protects user data from filesystem corruption and guarantees all-or-nothing atomicity.
+- **Consequences:** Circular renames (e.g., $A \rightarrow B$ and $B \rightarrow A$) require an intermediate temporary rename step.
+
+---
+
+## ADR-0025: Local Hierarchical Storage Treemap Layout
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Visualizing multi-gigabyte disk consumption requires hierarchical drill-down that renders smoothly at 60 FPS without UI jank.
+- **Alternatives Considered:**
+  1. *DOM-heavy nested `<div>` tree:* Stalls browser layout engine when rendering thousands of folder boxes.
+  2. *Squarified Treemap Algorithm on HTML5 Canvas:* Compute rectangular partitions using the squarified treemap layout algorithm (minimizing aspect ratio distortion) and render directly onto an HTML5 Canvas with sub-millisecond hover hit-testing.
+- **Decision:** Compute folder size aggregation in the Rust core and render squarified treemaps using hardware-accelerated Canvas in Svelte.
+- **Rationale:** Guarantees 60 FPS rendering, instant zooming/drilling, and minimal browser memory consumption.
+- **Consequences:** Drill-down re-aggregates children dynamically from the folder tree index.
+
+
 
 

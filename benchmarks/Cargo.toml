@@ -16,6 +16,7 @@ shared-storage.workspace = true
 shared-telemetry.workspace = true
 universal-log-viewer = { path = "../apps/universal-log-viewer" }
 devops-secret-vault = { path = "../apps/devops-secret-vault" }
+ai-file-explorer = { path = "../apps/ai-file-explorer" }
 
 [[bench]]
 name = "bench_suite"

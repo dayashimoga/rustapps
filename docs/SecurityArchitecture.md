@@ -76,9 +76,16 @@ The applications in this monorepo handle highly sensitive operational data (pass
 - **Authenticated Payload:** AES-256-GCM authenticated ciphertext wrapping canonical JSON representation of vault metadata and encrypted secret payloads.
 - **Embedded Integrity Checksum:** Plaintext JSON SHA-256 digest verified post-decryption before any records are committed to the local database, guaranteeing protection against corrupted or manipulated archives.
 
+### 3.8 AI File Explorer Local Filesystem Sandbox & Path Traversal Mitigations
+- **Path Canonicalization & Containment:** All filesystem paths submitted via Tauri IPC are canonicalized and validated. Traversal sequences (`../`, null bytes, control characters) and unauthorized symlink dereferences targeting restricted system partitions are rejected before I/O.
+- **Transactional Two-Phase Batch Rename Safety (ADR-0024):** Dry-run preflight checks detect namespace collisions, identical source/destination paths, or permission barriers before executing any disk modifications. An in-memory reverse-order journal records every atomic rename step, enabling automatic rollback on midway failure and user-initiated single-click undo.
+- **Safe 3-Tier Deduplication (ADR-0022):** The multi-stage pipeline strictly avoids unnecessary full file reads. Stage 1 groups by file size, Stage 2 samples 4KB header and footer hashes, and Stage 3 uses BLAKE3 only on surviving candidates. Duplicate detection is strictly non-destructive; deletion or hardlinking requires explicit user confirmation.
+- **Strict Offline Air-Gap Guarantee:** File paths, folder hierarchies, sizes, hashes, and filenames never leave the local machine. No external cloud indexing, network sockets, or remote telemetry are permitted.
+
 ---
 
 ## 4. Native OS Biometric Integration
+
 
 | Platform | Subsystem / API | Execution Mechanism | Fallback Mechanism |
 | :--- | :--- | :--- | :--- |

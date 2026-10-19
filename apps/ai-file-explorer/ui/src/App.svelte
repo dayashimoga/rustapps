@@ -1,0 +1,366 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import Header from './components/Header.svelte';
+  import FileBrowser from './components/FileBrowser.svelte';
+  import DuplicateFinder from './components/DuplicateFinder.svelte';
+  import TreemapView from './components/TreemapView.svelte';
+  import BatchRenameModal from './components/BatchRenameModal.svelte';
+  import StatsDrawer from './components/StatsDrawer.svelte';
+  import type {
+    ActiveTab,
+    BatchRenameResult,
+    BatchRenameRule,
+    DeduplicationSummary,
+    DirectoryListing,
+    FileItem,
+    FolderStats,
+    RenamePreview,
+    TreemapNode,
+  } from './types';
+
+  // Navigation and Tab State
+  let currentPath = 'H:/rustapps';
+  let searchQuery = '';
+  let activeTab: ActiveTab = 'browser';
+  let showStatsDrawer = false;
+
+  // Data states
+  let listing: DirectoryListing = {
+    current_path: currentPath,
+    parent_path: null,
+    items: [],
+    total_count: 0,
+    total_size_bytes: 0,
+  };
+  let selectedPaths: string[] = [];
+  let isScanningDuplicates = false;
+  let dedupSummary: DeduplicationSummary | null = null;
+  let treemapNode: TreemapNode | null = null;
+  let folderStats: FolderStats | null = null;
+
+  // Batch Rename States
+  let renamePreviews: RenamePreview[] = [];
+  let renameResult: BatchRenameResult | null = null;
+  let isExecutingRename = false;
+
+  // Tauri IPC Bridge
+  async function invokeTauri<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
+    const tauri = (window as unknown as { __TAURI__?: { core?: { invoke: (cmd: string, args: Record<string, unknown>) => Promise<T> } } }).__TAURI__;
+    if (tauri?.core?.invoke) {
+      return await tauri.core.invoke(cmd, args);
+    }
+
+    // Comprehensive in-browser development mock fallback
+    if (cmd === 'list_directory_cmd') {
+      const mockItems: FileItem[] = [
+        { path: `${currentPath}/shared`, file_name: 'shared', extension: null, size_bytes: 0, is_dir: true, modified_timestamp_secs: 1729300000, is_readonly: false },
+        { path: `${currentPath}/apps`, file_name: 'apps', extension: null, size_bytes: 0, is_dir: true, modified_timestamp_secs: 1729300001, is_readonly: false },
+        { path: `${currentPath}/docs`, file_name: 'docs', extension: null, size_bytes: 0, is_dir: true, modified_timestamp_secs: 1729300002, is_readonly: false },
+        { path: `${currentPath}/Cargo.toml`, file_name: 'Cargo.toml', extension: 'toml', size_bytes: 2118, is_dir: false, modified_timestamp_secs: 1729300003, is_readonly: false },
+        { path: `${currentPath}/README.md`, file_name: 'README.md', extension: 'md', size_bytes: 4096, is_dir: false, modified_timestamp_secs: 1729300004, is_readonly: false },
+        { path: `${currentPath}/photo_dup_1.jpg`, file_name: 'photo_dup_1.jpg', extension: 'jpg', size_bytes: 1048576, is_dir: false, modified_timestamp_secs: 1729300005, is_readonly: false },
+        { path: `${currentPath}/photo_dup_2.jpg`, file_name: 'photo_dup_2.jpg', extension: 'jpg', size_bytes: 1048576, is_dir: false, modified_timestamp_secs: 1729300006, is_readonly: false },
+      ];
+      return {
+        current_path: currentPath,
+        parent_path: 'H:/',
+        items: mockItems,
+        total_count: mockItems.length,
+        total_size_bytes: mockItems.reduce((acc, i) => acc + i.size_bytes, 0),
+      } as unknown as T;
+    }
+
+    if (cmd === 'search_files_cmd') {
+      const query = (args.query as string || '').toLowerCase();
+      const filtered = listing.items.filter(i => i.file_name.toLowerCase().includes(query));
+      return filtered as unknown as T;
+    }
+
+    if (cmd === 'scan_duplicates_cmd') {
+      return {
+        total_scanned_files: 42,
+        total_scanned_bytes: 25000000,
+        duplicate_groups: [
+          {
+            file_size: 1048576,
+            blake3_hash: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+            file_paths: [`${currentPath}/photo_dup_1.jpg`, `${currentPath}/photo_dup_2.jpg`],
+            wasted_bytes: 1048576,
+          },
+        ],
+        total_duplicate_files: 2,
+        potential_reclaimed_bytes: 1048576,
+        elapsed_millis: 14,
+      } as unknown as T;
+    }
+
+    if (cmd === 'analyze_storage_cmd') {
+      return {
+        root_path: currentPath,
+        total_files: 38,
+        total_dirs: 8,
+        total_size_bytes: 26050000,
+        extension_counts: { rs: 24, toml: 4, md: 5, jpg: 2, json: 3 },
+        extension_sizes: { rs: 500000, toml: 12000, md: 28000, jpg: 2097152, json: 15000 },
+        largest_files: listing.items.slice(0, 5),
+      } as unknown as T;
+    }
+
+    if (cmd === 'get_treemap_cmd') {
+      const width = args.width as number || 800;
+      const height = args.height as number || 600;
+      return {
+        name: 'rustapps',
+        path: currentPath,
+        size_bytes: 26050000,
+        is_dir: true,
+        bounds: { x: 0, y: 0, width, height },
+        children: [
+          {
+            name: 'apps',
+            path: `${currentPath}/apps`,
+            size_bytes: 15000000,
+            is_dir: true,
+            bounds: { x: 0, y: 0, width: width * 0.6, height },
+            children: [],
+          },
+          {
+            name: 'shared',
+            path: `${currentPath}/shared`,
+            size_bytes: 8000000,
+            is_dir: true,
+            bounds: { x: width * 0.6, y: 0, width: width * 0.4, height: height * 0.6 },
+            children: [],
+          },
+          {
+            name: 'photo_dup_1.jpg',
+            path: `${currentPath}/photo_dup_1.jpg`,
+            size_bytes: 1048576,
+            is_dir: false,
+            bounds: { x: width * 0.6, y: height * 0.6, width: width * 0.4, height: height * 0.4 },
+            children: [],
+          },
+        ],
+      } as unknown as T;
+    }
+
+    if (cmd === 'preview_batch_rename_cmd') {
+      const paths = (args.paths as string[]) || [];
+      const previews: RenamePreview[] = paths.map((p, idx) => ({
+        original_path: p,
+        proposed_path: `${p.replace(/\.[^/.]+$/, '')}_renamed_${idx + 1}.dat`,
+        has_conflict: false,
+        conflict_reason: null,
+      }));
+      return previews as unknown as T;
+    }
+
+    if (cmd === 'execute_batch_rename_cmd') {
+      const previews = (args.previews as RenamePreview[]) || [];
+      return {
+        total_requested: previews.length,
+        successful_renames: previews.length,
+        rolled_back: false,
+        error_message: null,
+      } as unknown as T;
+    }
+
+    throw new Error(`Command ${cmd} not mocked in dev environment`);
+  }
+
+  // Load current directory listing
+  async function loadDirectory(path: string) {
+    try {
+      const res = await invokeTauri<DirectoryListing>('list_directory_cmd', { path });
+      listing = res;
+      currentPath = res.current_path;
+      searchQuery = '';
+      selectedPaths = [];
+
+      // Update analytics and treemap in background
+      loadStorageStats(currentPath);
+      loadTreemap(currentPath);
+    } catch (err) {
+      console.error('Failed to list directory:', err);
+    }
+  }
+
+  async function handleSearch(query: string) {
+    searchQuery = query;
+    if (!query.trim()) {
+      await loadDirectory(currentPath);
+      return;
+    }
+
+    try {
+      const hits = await invokeTauri<FileItem[]>('search_files_cmd', {
+        query: query.trim(),
+        limit: 50,
+      });
+      listing = {
+        ...listing,
+        items: hits,
+      };
+    } catch (err) {
+      console.error('Search error:', err);
+    }
+  }
+
+  async function loadStorageStats(path: string) {
+    try {
+      folderStats = await invokeTauri<FolderStats>('analyze_storage_cmd', {
+        path,
+        top_limit: 5,
+      });
+    } catch (err) {
+      console.error('Stats error:', err);
+    }
+  }
+
+  async function loadTreemap(path: string) {
+    try {
+      treemapNode = await invokeTauri<TreemapNode>('get_treemap_cmd', {
+        path,
+        width: 1024,
+        height: 768,
+        max_depth: 3,
+      });
+    } catch (err) {
+      console.error('Treemap error:', err);
+    }
+  }
+
+  async function handleStartScanDuplicates(root: string, minSize: number) {
+    isScanningDuplicates = true;
+    try {
+      dedupSummary = await invokeTauri<DeduplicationSummary>('scan_duplicates_cmd', {
+        search_roots: [root],
+        min_size_bytes: minSize,
+      });
+    } catch (err) {
+      console.error('Dedup scan error:', err);
+    } finally {
+      isScanningDuplicates = false;
+    }
+  }
+
+  async function handlePreviewBatchRename(rule: BatchRenameRule) {
+    try {
+      renamePreviews = await invokeTauri<RenamePreview[]>('preview_batch_rename_cmd', {
+        paths: selectedPaths,
+        rule,
+      });
+    } catch (err) {
+      console.error('Preview error:', err);
+    }
+  }
+
+  async function handleExecuteBatchRename(previews: RenamePreview[]) {
+    isExecutingRename = true;
+    try {
+      renameResult = await invokeTauri<BatchRenameResult>('execute_batch_rename_cmd', {
+        previews,
+      });
+      if (!renameResult.rolled_back) {
+        // Refresh directory
+        await loadDirectory(currentPath);
+      }
+    } catch (err) {
+      console.error('Execute error:', err);
+    } finally {
+      isExecutingRename = false;
+    }
+  }
+
+  function handleNavigateUp() {
+    if (listing.parent_path) {
+      loadDirectory(listing.parent_path);
+    }
+  }
+
+  function handleToggleSelect(path: string) {
+    if (selectedPaths.includes(path)) {
+      selectedPaths = selectedPaths.filter(p => p !== path);
+    } else {
+      selectedPaths = [...selectedPaths, path];
+    }
+  }
+
+  function handleSelectAll() {
+    selectedPaths = listing.items.map(i => i.path);
+  }
+
+  function handleDeselectAll() {
+    selectedPaths = [];
+  }
+
+  onMount(() => {
+    loadDirectory(currentPath);
+  });
+</script>
+
+<main class="app-layout">
+  <!-- Top Navigation Header -->
+  <Header
+    {currentPath}
+    {searchQuery}
+    bind:activeTab
+    bind:showStatsDrawer
+    onNavigate={loadDirectory}
+    onSearch={handleSearch}
+    onRefresh={() => loadDirectory(currentPath)}
+    onNavigateUp={handleNavigateUp}
+  />
+
+  <!-- Active Tab View Surface -->
+  {#if activeTab === 'browser'}
+    <FileBrowser
+      items={listing.items}
+      {selectedPaths}
+      onNavigateToFolder={loadDirectory}
+      onNavigateUp={handleNavigateUp}
+      onToggleSelect={handleToggleSelect}
+      onSelectAll={handleSelectAll}
+      onDeselectAll={handleDeselectAll}
+    />
+  {:else if activeTab === 'duplicates'}
+    <DuplicateFinder
+      searchRoot={currentPath}
+      summary={dedupSummary}
+      isScanning={isScanningDuplicates}
+      onStartScan={handleStartScanDuplicates}
+    />
+  {:else if activeTab === 'treemap'}
+    <TreemapView
+      rootNode={treemapNode}
+      onDrillDown={loadDirectory}
+      onRefreshTreemap={() => loadTreemap(currentPath)}
+    />
+  {:else if activeTab === 'batch_rename'}
+    <BatchRenameModal
+      selectedFiles={selectedPaths}
+      previews={renamePreviews}
+      {renameResult}
+      isExecuting={isExecutingRename}
+      onGeneratePreview={handlePreviewBatchRename}
+      onExecuteRename={handleExecuteBatchRename}
+      onClearSelection={handleDeselectAll}
+    />
+  {/if}
+
+  <!-- Slide-Over Storage Stats Drawer -->
+  <StatsDrawer
+    stats={folderStats}
+    isOpen={showStatsDrawer}
+    onClose={() => (showStatsDrawer = false)}
+  />
+</main>
+
+<style>
+  .app-layout {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+</style>

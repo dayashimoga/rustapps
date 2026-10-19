@@ -85,34 +85,53 @@ Welcome to the next generation of developer utilities. This suite comprises thre
 ## 4. AI File Explorer Guide
 
 ### 4.1 Indexing & Instant Search
-- Select target drives or folders to index. The background crawler indexes over 100,000 files per second.
-- Type in the omnibar (`Ctrl+K`) to locate files across millions of entries in under 50ms.
+- Navigate to the **Explorer** tab to browse folders or select any directory.
+- Type in the omnibar (`Ctrl+F` or click the search box) to locate files across millions of indexed files in under 50ms.
+- Results update live as you type, filtering on filename, extension, path, size, or modification date.
+- Real-time filesystem watcher updates directory listings dynamically when files are added, modified, or deleted externally.
 
-### 4.2 Finding Duplicate Files
-1. Navigate to the **Deduplication** tab.
-2. Select target directories and click **Scan for Duplicates**.
-3. The engine uses size grouping and 4KB header/footer hashing before cryptographic BLAKE3 verification, saving massive disk I/O.
-4. Review duplicate sets and select files for safe deletion or hardlinking.
+### 4.2 Finding & Cleaning Duplicate Files (3-Tier Engine)
+1. Switch to the **Duplicates** view (`Duplicates` tab).
+2. Enter or select the target directory and click **Scan for Duplicates**.
+3. The deterministic 3-tier engine executes:
+   - **Tier 1:** Exact file size grouping (eliminates unique files instantly with 0 disk reads).
+   - **Tier 2:** 4KB header and 4KB footer boundary hashing (eliminates size collisions).
+   - **Tier 3:** Full BLAKE3 cryptographic hash verification on surviving candidates.
+4. Duplicate clusters display total wasted space, exact hashes, and all redundant copies.
+5. Click **Select Redundant Copies** to auto-select all duplicate copies while preserving original files, or manually toggle files to delete.
 
 ### 4.3 Disk Usage Treemap & Storage Analytics
-- Switch to the **Disk Treemap** view to visualize folder hierarchies proportionally.
-- Click any block to drill down into largest space consumers.
+- Switch to the **Treemap** view (`Treemap` tab).
+- An interactive squarified treemap renders storage hierarchies on an HTML5 hardware-accelerated canvas.
+- Hover over any block to inspect exact folder paths, recursive byte sizes, and file counts.
+- Click any directory block to drill down into subdirectories; click the parent navigation or breadcrumbs to return upward.
+- Click the **Stats** toggle button (`Ctrl+S`) in the header to open the slide-over **Storage Breakdown Drawer**, viewing mime-type and extension distribution progress bars alongside the top largest files.
 
-### 4.4 Transactional Batch Rename
-- Select multiple files and press `F2`.
-- Apply regex replacement, numbering, or timestamping.
-- Preview changes in real time. Click **Apply**; all renames execute atomically. If any error occurs, the rollback journal restores previous filenames instantly.
+### 4.4 Transactional Batch Rename with Rollback Journal
+1. In the Explorer view, select one or more files using checkboxes and click **Batch Rename** (or press `F2`).
+2. Configure renaming transformations:
+   - **Find & Replace:** Plain string or compiled regular expression matching.
+   - **Prefix / Suffix:** Prepend or append text tokens.
+   - **Sequential Numbering:** Specify starting number and zero-padding digits (`01, 02, ...`).
+   - **Letter Casing:** Transform filenames to Lowercase, Uppercase, Title Case, or Camel Case.
+3. Review the **Live Dry-Run Preview table**: highlights prospective names, detects collisions, and validates changes before touching disk.
+4. Click **Apply Rename**: transactions execute atomically. If any error occurs or disk permissions fail midway, the reverse-order rollback journal automatically restores all previous filenames with zero data loss.
+5. If you change your mind after applying, click **Undo Batch Rename** to immediately restore previous names.
 
 ---
 
 ## 5. Global Keyboard Shortcuts
 
-| Shortcut (Win/Linux) | Shortcut (macOS) | Action |
-| :--- | :--- | :--- |
-| `Ctrl+O` | `Cmd+O` | Open file / workspace |
-| `Ctrl+F` | `Cmd+F` | Focus search bar |
-| `Ctrl+T` | `Cmd+T` | Toggle live tail mode |
-| `Ctrl+K` | `Cmd+K` | Open global command palette |
-| `Ctrl+N` | `Cmd+N` | Create new entry |
-| `Ctrl+B` | `Cmd+B` | Toggle sidebar / bookmarks |
-| `Ctrl+,` | `Cmd+,` | Open application settings |
+| Shortcut (Win/Linux) | Shortcut (macOS) | Action | Scope |
+| :--- | :--- | :--- | :--- |
+| `Ctrl+O` | `Cmd+O` | Open file / workspace | Log Viewer / Explorer |
+| `Ctrl+F` | `Cmd+F` | Focus search bar / Omnibar | All Apps |
+| `Ctrl+T` | `Cmd+T` | Toggle live tail mode | Universal Log Viewer |
+| `Ctrl+I` | `Cmd+I` | Toggle AI insights drawer | Universal Log Viewer |
+| `Ctrl+K` | `Cmd+K` | Open global command palette | All Apps |
+| `Ctrl+N` | `Cmd+N` | Create new secret / folder | DevOps Secret Vault |
+| `F2` | `F2` | Open Batch Rename modal | AI File Explorer |
+| `Ctrl+S` | `Cmd+S` | Toggle Storage Stats drawer | AI File Explorer |
+| `Ctrl+B` | `Cmd+B` | Toggle sidebar / bookmarks | All Apps |
+| `Ctrl+,` | `Cmd+,` | Open application settings | All Apps |
+

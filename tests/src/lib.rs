@@ -666,4 +666,117 @@ mod integration_tests {
             .await
             .is_err());
     }
+
+    #[tokio::test]
+    async fn test_ai_file_explorer_end_to_end_and_dedup_flow() {
+        use ai_file_explorer::models::BatchRenameRule;
+        use ai_file_explorer::service::FileExplorerService;
+        use std::fs::File;
+        use std::io::Write;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        // 1. Create directory structure
+        let docs = root.join("documents");
+        let photos = root.join("photos");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::create_dir_all(&photos).unwrap();
+
+        let doc1 = docs.join("annual_report.pdf");
+        let doc2 = docs.join("notes.md");
+        {
+            let mut f1 = File::create(&doc1).unwrap();
+            f1.write_all(&vec![1u8; 15000]).unwrap();
+            f1.sync_all().unwrap();
+
+            let mut f2 = File::create(&doc2).unwrap();
+            f2.write_all(b"# Meeting Notes\nDiscussion about offline apps.")
+                .unwrap();
+            f2.sync_all().unwrap();
+        }
+
+        // 2. Create duplicate photos (same 12000-byte content)
+        let photo1 = photos.join("IMG_001.JPG");
+        let photo2 = photos.join("IMG_001_copy.JPG");
+        let photo3 = photos.join("IMG_002.JPG"); // Different content, same size
+        let photo_bytes = vec![77u8; 12000];
+        let mut photo3_bytes = vec![77u8; 12000];
+        photo3_bytes[6000] = 88;
+
+        {
+            let mut p1 = File::create(&photo1).unwrap();
+            p1.write_all(&photo_bytes).unwrap();
+            p1.sync_all().unwrap();
+
+            let mut p2 = File::create(&photo2).unwrap();
+            p2.write_all(&photo_bytes).unwrap();
+            p2.sync_all().unwrap();
+
+            let mut p3 = File::create(&photo3).unwrap();
+            p3.write_all(&photo3_bytes).unwrap();
+            p3.sync_all().unwrap();
+        }
+
+        let service = FileExplorerService::new().unwrap();
+
+        // 3. Test Directory Listing
+        let listing = service.list_directory(&docs).unwrap();
+        assert_eq!(listing.total_count, 2);
+
+        // 4. Test Indexing & Sub-50ms Search
+        let all_files = vec![listing.items[0].clone(), listing.items[1].clone()];
+        let indexed_count = service.index_files(&all_files).unwrap();
+        assert_eq!(indexed_count, 2);
+
+        let search_hits = service.search("report", 10).unwrap();
+        assert_eq!(search_hits.len(), 1);
+        assert_eq!(search_hits[0].file_name, "annual_report.pdf");
+
+        // 5. Test 3-Tier Duplicate Detection (ADR-0022)
+        let dedup_summary = service.scan_duplicates(&[root], 1).unwrap();
+        assert_eq!(dedup_summary.duplicate_groups.len(), 1);
+        assert_eq!(dedup_summary.duplicate_groups[0].file_size, 12000);
+        assert_eq!(dedup_summary.duplicate_groups[0].file_paths.len(), 2);
+        assert_eq!(dedup_summary.potential_reclaimed_bytes, 12000);
+
+        // 6. Test Storage Analytics
+        let stats = service.analyze_storage(root, 5).unwrap();
+        assert_eq!(stats.total_files, 5);
+        assert_eq!(stats.total_dirs, 2);
+        assert!(stats.total_size_bytes >= 39000);
+        assert_eq!(stats.extension_counts.get("jpg"), Some(&3));
+        assert_eq!(stats.extension_counts.get("pdf"), Some(&1));
+        assert_eq!(stats.extension_counts.get("md"), Some(&1));
+
+        // 7. Test Squarified Treemap Layout (ADR-0025)
+        let treemap = service.generate_treemap(root, 1024.0, 768.0, 3).unwrap();
+        assert_eq!(treemap.bounds.width, 1024.0);
+        assert_eq!(treemap.bounds.height, 768.0);
+        assert_eq!(treemap.children.len(), 2);
+
+        // 8. Test Transactional Batch Rename (ADR-0024)
+        let files_to_rename = vec![photo1.clone(), photo2.clone()];
+        let rename_rule = BatchRenameRule::Numbering {
+            prefix: "vacation_".to_string(),
+            start_number: 101,
+            pad_digits: 3,
+        };
+
+        let previews = service
+            .preview_batch_rename(&files_to_rename, &rename_rule)
+            .unwrap();
+        assert_eq!(previews.len(), 2);
+        assert!(!previews[0].has_conflict);
+        assert!(!previews[1].has_conflict);
+
+        let rename_result = service.execute_batch_rename(&previews).unwrap();
+        assert_eq!(rename_result.successful_renames, 2);
+        assert!(!rename_result.rolled_back);
+
+        assert!(!photo1.exists());
+        assert!(!photo2.exists());
+        assert!(photos.join("vacation_101.JPG").exists());
+        assert!(photos.join("vacation_102.JPG").exists());
+    }
 }

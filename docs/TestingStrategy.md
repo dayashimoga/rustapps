@@ -51,14 +51,15 @@ The monorepo enforces an uncompromising Quality Assurance regime. All code must 
 
 For every feature or shared capability, test suites must explicitly implement all six case types:
 
-| Case Type | Purpose | Example (DevOps Secret Vault) | Example (Universal Log Viewer) |
-| :--- | :--- | :--- | :--- |
-| **1. Positive** | Validate correct behavior under standard expected inputs. | Create, save, and retrieve an API key successfully. | Open a 1GB structured JSON log and view line 100. |
-| **2. Negative** | Validate rejection of malformed or unauthorized inputs. | Attempt decryption with an incorrect passphrase; verify error. | Feed invalid regex syntax; verify safe error prompt without crash. |
-| **3. Boundary** | Validate extremes (0 bytes, max limits, off-by-one, empty strings). | Secret with empty description, 1MB payload, 0-character notes. | 0-byte log file, 1-byte file, line exceeding 10MB without newline. |
-| **4. Performance**| Validate execution within strict SLA limits. | Search 100,000 secrets in $< 30\,\text{ms}$. | Index 100GB log in $< 2\,\text{s}$; query in $< 50\,\text{ms}$. |
-| **5. Regression** | Validate historical defects remain fixed permanently. | Verify TOTP timezone drift fix remains active. | Verify ANSI escape code stripping doesn't drop trailing characters. |
-| **6. Failure** | Validate recovery from catastrophic environment failures. | Disk write fails midway through database save; verify WAL rollback. | Underlying file is truncated or deleted while mmap handle is open. |
+| Case Type | Purpose | Example (DevOps Secret Vault) | Example (Universal Log Viewer) | Example (AI File Explorer) |
+| :--- | :--- | :--- | :--- | :--- |
+| **1. Positive** | Validate correct behavior under standard expected inputs. | Create, save, and retrieve an API key successfully. | Open a 1GB structured JSON log and view line 100. | Crawl folder, index files, query Tantivy in 21 µs. |
+| **2. Negative** | Validate rejection of malformed or unauthorized inputs. | Attempt decryption with an incorrect passphrase; verify error. | Feed invalid regex syntax; verify safe error prompt without crash. | Invalid regex or nonexistent directory path returns structured error. |
+| **3. Boundary** | Validate extremes (0 bytes, max limits, off-by-one, empty strings). | Secret with empty description, 1MB payload, 0-character notes. | 0-byte log file, 1-byte file, line exceeding 10MB without newline. | 0-byte files deduped, deeply nested directories, empty folder analytics. |
+| **4. Performance**| Validate execution within strict SLA limits. | Search 100,000 secrets in $< 30\,\text{ms}$. | Index 100GB log in $< 2\,\text{s}$; query in $< 50\,\text{ms}$. | Tantivy query $< 50\,\text{ms}$ (measured 21.58 µs), squarified treemap 292 µs. |
+| **5. Regression** | Validate historical defects remain fixed permanently. | Verify TOTP timezone drift fix remains active. | Verify ANSI escape code stripping doesn't drop trailing characters. | Windows NTFS file handle buffer flush before metadata read. |
+| **6. Failure** | Validate recovery from catastrophic environment failures. | Disk write fails midway through database save; verify WAL rollback. | Underlying file is truncated or deleted while mmap handle is open. | Mid-rename permission failure triggers reverse rollback restoring all original paths. |
+
 
 ---
 

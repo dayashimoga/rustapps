@@ -441,6 +441,93 @@ fn benchmark_vault_advanced_features(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_file_explorer_operations(c: &mut Criterion) {
+    use ai_file_explorer::analytics::StorageAnalytics;
+    use ai_file_explorer::dedup::DuplicateDetector;
+    use ai_file_explorer::indexer::FileSearchIndexer;
+    use ai_file_explorer::models::FileItem;
+    use ai_file_explorer::treemap::TreemapGenerator;
+    use std::fs::File;
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    let mut group = c.benchmark_group("file_explorer");
+
+    // 1. Tantivy Search Latency (<50ms SLA)
+    let indexer = FileSearchIndexer::create_in_memory().unwrap();
+    let mut files = Vec::with_capacity(1000);
+    for i in 0..1000 {
+        files.push(FileItem {
+            path: PathBuf::from(format!("H:/drive/folder_{}/file_{}.rs", i / 50, i)),
+            file_name: format!("module_service_{}.rs", i),
+            extension: Some("rs".to_string()),
+            size_bytes: (i as u64 * 128) + 1024,
+            is_dir: false,
+            modified_timestamp_secs: 1729300000 + i as u64,
+            is_readonly: false,
+        });
+    }
+    indexer.index_files(&files).unwrap();
+
+    group.bench_function("file_explorer_tantivy_search_sub_50ms", |b| {
+        b.iter(|| {
+            let hits = indexer.search(black_box("service"), black_box(10)).unwrap();
+            black_box(hits.len());
+        });
+    });
+
+    // 2. 3-Tier Duplicate Detection (Size -> 4KB Partial Hash -> BLAKE3)
+    let temp_dir = tempfile::tempdir().unwrap();
+    let payload = vec![0xABu8; 8192];
+    for i in 0..10 {
+        let p = temp_dir.path().join(format!("dup_file_{}.dat", i));
+        let mut f = File::create(&p).unwrap();
+        f.write_all(&payload).unwrap();
+        f.sync_all().unwrap();
+    }
+    for i in 10..20 {
+        let p = temp_dir.path().join(format!("unique_file_{}.dat", i));
+        let mut f = File::create(&p).unwrap();
+        f.write_all(&vec![i as u8; 8192]).unwrap();
+        f.sync_all().unwrap();
+    }
+
+    group.bench_function("file_explorer_dedup_3tier_scan", |b| {
+        b.iter(|| {
+            let summary =
+                DuplicateDetector::scan_duplicates(black_box(&[temp_dir.path()]), black_box(1))
+                    .unwrap();
+            black_box(summary.duplicate_groups.len());
+        });
+    });
+
+    // 3. Storage Analytics Aggregation
+    group.bench_function("file_explorer_storage_analytics", |b| {
+        b.iter(|| {
+            let stats =
+                StorageAnalytics::analyze_directory(black_box(temp_dir.path()), black_box(5))
+                    .unwrap();
+            black_box(stats.total_files);
+        });
+    });
+
+    // 4. Squarified Treemap Partitioning
+    group.bench_function("file_explorer_squarified_treemap", |b| {
+        b.iter(|| {
+            let node = TreemapGenerator::generate_treemap(
+                black_box(temp_dir.path()),
+                black_box(1024.0),
+                black_box(768.0),
+                black_box(3),
+            )
+            .unwrap();
+            black_box(node.children.len());
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -453,6 +540,7 @@ criterion_group!(
     benchmark_drain_template_mining,
     benchmark_timeline_histogram,
     benchmark_vault_search_and_crypto,
-    benchmark_vault_advanced_features
+    benchmark_vault_advanced_features,
+    benchmark_file_explorer_operations
 );
 criterion_main!(benches);

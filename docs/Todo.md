@@ -7,16 +7,11 @@ This document tracks all planned, ongoing, and completed tasks across all phases
 
 ## In Progress
 
-- *(None currently — Phase 4 completed; awaiting Quality Gate Review before proceeding to Phase 5)*
+- *(None currently — Phase 5 completed; awaiting Quality Gate Review before proceeding to Phase 6)*
 
 ---
 
 ## Pending
-- [ ] **Phase 5: AI File Explorer MVP (8–12 weeks)**
-  - Concurrent filesystem crawler/indexer for 10M files ($< 50\,\text{ms}$ search, $< 300\,\text{MB}$ RAM).
-  - Tauri/Svelte/TS file browser with real-time filesystem watcher.
-  - Multi-stage duplicate detection (size $\rightarrow$ 4KB header/footer $\rightarrow$ BLAKE3).
-  - Storage analytics treemap and transactional atomic batch rename.
 - [ ] **Phase 6: AI File Explorer Advanced (8 weeks)**
   - Offline OCR indexing for images/scanned PDFs.
   - Instant screenshot search with visual fingerprints and OCR.
@@ -83,4 +78,13 @@ This document tracks all planned, ongoing, and completed tasks across all phases
   - [x] Implement portable encrypted backup & export archive bundles with Argon2id + AES-256-GCM integrity (`backup.rs`).
   - [x] Implement interactive desktop UI components (`TotpDisplay.svelte`, `CertMonitor.svelte`, `HealthDashboard.svelte`, `BackupModal.svelte`).
   - [x] Implement 8-tier test suite and Criterion benchmark suites verifying all SLAs.
-
+- [x] **Phase 5: AI File Explorer MVP (8–12 weeks)**
+  - [x] Implement concurrent non-blocking filesystem crawler and directory listing (`crawler.rs`).
+  - [x] Implement embedded Tantivy metadata indexer with multi-field search (<50ms execution, <300MB RAM) (`indexer.rs`).
+  - [x] Implement deterministic 3-tier duplicate detection (size grouping -> 4KB header/footer hash -> full BLAKE3) (`dedup.rs`).
+  - [x] Implement recursive storage analytics (folder sizes, file counts, extension breakdowns, largest files) (`analytics.rs`).
+  - [x] Implement squarified treemap layout generator with aspect-ratio optimization (`treemap.rs`).
+  - [x] Implement transactional atomic batch renamer with collision dry-run and reverse-order rollback journal (`batch_rename.rs`).
+  - [x] Implement real-time debounced filesystem watcher emitting coalesced events (`watcher.rs`).
+  - [x] Implement desktop UI components with glassmorphic dark theme (`Header.svelte`, `FileBrowser.svelte`, `DuplicateFinder.svelte`, `TreemapView.svelte`, `BatchRenameModal.svelte`, `StatsDrawer.svelte`).
+  - [x] Implement 8-tier test suite (109 passing unit/integration tests) and Criterion benchmark suites verifying all SLAs.
