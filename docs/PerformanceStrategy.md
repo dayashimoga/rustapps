@@ -58,6 +58,19 @@ The `/benchmarks/` directory houses statistical Criterion benchmarks measuring:
 
 ### Regression Threshold Enforcement
 During CI execution:
+- Any benchmark exhibiting a regression greater than $5\%$ ($p < 0.05$) triggers an automatic pipeline failure.
+- In Phase 2, benchmark suites cover:
+  1. `aes_256_gcm_encrypt_4kb` and `aes_256_gcm_decrypt_4kb`
+  2. `tantivy_query_latency` (<50ms SLA)
+  3. `sqlite_wal_insert_and_query`
+  4. `telemetry_record_counter`
+  5. `sparse_line_index_1mb_scan`
+  6. `regex_search_25k_lines` (<50ms SLA)
+  7. `streaming_json_parser_10k_lines` (>100MB/s throughput)
+  8. `drain_template_mining_1k_logs` (sub-millisecond template mining)
+  9. `timeline_histogram_50_buckets` (<5ms aggregation)
+  10. `timeline_filter_timerange_sub_50ms` (sub-millisecond binary search range query)
+
 - Criterion compares new results against the committed baseline in `benchmarks/baseline.json`.
 - A statistically significant degradation $> 5\%$ in query latency or throughput triggers an immediate CI failure.
 - A peak RSS exceeding $300\,\text{MB}$ under test conditions fails CI immediately.

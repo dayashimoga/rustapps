@@ -65,9 +65,14 @@ The monorepo employs a clean hexagonal / ports-and-adapters architecture impleme
     - `sparse_index`: SIMD newline scanner building $K=128$ sparse checkpoints for sub-microsecond line seeking and $< 300\,\text{MB}$ RAM consumption on 500GB files.
     - `tail_mode`: Non-blocking real-time file follower with 16ms coalescing debounce buffer.
     - `search_engine`: Literal, case-insensitive, and compiled regular expression query executor (<50ms SLA).
+    - `parsers`: Zero-copy and streaming deserializers for JSON Lines, CSV/TSV, and raw text with format auto-detection and high-speed timestamp parsing.
+    - `cloud_importers`: Offline AWS CloudWatch and Kubernetes container log normalizers with multi-pod/container metadata extraction and cross-service failure correlation.
+    - `timeline`: Chronological index with dynamic bucket aggregation, volume/severity histograms, and sub-50ms range filtering.
+    - `local_ai`: 100% offline root-cause analysis via the Drain prefix-tree template miner, rolling z-score/IQR anomaly spike detection, and root-cause error clustering (zero external neural weights).
+    - `plugin_integration`: Extensible `LogViewerPluginManager` hosting sandboxed parsers, syntax highlighters, and export sinks via `shared-plugins`.
     - `workspace`: SQLite WAL backed store for open files, bookmarks, and scroll state.
     - `commands`: Tauri IPC service boundary with Serde models.
-    - `ui`: Svelte/TS frontend with 60 FPS virtualized viewport, glassmorphic dark design, and live telemetry indicators.
+    - `ui`: Svelte/TS frontend with 60 FPS virtualized viewport, `TimelineHistogram.svelte`, `AiInsightsDrawer.svelte`, and live telemetry indicators.
 
 ---
 

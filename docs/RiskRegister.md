@@ -28,6 +28,8 @@ Risks are assessed based on **Likelihood (L: 1–5)** and **Impact (I: 1–5)**,
 | **RSK-006** | Platform | Windows Hello or macOS Touch ID FFI interface changes breaking biometric unlock. | 2 | 4 | **8** | Isolate biometrics behind clean platform traits in `shared-encryption`; thoroughly mock in unit/integration tests. | Seamless fallback to Argon2id master passphrase unlock. | Controlled |
 | **RSK-007** | Performance | Tantivy indexing causing CPU spikes exceeding 2% idle budget. | 3 | 3 | **9** | Throttle background indexing worker threads; pin to lower process priority (idle/below normal). | Suspend indexing when battery powered or user activity detected. | Controlled |
 | **RSK-008** | Security | Cryptographic side-channel attacks during Argon2id key derivation or AES-GCM verification. | 1 | 5 | **5** | Rely strictly on standardized, constant-time implementations (`aes-gcm` and `argon2` RustCrypto crates). | Continuous validation against NIST test vectors in Tier 7 tests. | Controlled |
+| **RSK-009** | Performance | JSON streaming parser memory accumulation on deeply nested or massive JSON Lines exports. | 2 | 4 | **8** | Stream line-by-line directly from mmap byte slices; extract standard keys and discard raw parse tree immediately. | Fall back to targeted substring regex extraction if JSON syntax is malformed. | Controlled |
+| **RSK-010** | Algorithmic | Drain prefix-tree combinatorial depth blowup on noisy unstructured log messages. | 2 | 4 | **8** | Enforce static depth bounding ($d=4$) and regex variable pre-masking (IPs, UUIDs, hex, numbers); clamp maximum children per node. | Truncate token lists to first 50 tokens if message exceeds standard length. | Controlled |
 
 ---
 

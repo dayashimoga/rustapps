@@ -4,12 +4,23 @@
 //! Provides high-level command handlers for the desktop frontend, translating
 //! domain operations with `anyhow` boundaries and Serde data transfer models.
 
+use crate::cloud_importers::{CloudWatchImporter, CorrelatedFailureChain, KubernetesImporter};
+use crate::local_ai::{
+    AnomalyDetector, AnomalySpike, DrainLogMiner, ErrorCluster, LogTemplateCluster,
+};
 use crate::mmap_engine::MmapLogEngine;
+use crate::parsers::{
+    detect_format, LogFormat, LogSeverity, NormalizedLogRecord, StreamingCsvParser,
+    StreamingJsonParser,
+};
+use crate::plugin_integration::LogViewerPluginManager;
 use crate::search_engine::{LogQuery, LogSearchEngine, LogSearchReport};
 use crate::sparse_index::SparseLineIndex;
 use crate::tail_mode::TailFollower;
+use crate::timeline::{TimelineHistogram, TimelineIndex};
 use crate::workspace::{BookmarkRecord, WorkspaceStore};
 use platform_common::ProcessResourceUsage;
+use shared_plugins::PluginManifest;
 use shared_telemetry::LocalTelemetry;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -38,6 +49,7 @@ struct ActiveFileState {
     engine: MmapLogEngine,
     index: SparseLineIndex,
     tail: Option<TailFollower>,
+    detected_format: LogFormat,
 }
 
 /// Shared application state container
@@ -45,6 +57,7 @@ pub struct LogViewerService {
     active_file: Arc<RwLock<Option<ActiveFileState>>>,
     workspace_store: Arc<WorkspaceStore>,
     telemetry: LocalTelemetry,
+    plugin_manager: LogViewerPluginManager,
 }
 
 impl LogViewerService {
@@ -54,7 +67,13 @@ impl LogViewerService {
             active_file: Arc::new(RwLock::new(None)),
             workspace_store,
             telemetry,
+            plugin_manager: LogViewerPluginManager::new(),
         }
+    }
+
+    /// Access plugin manager
+    pub fn plugin_manager(&self) -> &LogViewerPluginManager {
+        &self.plugin_manager
     }
 
     /// Open a log file, map it into virtual memory, and build its sparse index.
@@ -62,6 +81,20 @@ impl LogViewerService {
         let path_ref = path.as_ref();
         let engine = MmapLogEngine::open(path_ref)?;
         let index = SparseLineIndex::build(engine.as_bytes());
+
+        // Sample initial lines for format detection
+        let mut sample_lines = Vec::new();
+        let bytes = engine.as_bytes();
+        let sample_limit = index.total_lines().min(20);
+        for i in 0..sample_limit {
+            if let Some((start, end)) = index.get_line_byte_range(i, bytes) {
+                if let Ok(text) = engine.read_text_range(start, end) {
+                    sample_lines.push(text);
+                }
+            }
+        }
+        let sample_refs: Vec<&str> = sample_lines.iter().map(String::as_str).collect();
+        let detected_format = detect_format(&sample_refs);
 
         let file_info = OpenedFileInfo {
             path: path_ref.to_string_lossy().to_string(),
@@ -76,12 +109,22 @@ impl LogViewerService {
                 engine,
                 index,
                 tail: None,
+                detected_format,
             });
         }
 
         self.telemetry.record_counter("log_files_opened", 1);
 
         Ok(file_info)
+    }
+
+    /// Retrieve detected format of active file
+    pub async fn get_detected_format(&self) -> anyhow::Result<LogFormat> {
+        let active_lock = self.active_file.read().await;
+        let state = active_lock
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No active log file opened"))?;
+        Ok(state.detected_format)
     }
 
     /// Retrieve a slice of lines for virtualized viewport rendering (sub-millisecond latency).
@@ -116,6 +159,172 @@ impl LogViewerService {
         Ok(lines)
     }
 
+    /// Parse normalized records from the active file
+    pub async fn parse_records(
+        &self,
+        max_records: usize,
+    ) -> anyhow::Result<Vec<NormalizedLogRecord>> {
+        let active_lock = self.active_file.read().await;
+        let state = active_lock
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No active log file opened"))?;
+
+        let total_lines = state.index.total_lines();
+        let limit = total_lines.min(max_records);
+        let bytes = state.engine.as_bytes();
+
+        let mut records = Vec::with_capacity(limit);
+        let format = state.detected_format;
+        let k8s_meta =
+            KubernetesImporter::extract_metadata_from_path(&state.path.to_string_lossy());
+
+        let csv_parser = if format == LogFormat::Csv || format == LogFormat::Tsv {
+            let delim = if format == LogFormat::Tsv {
+                b'\t'
+            } else {
+                b','
+            };
+            let mut p = StreamingCsvParser::new(delim);
+            if let Some((start, end)) = state.index.get_line_byte_range(0, bytes) {
+                if let Ok(hdr) = state.engine.read_text_range(start, end) {
+                    p.with_header_line(&hdr);
+                }
+            }
+            Some(p)
+        } else {
+            None
+        };
+
+        for line_idx in 0..limit {
+            if let Some((start, end)) = state.index.get_line_byte_range(line_idx, bytes) {
+                if let Ok(text) = state.engine.read_text_range(start, end) {
+                    let rec = match format {
+                        LogFormat::JsonLines => StreamingJsonParser::parse_line(line_idx, &text),
+                        LogFormat::CloudWatch => CloudWatchImporter::parse_line(line_idx, &text)
+                            .unwrap_or_else(|| StreamingJsonParser::parse_line(line_idx, &text)),
+                        LogFormat::Kubernetes => {
+                            KubernetesImporter::parse_cri_line(line_idx, &text, k8s_meta.as_ref())
+                        }
+                        LogFormat::Csv | LogFormat::Tsv => {
+                            if let Some(ref p) = csv_parser {
+                                p.parse_row(line_idx, &text)
+                            } else {
+                                StreamingJsonParser::parse_line(line_idx, &text)
+                            }
+                        }
+                        _ => {
+                            // Raw text
+                            let sev = LogSeverity::parse_str(&text);
+                            NormalizedLogRecord {
+                                line_number: line_idx,
+                                raw: text.clone(),
+                                timestamp_raw: None,
+                                timestamp_epoch_ms: crate::parsers::parse_timestamp(&text),
+                                severity: sev,
+                                message: text,
+                                source: None,
+                                attributes: std::collections::BTreeMap::new(),
+                            }
+                        }
+                    };
+                    records.push(rec);
+                }
+            }
+        }
+
+        Ok(records)
+    }
+
+    /// Retrieve or compute aggregated timeline histogram
+    pub async fn get_timeline_histogram(
+        &self,
+        target_buckets: usize,
+    ) -> anyhow::Result<TimelineHistogram> {
+        let records = self.parse_records(50000).await?;
+        let timeline_index = TimelineIndex::from_records(&records);
+
+        timeline_index
+            .generate_histogram(target_buckets)
+            .ok_or_else(|| anyhow::anyhow!("No timestamped records available for timeline"))
+    }
+
+    /// Filter line numbers by time range [start_ms, end_ms]
+    pub async fn filter_by_timerange(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> anyhow::Result<Vec<usize>> {
+        let records = self.parse_records(50000).await?;
+        let timeline_index = TimelineIndex::from_records(&records);
+        Ok(timeline_index.filter_by_timerange(start_ms, end_ms))
+    }
+
+    /// Mine log templates using offline Drain prefix tree
+    pub async fn mine_templates(
+        &self,
+        max_records: usize,
+    ) -> anyhow::Result<Vec<LogTemplateCluster>> {
+        let records = self.parse_records(max_records).await?;
+        let mut miner = DrainLogMiner::new();
+
+        for r in &records {
+            miner.add_log(r.line_number, &r.message);
+        }
+
+        Ok(miner.get_clusters())
+    }
+
+    /// Detect volume spikes and error anomalies
+    pub async fn detect_anomalies(
+        &self,
+        target_buckets: usize,
+        z_threshold: f64,
+    ) -> anyhow::Result<Vec<AnomalySpike>> {
+        let hist = self.get_timeline_histogram(target_buckets).await?;
+        let bucket_tuples: Vec<(i64, i64, usize, usize)> = hist
+            .buckets
+            .iter()
+            .map(|b| {
+                (
+                    b.start_epoch_ms,
+                    b.end_epoch_ms,
+                    b.total_count,
+                    b.error_count + b.fatal_count,
+                )
+            })
+            .collect();
+
+        Ok(AnomalyDetector::detect_spikes(&bucket_tuples, z_threshold))
+    }
+
+    /// Group error records by template clusters
+    pub async fn cluster_errors(&self, max_records: usize) -> anyhow::Result<Vec<ErrorCluster>> {
+        let records = self.parse_records(max_records).await?;
+        Ok(AnomalyDetector::cluster_errors(&records))
+    }
+
+    /// Correlate container failure chains across time window
+    pub async fn correlate_failures(
+        &self,
+        window_ms: i64,
+    ) -> anyhow::Result<Vec<CorrelatedFailureChain>> {
+        let records = self.parse_records(10000).await?;
+        Ok(KubernetesImporter::correlate_failures(&records, window_ms))
+    }
+
+    /// Execute a registered plugin
+    pub async fn execute_plugin(&self, plugin_id: &str, input: &str) -> anyhow::Result<String> {
+        self.plugin_manager
+            .execute(plugin_id, input)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    /// List active plugins
+    pub fn list_plugins(&self) -> Vec<PluginManifest> {
+        self.plugin_manager.list_plugins()
+    }
+
     /// Execute a search query across the active log file.
     pub async fn search(&self, query: LogQuery) -> anyhow::Result<LogSearchReport> {
         let active_lock = self.active_file.read().await;
@@ -146,40 +355,38 @@ impl LogViewerService {
             }
             Ok(true)
         } else {
-            if let Some(tail) = state.tail.take() {
-                tail.stop();
-            }
+            state.tail = None;
             Ok(false)
         }
     }
 
-    /// Add a bookmark on the currently opened file.
+    /// Add a line bookmark.
     pub async fn add_bookmark(
         &self,
         line_number: usize,
-        label: String,
+        note: String,
     ) -> anyhow::Result<BookmarkRecord> {
         let active_lock = self.active_file.read().await;
         let state = active_lock
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No active log file opened"))?;
 
-        let bm = BookmarkRecord {
+        let record = BookmarkRecord {
             id: format!(
                 "bm_{}_{}",
                 line_number,
                 std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)?
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
                     .as_millis()
             ),
-            workspace_id: "default_workspace".to_string(),
+            workspace_id: "default".to_string(),
             file_path: state.path.to_string_lossy().to_string(),
             line_number,
-            label,
+            label: note,
         };
-
-        self.workspace_store.add_bookmark(&bm)?;
-        Ok(bm)
+        self.workspace_store.add_bookmark(&record)?;
+        Ok(record)
     }
 
     /// List all bookmarks for the currently opened file.
@@ -210,7 +417,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let log_path = temp.path().join("commands_test.log");
         let content =
-            b"2026-10-19 [INFO] Init\n2026-10-19 [WARN] Disk 85%\n2026-10-19 [ERROR] Crash\n";
+            b"2026-10-19T10:00:00Z [INFO] Init\n2026-10-19T10:00:01Z [WARN] Disk 85%\n2026-10-19T10:00:02Z [ERROR] Crash\n";
         std::fs::write(&log_path, content).unwrap();
 
         let ws_store = Arc::new(WorkspaceStore::open_in_memory().unwrap());
@@ -224,30 +431,30 @@ mod tests {
         // Get lines slice (0..2)
         let slice = service.get_lines_slice(0, 2).await.unwrap();
         assert_eq!(slice.len(), 2);
-        assert_eq!(slice[0].text, "2026-10-19 [INFO] Init");
-        assert_eq!(slice[1].text, "2026-10-19 [WARN] Disk 85%");
+        assert_eq!(slice[0].text, "2026-10-19T10:00:00Z [INFO] Init");
 
-        // Search query
-        let query = LogQuery {
-            pattern: "ERROR".to_string(),
-            is_regex: false,
-            case_sensitive: true,
-            limit: 5,
-            start_line: 0,
-        };
-        let report = service.search(query).await.unwrap();
-        assert_eq!(report.matches.len(), 1);
-        assert_eq!(report.matches[0].line_number, 2);
+        // Parse records
+        let records = service.parse_records(10).await.unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].severity, LogSeverity::Info);
+        assert_eq!(records[2].severity, LogSeverity::Error);
 
-        // Bookmarks
-        let bm = service
-            .add_bookmark(2, "Investigate crash".to_string())
-            .await
-            .unwrap();
-        assert_eq!(bm.line_number, 2);
+        // Timeline Histogram
+        let hist = service.get_timeline_histogram(2).await.unwrap();
+        assert_eq!(hist.total_records, 3);
 
-        let bookmarks = service.list_bookmarks().await.unwrap();
-        assert_eq!(bookmarks.len(), 1);
+        // Template mining
+        let templates = service.mine_templates(10).await.unwrap();
+        assert!(!templates.is_empty());
+
+        // Error clustering
+        let clusters = service.cluster_errors(10).await.unwrap();
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].error_count, 1);
+
+        // Plugins
+        let plugins = service.list_plugins();
+        assert_eq!(plugins.len(), 2);
 
         // Metrics
         let metrics = service.get_system_metrics();

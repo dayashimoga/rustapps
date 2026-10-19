@@ -37,9 +37,18 @@ Welcome to the next generation of developer utilities. This suite comprises thre
 - Click the **Tail Mode** toggle (`Ctrl+T`).
 - The viewer continuously follows newly appended lines in real-time at native disk write speeds without locking or freezing the interface.
 
-### 2.4 Timeline & Anomaly Detection
-- Open the bottom drawer to view the **Severity Histogram**.
-- Click on anomaly spikes to jump directly to correlated error clusters.
+### 2.4 Chronological Timeline & Density Filtering
+- Toggle the **Timeline** bar in the top navigation.
+- View real-time stacked volume histograms colored by severity (Fatal, Error, Warn, Info).
+- Click and drag directly on any time slice to filter the log stream to that specific time window in sub-50ms.
+- Click **Clear Filter** to reset the window.
+
+### 2.5 AI Root-Cause Intelligence & Cloud Importers
+- **AI Insights Panel:** Press `Ctrl+I` or click **AI Insights** to open the root-cause intelligence drawer.
+- **Log Template Mining:** The on-device Drain algorithm extracts recurring structural patterns, masking IPs, UUIDs, hex hashes, and numbers with `<*>` wildcards to group millions of lines into clean templates.
+- **Statistical Anomaly Spikes:** Identifies sudden deviations in error density or volume surges (z-scores $> 2.5$).
+- **Offline CloudWatch & Kubernetes Normalization:** Drag and drop exported CloudWatch JSON dumps or `/var/log/pods/` directory archives. Universal Log Viewer extracts namespace, pod, and container metadata and automatically correlates distributed error cascades.
+
 
 ---
 

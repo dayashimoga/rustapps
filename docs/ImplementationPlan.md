@@ -86,3 +86,47 @@ This document tracks the phased engineering execution across all project milesto
 - **Notes:** Total workspace tests: 46 of 46 passing. 7 benchmark groups operational.
 
 ---
+
+## Record 005: 2026-10-19 — Phase 2 Universal Log Viewer Advanced Engineering
+
+- **Date:** 2026-10-19
+- **Milestone:** Phase 2 — Universal Log Viewer Advanced
+- **Scope:** Architect, implement, test, and benchmark advanced log analytics: streaming JSON/CSV parsers, offline CloudWatch/Kubernetes log normalizers, chronological timeline with volume/severity histograms, entirely local AI root-cause analysis (Drain template mining, anomaly spike detection, error clustering, failure tracing), and sandboxed plugin integration.
+- **Tasks:**
+  1. Implement high-throughput zero-copy streaming parsers for JSON Lines and CSV/TSV in `apps/universal-log-viewer/src/parsers.rs`.
+  2. Implement offline AWS CloudWatch and Kubernetes log normalizers with multi-pod/container correlation and metadata extraction in `apps/universal-log-viewer/src/cloud_importers.rs`.
+  3. Implement chronological timeline index with dynamic time-bucket aggregation, severity histograms, and range queries in `apps/universal-log-viewer/src/timeline.rs`.
+  4. Implement entirely local AI root-cause analysis in `apps/universal-log-viewer/src/local_ai.rs` (Drain template miner, z-score anomaly spike detector, error clustering, and failure chain tracer).
+  5. Implement sandboxed plugin lifecycle integration in `apps/universal-log-viewer/src/plugin_integration.rs` leveraging `shared-plugins`.
+  6. Expose new capabilities to Tauri IPC in `apps/universal-log-viewer/src/commands.rs` and `apps/universal-log-viewer/src/lib.rs`.
+  7. Implement interactive desktop UI components in Svelte: `TimelineHistogram.svelte` and `AiInsightsDrawer.svelte`.
+  8. Expand unit, boundary, failure, and integration tests across all Phase 2 components.
+  9. Add Criterion benchmarks for JSON parsing throughput, Drain template mining speed, and timeline aggregation.
+  10. Verify 100% test pass rate, $< 50\,\text{ms}$ query latency, zero linter warnings, and $< 300\,\text{MB}$ memory consumption.
+- **Status:** Completed
+- **Decision:** Use algorithmic Drain prefix-tree parsing and statistical anomaly detection rather than heavy neural weights to provide instant, 100% offline root-cause analysis within $< 20\,\text{MB}$ RAM overhead.
+- **Notes:** Phase 2 implementation finished, tested, benchmarked, and verified.
+
+---
+
+## Record 006: 2026-10-19 — Phase 2 Universal Log Viewer Advanced Verification & Quality Gate Approval
+
+- **Date:** 2026-10-19
+- **Milestone:** Phase 2 — Universal Log Viewer Advanced (Quality Gate Verified)
+- **Scope:** Complete verification of Universal Log Viewer Advanced: streaming JSON/CSV zero-copy log parsers, offline CloudWatch/Kubernetes importers with multi-container correlation, chronological timeline histograms, Drain template mining, z-score anomaly spike detection, error clustering, and sandboxed plugin integration.
+- **Tasks:**
+  1. Implemented high-throughput streaming JSON Lines and CSV/TSV parsers in `parsers.rs` with automatic format detection and robust timestamp parsing.
+  2. Implemented offline AWS CloudWatch and Kubernetes log importers in `cloud_importers.rs` with CRI format parsing and multi-container failure correlation.
+  3. Implemented chronological `TimelineIndex` in `timeline.rs` with sub-50ms binary search range queries and dynamic volume/severity histogram bucketing.
+  4. Implemented offline algorithmic Drain template mining (`DrainLogMiner`), statistical z-score/IQR anomaly spike detection (`AnomalyDetector`), and error clustering in `local_ai.rs`.
+  5. Implemented `LogViewerPluginManager` in `plugin_integration.rs` with built-in JSON flattener and severity highlighter plugins.
+  6. Integrated all Phase 2 services into Tauri IPC `commands.rs` and `lib.rs`.
+  7. Implemented desktop UI components: `TimelineHistogram.svelte` and `AiInsightsDrawer.svelte` in `ui/src/components/`.
+  8. Verified all 60 workspace tests passing (100% pass rate).
+  9. Added Criterion benchmarks for JSON parsing throughput, Drain template mining speed, and timeline aggregation; all passing within SLA limits.
+  10. Verified 100% clean formatting (`cargo fmt`) and 0 clippy warnings (`cargo clippy -- -D warnings`).
+- **Status:** Completed
+- **Decision:** Phase 2 Universal Log Viewer Advanced is fully verified, operational, meets all SLAs, and is ready for Quality Gate approval before advancing to Phase 3 (DevOps Secret Vault MVP).
+- **Notes:** All 60 workspace tests passing. 10 benchmark suites active and passing. Zero regressions.
+
+

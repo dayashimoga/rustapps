@@ -3,8 +3,12 @@
   import Header from './components/Header.svelte';
   import VirtualizedViewport from './components/VirtualizedViewport.svelte';
   import BookmarksDrawer from './components/BookmarksDrawer.svelte';
+  import TimelineHistogram from './components/TimelineHistogram.svelte';
+  import AiInsightsDrawer from './components/AiInsightsDrawer.svelte';
   import StatusBar from './components/StatusBar.svelte';
   import type { LogLineRecord, OpenedFileInfo, BookmarkRecord, ProcessResourceUsage } from './types';
+  import type { TimelineBucketUi } from './components/TimelineHistogram.svelte';
+  import type { TemplateClusterUi, AnomalySpikeUi, ErrorClusterUi } from './components/AiInsightsDrawer.svelte';
 
   let filePath = '';
   let fileSizeBytes = 0;
@@ -22,11 +26,23 @@
 
   let tailModeActive = false;
   let isBookmarksOpen = false;
+  let showTimeline = true;
+  let showAiInsights = false;
+
   let bookmarks: BookmarkRecord[] = [];
   let systemMetrics: ProcessResourceUsage = {
     resident_set_size_bytes: 48 * 1024 * 1024,
     cpu_percentage: 0.4,
   };
+
+  let timelineBuckets: TimelineBucketUi[] = [];
+  let minEpochMs = 0;
+  let maxEpochMs = 0;
+  let selectedRange: [number, number] | null = null;
+
+  let minedTemplates: TemplateClusterUi[] = [];
+  let detectedAnomalies: AnomalySpikeUi[] = [];
+  let detectedErrorClusters: ErrorClusterUi[] = [];
 
   let viewportComponent: VirtualizedViewport;
 
@@ -48,6 +64,8 @@
 
     const generated: string[] = [];
     const baseTime = Date.now() - count * 100;
+    minEpochMs = baseTime;
+    maxEpochMs = baseTime + count * 100;
 
     for (let i = 0; i < count; i++) {
       const timeStr = new Date(baseTime + i * 100).toISOString();
@@ -61,6 +79,111 @@
     filePath = 'sample_production_500k.log';
     totalLines = generated.length;
     fileSizeBytes = generated.reduce((acc, l) => acc + l.length + 1, 0);
+
+    // Generate timeline buckets (60 buckets)
+    const numBuckets = 60;
+    const bucketSpan = (maxEpochMs - minEpochMs) / numBuckets;
+    const buckets: TimelineBucketUi[] = [];
+
+    for (let b = 0; b < numBuckets; b++) {
+      const bStart = minEpochMs + b * bucketSpan;
+      const bEnd = bStart + bucketSpan;
+      const logsInBucket = Math.floor(count / numBuckets);
+
+      const errCount = b === 25 ? Math.floor(logsInBucket * 0.4) : Math.floor(logsInBucket * 0.15);
+      const warnCount = Math.floor(logsInBucket * 0.15);
+      const fatalCount = b === 25 ? 12 : 0;
+      const infoCount = logsInBucket - errCount - warnCount - fatalCount;
+
+      buckets.push({
+        bucket_index: b,
+        start_epoch_ms: bStart,
+        end_epoch_ms: bEnd,
+        total_count: logsInBucket,
+        trace_count: 0,
+        debug_count: Math.floor(logsInBucket * 0.1),
+        info_count: infoCount,
+        warn_count: warnCount,
+        error_count: errCount,
+        fatal_count: fatalCount,
+        volume_per_second: logsInBucket / (bucketSpan / 1000),
+      });
+    }
+    timelineBuckets = buckets;
+
+    // Generate AI intelligence models
+    minedTemplates = [
+      {
+        cluster_id: 1,
+        template: 'Connection established from <IP>:<NUM>',
+        token_count: 4,
+        frequency: Math.floor(count * 0.28),
+        sample_lines: [0, 7, 14, 21],
+      },
+      {
+        cluster_id: 2,
+        template: 'Transaction committed successfully in <NUM>ms',
+        token_count: 5,
+        frequency: Math.floor(count * 0.24),
+        sample_lines: [1, 8, 15, 22],
+      },
+      {
+        cluster_id: 3,
+        template: 'Connection pool timeout acquiring PostgreSQL handle',
+        token_count: 6,
+        frequency: Math.floor(count * 0.16),
+        sample_lines: [3, 10, 17, 24],
+      },
+      {
+        cluster_id: 4,
+        template: 'JWT token validation failed for user_id=<NUM>',
+        token_count: 6,
+        frequency: Math.floor(count * 0.14),
+        sample_lines: [4, 11, 18, 25],
+      },
+    ];
+
+    detectedAnomalies = [
+      {
+        spike_id: 1,
+        start_epoch_ms: minEpochMs + 25 * bucketSpan,
+        end_epoch_ms: minEpochMs + 26 * bucketSpan,
+        z_score: 3.84,
+        observed_value: 345,
+        expected_value: 120,
+        metric_name: 'error_density',
+        description: 'Critical error spike in ingress-controller & database-pool (z-score: 3.84)',
+        severity: 'ERROR',
+      },
+      {
+        spike_id: 2,
+        start_epoch_ms: minEpochMs + 12 * bucketSpan,
+        end_epoch_ms: minEpochMs + 13 * bucketSpan,
+        z_score: 2.62,
+        observed_value: 850,
+        expected_value: 480,
+        metric_name: 'log_volume',
+        description: 'Sudden incoming traffic surge in auth-service (z-score: 2.62)',
+        severity: 'WARN',
+      },
+    ];
+
+    detectedErrorClusters = [
+      {
+        cluster_id: 1,
+        template: 'Connection pool timeout acquiring PostgreSQL handle',
+        error_count: Math.floor(count * 0.16),
+        affected_sources: ['database-pool', 'payment-gateway'],
+        sample_lines: [3, 10, 17, 24],
+      },
+      {
+        cluster_id: 2,
+        template: 'JWT token validation failed for user_id=<NUM>',
+        error_count: Math.floor(count * 0.14),
+        affected_sources: ['auth-service'],
+        sample_lines: [4, 11, 18, 25],
+      },
+    ];
 
     fetchSlice(0, 60);
   }
@@ -193,6 +316,23 @@
     bookmarks = bookmarks.filter((b) => b.id !== id);
   }
 
+  function handleRangeSelected(event: CustomEvent<{ startMs: number; endMs: number }>) {
+    selectedRange = [event.detail.startMs, event.detail.endMs];
+    // Find approximate first line corresponding to startMs
+    if (mockFileLines.length > 0 && maxEpochMs > minEpochMs) {
+      const frac = Math.max(0, Math.min(1, (event.detail.startMs - minEpochMs) / (maxEpochMs - minEpochMs)));
+      const targetLine = Math.floor(frac * mockFileLines.length);
+      if (viewportComponent) {
+        viewportComponent.scrollToLine(targetLine);
+        activeLine = targetLine;
+      }
+    }
+  }
+
+  function handleClearRange() {
+    selectedRange = null;
+  }
+
   // Global Keyboard Shortcuts
   function handleKeyDown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
@@ -204,6 +344,9 @@
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
       e.preventDefault();
       isBookmarksOpen = !isBookmarksOpen;
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'i') {
+      e.preventDefault();
+      showAiInsights = !showAiInsights;
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
       e.preventDefault();
       generateSampleLogs(100000);
@@ -233,13 +376,29 @@
     {searchMatchCount}
     {searchLatencyMicros}
     {systemMetrics}
+    {showTimeline}
+    {showAiInsights}
     bookmarksCount={bookmarks.length}
     on:openFile={() => generateSampleLogs(100000)}
     on:toggleTail={toggleTailMode}
     on:search={handleSearch}
     on:jumpLine={handleJumpLine}
     on:toggleBookmarks={() => (isBookmarksOpen = !isBookmarksOpen)}
+    on:toggleTimeline={() => (showTimeline = !showTimeline)}
+    on:toggleAiInsights={() => (showAiInsights = !showAiInsights)}
   />
+
+  <!-- Interactive Timeline Histogram (Phase 2 Advanced) -->
+  {#if showTimeline && timelineBuckets.length > 0}
+    <TimelineHistogram
+      buckets={timelineBuckets}
+      {minEpochMs}
+      {maxEpochMs}
+      {selectedRange}
+      on:rangeSelected={handleRangeSelected}
+      on:clearRange={handleClearRange}
+    />
+  {/if}
 
   <!-- Main Viewport Area -->
   <main class="main-content">
@@ -285,6 +444,19 @@
       isBookmarksOpen = false;
     }}
     on:deleteBookmark={handleDeleteBookmark}
+  />
+
+  <!-- Slide-out AI Root-Cause Drawer (Phase 2 Advanced) -->
+  <AiInsightsDrawer
+    isOpen={showAiInsights}
+    templates={minedTemplates}
+    anomalies={detectedAnomalies}
+    errorClusters={detectedErrorClusters}
+    on:close={() => (showAiInsights = false)}
+    on:jumpToLine={(e) => {
+      handleJumpLine(e);
+      showAiInsights = false;
+    }}
   />
 
   <!-- Bottom Operational Status Bar -->

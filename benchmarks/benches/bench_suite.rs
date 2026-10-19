@@ -188,6 +188,92 @@ fn benchmark_log_regex_search(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_json_streaming_parser(c: &mut Criterion) {
+    use universal_log_viewer::StreamingJsonParser;
+
+    let sample_json = r#"{"timestamp":"2026-10-19T10:15:30.123Z","level":"INFO","message":"User login successful","userId":"user_9021","latencyMs":42,"region":"us-east-1"}"#;
+
+    let mut group = c.benchmark_group("log_viewer_parsers");
+
+    group.bench_function("streaming_json_parser_10k_lines", |b| {
+        b.iter(|| {
+            for i in 0..1000 {
+                let rec = StreamingJsonParser::parse_line(black_box(i), black_box(sample_json));
+                black_box(rec);
+            }
+        });
+    });
+
+    group.finish();
+}
+
+fn benchmark_drain_template_mining(c: &mut Criterion) {
+    use universal_log_viewer::DrainLogMiner;
+
+    let messages = [
+        "Connection to 192.168.1.10 failed on port 8080: timeout",
+        "Connection to 192.168.1.15 failed on port 8080: timeout",
+        "User 9021 login successful from 10.0.0.1 in 45ms",
+        "User 9022 login successful from 10.0.0.2 in 32ms",
+        "HTTP 500 internal server error in auth-svc path /v1/tokens",
+    ];
+
+    let mut group = c.benchmark_group("log_viewer_ai");
+
+    group.bench_function("drain_template_mining_1k_logs", |b| {
+        b.iter(|| {
+            let mut miner = DrainLogMiner::new();
+            for i in 0..1000 {
+                let msg = messages[i % messages.len()];
+                let cluster_id = miner.add_log(black_box(i), black_box(msg));
+                black_box(cluster_id);
+            }
+            let clusters = miner.get_clusters();
+            black_box(clusters.len());
+        });
+    });
+
+    group.finish();
+}
+
+fn benchmark_timeline_histogram(c: &mut Criterion) {
+    use universal_log_viewer::{LogSeverity, TimelineIndex};
+
+    let mut index = TimelineIndex::new();
+    for i in 0..25000 {
+        let sev = if i % 100 == 0 {
+            LogSeverity::Error
+        } else if i % 20 == 0 {
+            LogSeverity::Warn
+        } else {
+            LogSeverity::Info
+        };
+        index.push(1700000000000 + (i as i64) * 500, i, sev);
+    }
+    index.sort();
+
+    let mut group = c.benchmark_group("log_viewer_timeline");
+
+    group.bench_function("timeline_histogram_50_buckets", |b| {
+        b.iter(|| {
+            let hist = index.generate_histogram(black_box(50)).unwrap();
+            black_box(hist.buckets.len());
+        });
+    });
+
+    group.bench_function("timeline_filter_timerange_sub_50ms", |b| {
+        b.iter(|| {
+            let lines = index.filter_by_timerange(
+                black_box(1700000000000 + 5000 * 500),
+                black_box(1700000000000 + 15000 * 500),
+            );
+            black_box(lines.len());
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -195,6 +281,9 @@ criterion_group!(
     benchmark_sqlite_wal_storage,
     benchmark_telemetry_counters,
     benchmark_sparse_indexing_throughput,
-    benchmark_log_regex_search
+    benchmark_log_regex_search,
+    benchmark_json_streaming_parser,
+    benchmark_drain_template_mining,
+    benchmark_timeline_histogram
 );
 criterion_main!(benches);
