@@ -114,11 +114,87 @@ fn benchmark_telemetry_counters(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_sparse_indexing_throughput(c: &mut Criterion) {
+    use universal_log_viewer::SparseLineIndex;
+
+    // Generate 1MB of synthetic log lines
+    let mut log_bytes = Vec::with_capacity(1024 * 1024);
+    for i in 0..15000 {
+        log_bytes.extend_from_slice(
+            format!(
+                "2026-10-19 10:14:02.104 [INFO] [auth] User session created id={}\n",
+                i
+            )
+            .as_bytes(),
+        );
+    }
+
+    let mut group = c.benchmark_group("log_viewer");
+
+    group.bench_function("sparse_line_index_1mb_scan", |b| {
+        b.iter(|| {
+            let index = SparseLineIndex::build(black_box(&log_bytes));
+            black_box(index.total_lines());
+        });
+    });
+
+    group.finish();
+}
+
+fn benchmark_log_regex_search(c: &mut Criterion) {
+    use universal_log_viewer::{LogQuery, LogSearchEngine, MmapLogEngine, SparseLineIndex};
+
+    let temp = tempfile::tempdir().unwrap();
+    let file_path = temp.path().join("bench_search.log");
+
+    let mut log_bytes = Vec::with_capacity(2 * 1024 * 1024);
+    for i in 0..25000 {
+        let level = if i % 100 == 0 { "ERROR" } else { "INFO" };
+        log_bytes.extend_from_slice(
+            format!(
+                "2026-10-19 [{}]: Event #{}: Status code {}\n",
+                level,
+                i,
+                if i % 100 == 0 { 500 } else { 200 }
+            )
+            .as_bytes(),
+        );
+    }
+    std::fs::write(&file_path, &log_bytes).unwrap();
+
+    let mmap = MmapLogEngine::open(&file_path).unwrap();
+    let index = SparseLineIndex::build(&log_bytes);
+
+    let query = LogQuery {
+        pattern: r"Status code (5\d\d)".to_string(),
+        is_regex: true,
+        case_sensitive: false,
+        limit: 100,
+        start_line: 0,
+    };
+
+    let mut group = c.benchmark_group("log_viewer_search");
+
+    // Enforce < 50ms search SLA
+    group.bench_function("regex_search_25k_lines", |b| {
+        b.iter(|| {
+            let report =
+                LogSearchEngine::search(black_box(&mmap), black_box(&index), black_box(&query))
+                    .unwrap();
+            black_box(report.matches.len());
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
     benchmark_tantivy_search_latency,
     benchmark_sqlite_wal_storage,
-    benchmark_telemetry_counters
+    benchmark_telemetry_counters,
+    benchmark_sparse_indexing_throughput,
+    benchmark_log_regex_search
 );
 criterion_main!(benches);

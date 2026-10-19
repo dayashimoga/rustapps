@@ -77,6 +77,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
+name = "anyhow"
+version = "1.0.104"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+
+[[package]]
 name = "arc-swap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -138,6 +144,7 @@ dependencies = [
  "shared-telemetry",
  "tempfile",
  "tokio",
+ "universal-log-viewer",
 ]
 
 [[package]]
@@ -1993,6 +2000,29 @@ checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
 dependencies = [
  "crypto-common",
  "subtle",
+]
+
+[[package]]
+name = "universal-log-viewer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "memchr",
+ "memmap2",
+ "platform-common",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "shared-logging",
+ "shared-search",
+ "shared-settings",
+ "shared-storage",
+ "shared-telemetry",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

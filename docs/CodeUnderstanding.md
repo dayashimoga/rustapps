@@ -60,6 +60,14 @@ The monorepo employs a clean hexagonal / ports-and-adapters architecture impleme
 8. **`shared-updater`:** Validates Ed25519 signatures on update bundles and swaps executables atomically.
 9. **`shared-plugins`:** Dispatches events to registered plugins inside bounded memory and CPU quotas.
 10. **`platform-common`:** Resolves OS paths and samples instantaneous RAM and CPU metrics.
+11. **`universal-log-viewer` (`apps/universal-log-viewer`):**
+    - `mmap_engine`: Manages zero-copy virtual memory mappings with bounds checking and reload-on-append.
+    - `sparse_index`: SIMD newline scanner building $K=128$ sparse checkpoints for sub-microsecond line seeking and $< 300\,\text{MB}$ RAM consumption on 500GB files.
+    - `tail_mode`: Non-blocking real-time file follower with 16ms coalescing debounce buffer.
+    - `search_engine`: Literal, case-insensitive, and compiled regular expression query executor (<50ms SLA).
+    - `workspace`: SQLite WAL backed store for open files, bookmarks, and scroll state.
+    - `commands`: Tauri IPC service boundary with Serde models.
+    - `ui`: Svelte/TS frontend with 60 FPS virtualized viewport, glassmorphic dark design, and live telemetry indicators.
 
 ---
 

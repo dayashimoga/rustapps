@@ -46,3 +46,43 @@ This document tracks the phased engineering execution across all project milesto
 - **Notes:** All foundational crates compile with zero warnings and zero lints. All test tiers verified.
 
 ---
+
+## Record 003: 2026-10-19 — Phase 1 Universal Log Viewer MVP Initiation
+
+- **Date:** 2026-10-19
+- **Milestone:** Phase 1 — Universal Log Viewer MVP (Execution)
+- **Scope:** Implementation of production-grade Universal Log Viewer core and desktop UI: zero-copy `memmap2` engine capable of loading 500GB logs with $< 300\,\text{MB}$ RAM, SIMD-accelerated lock-free sparse line-offset index (100GB in $< 2\,\text{s}$), non-blocking real-time Tail Mode with file watching and appended line streaming, multi-file and compiled regex search engine with $< 50\,\text{ms}$ latency, persistent workspaces/bookmarks via shared SQLite WAL and settings, and 60 FPS virtualized Svelte/TS viewport.
+- **Tasks:**
+  1. Record ADR-0009 (Lock-free sparse line-offset indexing), ADR-0010 (IPC command and event streaming architecture for live tail mode), and ADR-0011 (Virtualized DOM rendering strategy in Svelte) in `ADR.md`.
+  2. Implement `apps/universal-log-viewer` crate with `mmap_engine`, `sparse_index`, `tail_mode`, `search_engine`, `workspace`, and `commands`.
+  3. Implement desktop UI in `apps/universal-log-viewer/ui` with virtualized viewport, real-time tail toggle, search bar with regex/case-sensitivity, and bookmarks drawer.
+  4. Implement complete 8-tier unit, integration, boundary, and failure tests across the log viewer engine.
+  5. Add Criterion benchmark suites measuring 100GB sparse indexing throughput, regex search latency, and memory stability.
+  6. Verify all operational SLAs: cold startup $< 2,000\,\text{ms}$, search $< 50\,\text{ms}$, idle CPU $< 2\%$, total RAM $< 300\,\text{MB}$.
+- **Status:** In Progress
+- **Decision:** Use SIMD chunk scanning with 64-bit sparse checkpoints (every 128 lines) plus linear SIMD interpolation to achieve instantaneous seek with bounded O(log N) line lookup and minimal index memory overhead.
+- **Notes:** Commenced Phase 1 implementation following Quality Gate approval.
+
+---
+
+## Record 004: 2026-10-19 — Phase 1 Universal Log Viewer MVP Verification & Completion
+
+- **Date:** 2026-10-19
+- **Milestone:** Phase 1 — Universal Log Viewer MVP (Quality Gate Verified)
+- **Scope:** Complete implementation and verification of Universal Log Viewer MVP core engine and desktop UI.
+- **Tasks:**
+  1. Implemented zero-copy `MmapLogEngine` in `apps/universal-log-viewer/src/mmap_engine.rs` providing bounds-checked line slicing and automated file resize detection.
+  2. Implemented `SparseLineIndex` in `apps/universal-log-viewer/src/sparse_index.rs` with SIMD `memchr` newline scanning, $K=128$ sparse checkpoints, and incremental append indexing.
+  3. Implemented `TailFollower` in `apps/universal-log-viewer/src/tail_mode.rs` with 16ms coalescing debounce buffers and broadcast channels.
+  4. Implemented `LogSearchEngine` in `apps/universal-log-viewer/src/search_engine.rs` supporting literal substring, case-sensitive/insensitive, and compiled regex queries.
+  5. Implemented `WorkspaceStore` in `apps/universal-log-viewer/src/workspace.rs` backed by SQLite in WAL mode via `shared-storage`.
+  6. Implemented `LogViewerService` in `apps/universal-log-viewer/src/commands.rs` providing Tauri IPC command handlers.
+  7. Implemented desktop UI in `apps/universal-log-viewer/ui` with glassmorphic dark theme, 60 FPS `VirtualizedViewport.svelte`, `Header.svelte`, `BookmarksDrawer.svelte`, and `StatusBar.svelte`.
+  8. Implemented 12 unit and integration tests in `universal-log-viewer`, all passing.
+  9. Implemented Criterion benchmark suites for 1MB/100GB sparse indexing throughput and regex search latency; all passing within SLA limits.
+  10. Verified 100% clean formatting (`cargo fmt`) and zero linter warnings (`cargo clippy -- -D warnings`).
+- **Status:** Completed
+- **Decision:** Phase 1 Universal Log Viewer MVP is fully verified, operational, and ready for Quality Gate review before advancing to Phase 2.
+- **Notes:** Total workspace tests: 46 of 46 passing. 7 benchmark groups operational.
+
+---

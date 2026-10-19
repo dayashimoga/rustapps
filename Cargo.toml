@@ -11,6 +11,7 @@ members = [
     "shared/plugins",
     "shared/telemetry",
     "shared/settings",
+    "apps/universal-log-viewer",
     "tests",
     "benchmarks",
 ]
@@ -54,6 +55,8 @@ sha2 = "0.10"
 # Search & Indexing
 tantivy = "0.22"
 walkdir = "2.5"
+memchr = "2.7"
+regex = "1.11"
 
 # Utilities & System
 tempfile = "3.12"

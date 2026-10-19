@@ -1,0 +1,185 @@
+:root {
+  --bg-primary: hsl(222, 24%, 8%);
+  --bg-secondary: hsl(222, 22%, 12%);
+  --bg-elevated: hsl(222, 20%, 16%);
+  --bg-surface: hsla(222, 20%, 18%, 0.7);
+  --border-color: hsla(220, 20%, 30%, 0.4);
+  --border-glow: hsla(217, 91%, 60%, 0.3);
+
+  --text-primary: hsl(210, 40%, 98%);
+  --text-secondary: hsl(215, 20%, 70%);
+  --text-muted: hsl(215, 15%, 50%);
+
+  --accent-cyan: hsl(186, 100%, 50%);
+  --accent-blue: hsl(217, 91%, 60%);
+  --accent-violet: hsl(265, 89%, 66%);
+  --accent-emerald: hsl(152, 69%, 53%);
+  --accent-amber: hsl(43, 96%, 58%);
+  --accent-rose: hsl(346, 87%, 65%);
+
+  --log-line-num: hsl(215, 15%, 42%);
+  --log-text-default: hsl(210, 30%, 90%);
+  --log-info: hsl(199, 89%, 60%);
+  --log-warn: hsl(43, 96%, 60%);
+  --log-error: hsl(346, 87%, 65%);
+  --log-debug: hsl(265, 89%, 72%);
+  --log-trace: hsl(215, 20%, 65%);
+  --log-highlight-bg: hsla(43, 96%, 58%, 0.25);
+  --log-highlight-border: hsla(43, 96%, 58%, 0.8);
+
+  --glass-blur: blur(12px);
+  --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-smooth: 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  --shadow-subtle: 0 4px 20px -2px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 25px -5px hsla(217, 91%, 60%, 0.25);
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: radial-gradient(circle at 10% 10%, hsl(222, 28%, 11%) 0%, var(--bg-primary) 100%);
+  color: var(--text-primary);
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: hsla(222, 20%, 10%, 0.4);
+}
+::-webkit-scrollbar-thumb {
+  background: hsla(220, 20%, 35%, 0.6);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsla(217, 91%, 60%, 0.6);
+}
+
+/* App Container Layout */
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* Glassmorphic Panels */
+.glass-panel {
+  background: var(--bg-surface);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-subtle);
+}
+
+/* Interactive Elements & Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  outline: none;
+}
+
+.btn:hover {
+  background: hsl(222, 20%, 22%);
+  border-color: var(--border-glow);
+  box-shadow: 0 0 12px -2px hsla(217, 91%, 60%, 0.2);
+  transform: translateY(-1px);
+}
+
+.btn:active {
+  transform: translateY(0);
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-violet));
+  border: none;
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 4px 15px -3px hsla(217, 91%, 60%, 0.4);
+}
+
+.btn-primary:hover {
+  box-shadow: 0 6px 20px -2px hsla(217, 91%, 60%, 0.6);
+  filter: brightness(1.1);
+}
+
+.btn-active {
+  background: hsla(152, 69%, 53%, 0.15);
+  border-color: var(--accent-emerald);
+  color: var(--accent-emerald);
+  box-shadow: 0 0 12px -2px hsla(152, 69%, 53%, 0.3);
+}
+
+/* Inputs */
+.input-text {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 7px 12px;
+  background: hsla(222, 24%, 6%, 0.8);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  outline: none;
+  transition: all var(--transition-fast);
+}
+
+.input-text:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px hsla(217, 91%, 60%, 0.2);
+}
+
+/* Micro Badge */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  border-radius: 4px;
+  background: hsla(220, 20%, 25%, 0.6);
+  color: var(--text-secondary);
+}
+
+/* Pulse Animation for Live Mode */
+@keyframes pulseGlow {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.1); opacity: 1; filter: drop-shadow(0 0 6px var(--accent-emerald)); }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.live-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-emerald);
+  animation: pulseGlow 2s infinite ease-in-out;
+}

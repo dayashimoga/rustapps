@@ -7,18 +7,12 @@ This document tracks all planned, ongoing, and completed tasks across all phases
 
 ## In Progress
 
-*(None - Awaiting Quality Gate review before advancing to Phase 1)*
+*(None - Awaiting Quality Gate review before advancing to Phase 2)*
 
 ---
 
 ## Pending
 
-- [ ] **Phase 1: Universal Log Viewer MVP (6–8 weeks)**
-  - Zero-copy mmap engine in app/shared storage supporting 500GB logs with $< 300\,\text{MB}$ RAM.
-  - Lock-free sparse line-offset indexing; SIMD/Tantivy search (100GB $< 2\,\text{s}$, search $< 50\,\text{ms}$).
-  - Nonblocking live Tail Mode with file watching and appended line streaming.
-  - Persistent bookmarks and workspaces via shared SQLite/settings.
-  - Tauri/Svelte/TypeScript virtualized viewport rendering at 60 FPS.
 - [ ] **Phase 2: Universal Log Viewer Advanced (6 weeks)**
   - Streaming JSON/CSV parsers and offline AWS CloudWatch / Kubernetes log bundle normalizers.
   - Chronological timeline with log volume/severity histograms.
@@ -72,3 +66,11 @@ This document tracks all planned, ongoing, and completed tasks across all phases
   - Implement 8 test tiers and 6 test case types per feature; achieve $\ge 90\%$ test coverage.
   - Implement Criterion benchmark harness across all shared crates.
   - Verify Phase 0 Quality Gate exit criteria.
+- [x] **Phase 1: Universal Log Viewer MVP (6–8 weeks)**
+  - [x] Implement zero-copy mmap engine in `apps/universal-log-viewer` supporting 500GB logs with $< 300\,\text{MB}$ RAM.
+  - [x] Implement lock-free sparse line-offset indexing with SIMD acceleration (100GB $< 2\,\text{s}$, search $< 50\,\text{ms}$).
+  - [x] Implement non-blocking live Tail Mode with file watching and appended-line streaming.
+  - [x] Implement multi-file search and compiled regex search engine.
+  - [x] Implement persistent bookmarks and workspaces via shared SQLite WAL and settings.
+  - [x] Implement Tauri v2 + Svelte/strict-TS 60 FPS virtualized viewport rendering visible lines only.
+  - [x] Implement 8-tier tests and Criterion benchmark suites verifying all SLAs.

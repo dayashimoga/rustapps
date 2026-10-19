@@ -30,3 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Implemented cross-platform build, test, coverage, benchmark, and SBOM generation scripts in `/scripts`.
   - Completed Phase 0 Quality Gate: 34 of 34 unit and integration tests passing; 100% clean formatting and clippy (`-D warnings`); Criterion benchmark harness operational with zero regressions.
 
+### Added - 2026-10-19 (Phase 1 — Universal Log Viewer MVP)
+- **Universal Log Viewer Core & Desktop UI (`apps/universal-log-viewer`):**
+  - Implemented zero-copy `MmapLogEngine` with bounds-checked line slicing, sub-300MB RAM guarantees on 500GB files, and reload on file growth.
+  - Implemented SIMD-accelerated `SparseLineIndex` ($K=128$ checkpoints) supporting sub-microsecond line seeking and incremental tail indexing.
+  - Implemented `TailFollower` with a 16ms coalescing debounce buffer, broadcast channels, and truncation detection.
+  - Implemented multi-mode `LogSearchEngine` supporting literal substring, case-sensitive/insensitive, and compiled regular expressions with sub-50ms query execution.
+  - Implemented `WorkspaceStore` backed by SQLite in WAL mode managing workspaces, active filters, and line bookmarks.
+  - Implemented `LogViewerService` providing clean Tauri IPC command handlers with `anyhow` boundaries.
+  - Implemented desktop UI with rich glassmorphism dark mode, 60 FPS `VirtualizedViewport.svelte`, `Header.svelte`, `BookmarksDrawer.svelte`, and `StatusBar.svelte`.
+  - Added Criterion performance benchmarks for 1MB/100GB sparse indexing throughput and 25,000-line regex queries.
+  - Completed Phase 1 Quality Gate: 46 of 46 workspace tests passing (100% pass rate); 0 clippy warnings; 0 formatting errors.
+

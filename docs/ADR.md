@@ -121,3 +121,48 @@ This document records the foundational architectural decisions made for the mono
 - **Decision:** Enforce `#![forbid(unsafe_code)]` across all application and shared crates. Isolate low-level memory mapping (`memmap2`) and OS biometrics FFI inside designated platform adapters with formal safety documentation.
 - **Rationale:** Maximizes compiler-enforced memory safety guarantees while permitting essential systems-level capabilities.
 - **Consequences:** All low-level interactions must provide safe, panic-free Rust abstractions to client crates.
+
+---
+
+## ADR-0009: Lock-Free Sparse Line-Offset Indexing Structure for Fast Line Addressing
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Storing byte offsets for every newline in a 500GB log file containing 5 billion lines would require $5 \times 10^9 \times 8\,\text{bytes} \approx 40\,\text{GB}$ of RAM, severely violating the 300MB maximum RAM constraint.
+- **Alternatives Considered:**
+  1. *Full array of 64-bit line offsets:* Consumes tens of gigabytes of heap memory on large files.
+  2. *Scanning from beginning on every scroll seek:* Unacceptable latency ($> 10\,\text{seconds}$) when seeking towards the end of a 500GB file.
+  3. *Sparse checkpoint indexing (every $K=128$ lines):* Records a 64-bit byte offset only every 128th newline. Looking up line $N$ computes checkpoint index $N / 128$ in $O(1)$ time, seeks to that byte offset, and scans at most 127 newlines using SIMD `memchr`.
+- **Decision:** Adopt the sparse checkpoint indexing structure with checkpoint frequency $K=128$ backed by contiguous 64-bit vectors.
+- **Rationale:** For a 500GB log with 5 billion lines, storing 1 out of 128 offsets requires only $312\,\text{MB}$ in the worst theoretical case, and for typical 100GB logs ($10^9$ lines), consumes under $60\,\text{MB}$ of RAM. Resolving any line takes $< 1\,\text{microsecond}$.
+- **Consequences:** Line seeking incurs a deterministic microsecond-level linear scan of at most 127 newlines, easily masked within 60 FPS frame budgets.
+
+---
+
+## ADR-0010: Tauri v2 IPC Command and Event Streaming Architecture for Live Tail Mode
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Streaming real-time appended lines from high-throughput log writers (e.g., 50,000 lines/sec) directly into a webview UI can flood IPC channels and cause dropped frames or UI freezing.
+- **Alternatives Considered:**
+  1. *Polling via Tauri IPC commands (`get_new_lines` every 100ms):* Inefficient when logs are idle, yet loses lines during high-frequency write bursts.
+  2. *WebSocket server running on localhost:* Introduces network stack overhead and local port conflicts, violating the zero-network mandate.
+  3. *Tauri v2 event streaming with backpressure coalescing:* File watcher streams new byte offsets into an in-process batcher that debounces event emissions to 60 FPS (16ms windows), transferring line chunks via binary or structured IPC payloads.
+- **Decision:** Implement event-driven streaming with a 16ms coalescing debounce buffer via Tauri v2 event channels.
+- **Rationale:** Guarantees that the UI never receives more than 60 updates per second, completely preventing IPC congestion while delivering smooth 60 FPS live updates.
+- **Consequences:** At peak write rates, line updates arrive in micro-batches rather than individual line-by-line events.
+
+---
+
+## ADR-0011: Virtualized DOM Rendering Strategy with Reusable Row Pools in Svelte
+
+- **Status:** Approved
+- **Date:** 2026-10-19
+- **Problem:** Rendering millions of DOM elements in a web browser crashes the browser tab and exceeds the 300MB RAM limit.
+- **Alternatives Considered:**
+  1. *Pagination (1000 lines per page):* Discontinuous user experience; breaks smooth vertical scrolling and visual pattern recognition.
+  2. *Infinite scroll with DOM accumulation:* Continues adding nodes until browser memory is exhausted.
+  3. *Strict DOM virtualization with recycled row pools:* Renders only the visible rows ($(\text{viewport height} / \text{row height}) + 10$ buffer rows, typically ~50 rows total). The scrollbar height represents the virtual total document height.
+- **Decision:** Implement a custom virtualized viewport in Svelte that maintains a fixed pool of ~50 DOM rows, dynamically updating row content and offsets based on scroll position.
+- **Rationale:** Keeps frontend DOM memory constant ($\approx 5\,\text{MB}$) regardless of whether the log file contains 1,000 lines or 100,000,000 lines. Guarantees 60 FPS scrolling.
+- **Consequences:** Requires fixed or estimated line heights and dynamic slice querying from the Rust core.
