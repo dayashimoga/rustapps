@@ -54,6 +54,7 @@
   let minedTemplates: TemplateClusterUi[] = [];
   let detectedAnomalies: AnomalySpikeUi[] = [];
   let detectedErrorClusters: ErrorClusterUi[] = [];
+  let isAiAnalyzing = false;
 
   let viewportComponent: VirtualizedViewport;
 
@@ -116,8 +117,9 @@
   }
 
   async function loadAiInsights() {
-    if (isTauri && filePath) {
-      try {
+    isAiAnalyzing = true;
+    try {
+      if (isTauri && filePath) {
         const [hist, templates, anomalies, errors] = await Promise.all([
           tauriInvoke<TimelineHistogramUi>('get_timeline_histogram', { targetBuckets: 60 }),
           tauriInvoke<TemplateClusterUi[]>('mine_templates', { maxRecords: 50000 }),
@@ -132,9 +134,13 @@
         if (templates) minedTemplates = templates;
         if (anomalies) detectedAnomalies = anomalies;
         if (errors) detectedErrorClusters = errors;
-      } catch (e) {
-        console.warn('Failed to load AI insights from backend:', e);
+      } else {
+        await new Promise((r) => setTimeout(r, 350));
       }
+    } catch (e) {
+      console.warn('Failed to load AI insights from backend:', e);
+    } finally {
+      isAiAnalyzing = false;
     }
   }
 
@@ -694,11 +700,23 @@
     templates={minedTemplates}
     anomalies={detectedAnomalies}
     errorClusters={detectedErrorClusters}
+    isAnalyzing={isAiAnalyzing}
     on:close={() => (showAiInsights = false)}
     on:jumpToLine={(e) => {
       handleJumpLine(e);
       showAiInsights = false;
     }}
+    on:filterTimeRange={(e) => {
+      handleRangeSelected(e);
+      showAiInsights = false;
+    }}
+    on:filterTemplate={(e) => {
+      searchQuery = e.detail.pattern;
+      isRegex = false;
+      handleSearch(new CustomEvent('search', { detail: { query: e.detail.pattern, isRegex: false, caseSensitive: false } }));
+      showAiInsights = false;
+    }}
+    on:refresh={loadAiInsights}
   />
 
   <!-- Bottom Operational Status Bar -->

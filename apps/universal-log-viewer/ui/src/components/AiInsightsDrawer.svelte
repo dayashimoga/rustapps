@@ -6,10 +6,14 @@
   export let templates: TemplateClusterUi[] = [];
   export let anomalies: AnomalySpikeUi[] = [];
   export let errorClusters: ErrorClusterUi[] = [];
+  export let isAnalyzing = false;
 
   const dispatch = createEventDispatcher<{
     close: void;
     jumpToLine: number;
+    filterTimeRange: { startMs: number; endMs: number };
+    filterTemplate: { pattern: string };
+    refresh: void;
   }>();
 
   let activeTab: 'templates' | 'anomalies' | 'errors' = 'templates';
@@ -20,6 +24,11 @@
       .getMinutes()
       .toString()
       .padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
+  }
+
+  function cleanTemplatePattern(template: string): string {
+    // Strip <...> wildcard tokens to get clean keyword search string
+    return template.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   }
 </script>
 
@@ -35,9 +44,29 @@
         </svg>
         <h3>LOCAL ROOT-CAUSE INTELLIGENCE</h3>
       </div>
-      <button class="close-btn" on:click={() => dispatch('close')} title="Close Drawer">
-        ✕
-      </button>
+      <div class="header-actions">
+        <button
+          type="button"
+          class="btn-refresh"
+          disabled={isAnalyzing}
+          on:click={() => dispatch('refresh')}
+          title="Re-run AI Mining & Anomaly Detection"
+        >
+          {#if isAnalyzing}
+            <span class="spinner-ai"></span> Analyzing...
+          {:else}
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M23 4v6h-6"></path>
+              <path d="M1 20v-6h6"></path>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+            Re-run
+          {/if}
+        </button>
+        <button class="close-btn" on:click={() => dispatch('close')} title="Close Drawer">
+          ✕
+        </button>
+      </div>
     </div>
 
     <!-- Mode Selector Tabs -->
@@ -80,8 +109,16 @@
               <div class="template-str">
                 {t.template}
               </div>
-              {#if t.sample_lines.length > 0}
-                <div class="sample-actions">
+              <div class="sample-actions">
+                <button
+                  type="button"
+                  class="btn-action-sm"
+                  on:click={() => dispatch('filterTemplate', { pattern: cleanTemplatePattern(t.template) })}
+                  title="Search viewer for this pattern"
+                >
+                  🔍 Filter
+                </button>
+                {#if t.sample_lines.length > 0}
                   <span class="sample-lbl">Jump:</span>
                   {#each t.sample_lines.slice(0, 4) as line}
                     <button
@@ -91,8 +128,8 @@
                       L{line + 1}
                     </button>
                   {/each}
-                </div>
-              {/if}
+                {/if}
+              </div>
             </div>
           {/each}
         </div>
@@ -116,6 +153,15 @@
               <div class="metric-detail">
                 Observed: <strong>{a.observed_value}</strong> | Expected: <strong>{a.expected_value}</strong>
               </div>
+              <div class="anomaly-actions">
+                <button
+                  type="button"
+                  class="btn-action-sm focus-btn"
+                  on:click={() => dispatch('filterTimeRange', { startMs: a.start_epoch_ms, endMs: a.end_epoch_ms })}
+                >
+                  ⚡ Focus Anomaly Window ({formatTime(a.start_epoch_ms)} — {formatTime(a.end_epoch_ms)})
+                </button>
+              </div>
             </div>
           {/each}
         </div>
@@ -138,8 +184,16 @@
               <div class="template-str">
                 {e.template}
               </div>
-              {#if e.sample_lines.length > 0}
-                <div class="sample-actions">
+              <div class="sample-actions">
+                <button
+                  type="button"
+                  class="btn-action-sm"
+                  on:click={() => dispatch('filterTemplate', { pattern: cleanTemplatePattern(e.template) })}
+                  title="Search viewer for this error cause"
+                >
+                  🔍 Filter Cause
+                </button>
+                {#if e.sample_lines.length > 0}
                   <span class="sample-lbl">Inspect:</span>
                   {#each e.sample_lines.slice(0, 4) as line}
                     <button
@@ -149,8 +203,8 @@
                       Line {line + 1}
                     </button>
                   {/each}
-                </div>
-              {/if}
+                {/if}
+              </div>
             </div>
           {/each}
         </div>
@@ -175,7 +229,7 @@
     position: fixed;
     top: 0;
     right: 0;
-    width: 440px;
+    width: 460px;
     height: 100vh;
     background: hsla(220, 24%, 10%, 0.95);
     border-left: 1px solid var(--border-subtle);
@@ -189,8 +243,9 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 16px 20px;
+    padding: 14px 18px;
     border-bottom: 1px solid var(--border-subtle);
+    gap: 8px;
   }
 
   .header-title {
@@ -205,6 +260,52 @@
     font-weight: 700;
     letter-spacing: 0.5px;
     color: var(--text-primary);
+    margin: 0;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn-refresh {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    background: hsla(220, 20%, 20%, 0.6);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .btn-refresh:hover:not(:disabled) {
+    background: hsla(217, 91%, 60%, 0.15);
+    border-color: hsla(217, 91%, 60%, 0.35);
+    color: var(--accent-blue);
+  }
+
+  .btn-refresh:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .spinner-ai {
+    width: 10px;
+    height: 10px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-top-color: var(--accent-blue);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
 
   .close-btn {
@@ -213,7 +314,7 @@
     color: var(--text-muted);
     font-size: 16px;
     cursor: pointer;
-    padding: 4px;
+    padding: 4px 6px;
   }
 
   .close-btn:hover {
@@ -237,6 +338,7 @@
     font-size: 11.5px;
     font-weight: 600;
     cursor: pointer;
+    transition: all 0.15s ease;
   }
 
   .tab-btn:hover {
@@ -261,6 +363,10 @@
     line-height: 1.4;
   }
 
+  .tab-desc strong {
+    color: var(--text-primary);
+  }
+
   .insight-card {
     background: hsla(220, 22%, 14%, 0.7);
     border: 1px solid var(--border-subtle);
@@ -276,6 +382,7 @@
 
   .card-meta {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     margin-bottom: 8px;
   }
@@ -339,6 +446,7 @@
     font-size: 10.5px;
     font-family: var(--font-mono);
     color: var(--text-muted);
+    margin-bottom: 8px;
   }
 
   .sample-actions {
@@ -347,9 +455,46 @@
     gap: 6px;
   }
 
+  .anomaly-actions {
+    display: flex;
+    align-items: center;
+    margin-top: 6px;
+  }
+
   .sample-lbl {
     font-size: 10.5px;
     color: var(--text-muted);
+  }
+
+  .btn-action-sm {
+    background: hsla(217, 91%, 60%, 0.15);
+    border: 1px solid hsla(217, 91%, 60%, 0.3);
+    color: var(--accent-blue);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .btn-action-sm:hover {
+    background: var(--accent-blue);
+    color: #fff;
+  }
+
+  .focus-btn {
+    width: 100%;
+    text-align: center;
+    background: hsla(38, 92%, 55%, 0.15);
+    border-color: hsla(38, 92%, 55%, 0.35);
+    color: hsl(38, 92%, 60%);
+    padding: 5px 10px;
+  }
+
+  .focus-btn:hover {
+    background: hsl(38, 92%, 55%);
+    color: #000;
   }
 
   .btn-line-link {
