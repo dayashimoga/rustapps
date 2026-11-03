@@ -168,13 +168,18 @@
 
     <!-- Execution Status Notice -->
     {#if renameResult}
-      {#if renameResult.rolled_back}
+      {#if renameResult.rolled_back || renameResult.error_message}
         <div class="alert alert-danger">
           <strong>Rollback Triggered:</strong> {renameResult.error_message}
         </div>
       {:else}
         <div class="alert alert-success">
-          <strong>Success:</strong> Renamed {renameResult.successful_renames} files atomically.
+          <div class="success-row">
+            <span><strong>Success:</strong> Renamed {renameResult.successful_renames} files atomically.</span>
+            <button class="btn btn-secondary done-btn" on:click={onClearSelection}>
+              Done (Clear Selection)
+            </button>
+          </div>
         </div>
       {/if}
     {/if}
@@ -403,6 +408,17 @@
     padding: 12px 16px;
     border-radius: var(--radius-md);
     font-size: 13px;
+  }
+  .success-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .done-btn {
+    padding: 4px 10px;
+    font-size: 11px;
+    height: 28px;
   }
   .alert-success {
     background: rgba(16, 185, 129, 0.15);

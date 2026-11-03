@@ -417,8 +417,12 @@
       renameResult = await invokeTauri<BatchRenameResult>('execute_batch_rename_cmd', {
         previews,
       });
-      if (!renameResult.rolled_back) {
+      if (renameResult && !renameResult.rolled_back && !renameResult.error_message) {
+        selectedPaths = [];
+        renamePreviews = [];
         await loadDirectory(currentPath);
+        await loadStorageStats(currentPath);
+        await loadTreemap(currentPath);
       }
     } catch (err) {
       console.error('Execute error:', err);
