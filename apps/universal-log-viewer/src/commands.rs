@@ -881,7 +881,8 @@ pub fn dispatch_ipc_command(
                     .or_else(|| args.get("dest_path"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("redacted_export.log");
-                let gate = shared_licensing::TierGate::for_tier(shared_licensing::LicenseTier::Business);
+                let gate =
+                    shared_licensing::TierGate::for_tier(shared_licensing::LicenseTier::Business);
                 let count = svc
                     .export_redacted(std::path::Path::new(dest_path_str), &gate)
                     .await

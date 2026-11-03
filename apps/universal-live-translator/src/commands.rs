@@ -181,7 +181,8 @@ pub fn get_glossary_terms_cmd(domain: String) -> Result<Vec<GlossaryTerm>, Strin
 pub fn delete_glossary_term_cmd(domain: String, source_term: String) -> Result<bool, String> {
     let service = get_service();
     let svc = service.lock().map_err(|e| e.to_string())?;
-    svc.delete_glossary_term(&domain, &source_term).map_err(|e| e.to_string())
+    svc.delete_glossary_term(&domain, &source_term)
+        .map_err(|e| e.to_string())
 }
 
 /// Start a new split-screen conversation session

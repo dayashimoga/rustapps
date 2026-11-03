@@ -375,11 +375,9 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "search_screenshots_by_hash_cmd" => {
-            let target_hash = parse_u64_val(
-                args.get("target_hash")
-                    .or_else(|| args.get("targetHash"))
-            )
-            .unwrap_or(0);
+            let target_hash =
+                parse_u64_val(args.get("target_hash").or_else(|| args.get("targetHash")))
+                    .unwrap_or(0);
             let max_distance = args
                 .get("max_distance")
                 .or_else(|| args.get("maxDistance"))
@@ -523,7 +521,11 @@ mod tests {
     fn test_commands_export_compliance_report() {
         let dir = tempdir().unwrap();
         let target_file = dir.path().join("secrets.txt");
-        std::fs::write(&target_file, b"AKIAIOSFODNN7EXAMPLE\n-----BEGIN RSA PRIVATE KEY-----\n").unwrap();
+        std::fs::write(
+            &target_file,
+            b"AKIAIOSFODNN7EXAMPLE\n-----BEGIN RSA PRIVATE KEY-----\n",
+        )
+        .unwrap();
 
         let out_csv = dir.path().join("report.csv");
         let dir_str = dir.path().to_string_lossy().to_string();
