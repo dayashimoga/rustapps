@@ -3,7 +3,6 @@
 
 use crate::models::WatchEvent;
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -43,18 +42,7 @@ impl DirectoryWatcher {
         let event_tx = self.event_tx.clone();
 
         tokio::spawn(async move {
-            let mut snapshot: HashMap<PathBuf, SystemTime> = HashMap::new();
-
-            // Initial snapshot
-            if let Ok(entries) = fs::read_dir(&path) {
-                for entry_res in entries.flatten() {
-                    if let Ok(meta) = entry_res.metadata() {
-                        if let Ok(mod_time) = meta.modified() {
-                            snapshot.insert(entry_res.path(), mod_time);
-                        }
-                    }
-                }
-            }
+            let mut snapshot = take_recursive_snapshot(&path);
 
             while is_running.load(Ordering::Relaxed) {
                 tokio::time::sleep(Duration::from_millis(interval_ms)).await;
@@ -63,25 +51,18 @@ impl DirectoryWatcher {
                     break;
                 }
 
-                let mut current_snapshot: HashMap<PathBuf, SystemTime> = HashMap::new();
-                if let Ok(entries) = fs::read_dir(&path) {
-                    for entry_res in entries.flatten() {
-                        let entry_path = entry_res.path();
-                        if let Ok(meta) = entry_res.metadata() {
-                            if let Ok(mod_time) = meta.modified() {
-                                current_snapshot.insert(entry_path.clone(), mod_time);
+                let current_snapshot = take_recursive_snapshot(&path);
 
-                                match snapshot.get(&entry_path) {
-                                    None => {
-                                        let _ = event_tx.send(WatchEvent::Created(entry_path));
-                                    }
-                                    Some(&prev_time) if prev_time != mod_time => {
-                                        let _ = event_tx.send(WatchEvent::Modified(entry_path));
-                                    }
-                                    _ => {}
-                                }
-                            }
+                // Detect created and modified
+                for (entry_path, &mod_time) in &current_snapshot {
+                    match snapshot.get(entry_path) {
+                        None => {
+                            let _ = event_tx.send(WatchEvent::Created(entry_path.clone()));
                         }
+                        Some(&prev_time) if prev_time != mod_time => {
+                            let _ = event_tx.send(WatchEvent::Modified(entry_path.clone()));
+                        }
+                        _ => {}
                     }
                 }
 
@@ -98,6 +79,23 @@ impl DirectoryWatcher {
     }
 }
 
+fn take_recursive_snapshot(root: &Path) -> HashMap<PathBuf, SystemTime> {
+    let mut snap = HashMap::new();
+    for entry in walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if entry.file_type().is_file() {
+            if let Ok(meta) = entry.metadata() {
+                if let Ok(mod_time) = meta.modified() {
+                    snap.insert(entry.into_path(), mod_time);
+                }
+            }
+        }
+    }
+    snap
+}
+
 impl Default for DirectoryWatcher {
     fn default() -> Self {
         Self::new()
@@ -107,7 +105,7 @@ impl Default for DirectoryWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::File;
+    use std::fs::{self, File};
     use std::io::Write;
     use tempfile::tempdir;
 
@@ -149,6 +147,31 @@ mod tests {
             panic!("Expected WatchEvent::Deleted");
         }
 
+        watcher.stop();
+    }
+
+    #[tokio::test]
+    async fn test_watcher_detects_nested_subdirectory_creation() {
+        let dir = tempdir().unwrap();
+        let sub_dir = dir.path().join("nested").join("deep");
+        fs::create_dir_all(&sub_dir).unwrap();
+
+        let watcher = DirectoryWatcher::new();
+        let mut rx = watcher.subscribe();
+        watcher.start_watching(dir.path(), 50);
+
+        tokio::time::sleep(Duration::from_millis(60)).await;
+
+        let nested_file = sub_dir.join("nested_file.rs");
+        fs::write(&nested_file, b"fn main() {}").unwrap();
+
+        let evt = tokio::time::timeout(Duration::from_millis(400), rx.recv()).await;
+        assert!(evt.is_ok());
+        if let Ok(Ok(WatchEvent::Created(p))) = evt {
+            assert_eq!(p.file_name().unwrap(), "nested_file.rs");
+        } else {
+            panic!("Expected WatchEvent::Created for nested file");
+        }
         watcher.stop();
     }
 }

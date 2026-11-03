@@ -123,6 +123,12 @@
       >
         Batch Rename
       </button>
+      <button
+        class="tab-btn {activeTab === 'compliance' ? 'active' : ''}"
+        on:click={() => (activeTab = 'compliance')}
+      >
+        Compliance
+      </button>
     </div>
 
 

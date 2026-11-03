@@ -222,6 +222,26 @@ void main() {
           'BackupPass!', '/path/to/backup.vaultbackup');
       expect(import.totalSecrets, greaterThan(0));
     });
+
+    test('audit chain, biometrics, and Shamir key recovery', () async {
+      await vaultService.initialize('MasterPass123!');
+      expect(await vaultService.verifyAuditChain(), isTrue);
+      expect(await vaultService.isBiometricAvailable(), isTrue);
+      expect(await vaultService.enableBiometricUnlock(), isTrue);
+
+      await vaultService.lock();
+      expect(await vaultService.isLocked(), isTrue);
+
+      expect(await vaultService.unlockWithBiometrics(), isTrue);
+      expect(await vaultService.isLocked(), isFalse);
+
+      final shares = await vaultService.splitMasterKey(2, 3);
+      expect(shares, isNotEmpty);
+
+      await vaultService.lock();
+      expect(await vaultService.unlockWithShamirShares(shares), isTrue);
+      expect(await vaultService.isLocked(), isFalse);
+    });
   });
 
   group('BiometricService Unit Tests', () {

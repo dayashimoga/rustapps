@@ -1,0 +1,181 @@
+name: Reusable Standalone Application Release Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        required: true
+        type: string
+        description: "Application crate directory name (e.g. pro-av-editor)"
+      app_display_name:
+        required: true
+        type: string
+        description: "Human-readable application name"
+      version:
+        required: false
+        type: string
+        default: "0.1.0"
+        description: "Release version tag"
+
+jobs:
+  build-desktop:
+    name: Build Desktop (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_suffix: windows-x64
+            use_cross: false
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_suffix: linux-x64
+            use_cross: false
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_suffix: linux-arm64
+            use_cross: true
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_suffix: macos-arm64
+            use_cross: false
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact_suffix: macos-x64
+            use_cross: false
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Linux Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libasound2-dev
+
+      - name: Build Svelte Desktop UI
+        run: |
+          if [ -d "apps/${{ inputs.app_name }}/ui" ]; then
+            cd "apps/${{ inputs.app_name }}/ui"
+            npm ci || npm install
+            npm run build
+          fi
+        shell: bash
+
+      - name: Build Application Binary (Standard)
+        if: "!matrix.use_cross"
+        run: cargo build --release --target ${{ matrix.target }} -p ${{ inputs.app_name }}
+
+      - name: Install cross-rs
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build Application Binary (Cross)
+        if: matrix.use_cross
+        run: cross build --release --target ${{ matrix.target }} -p ${{ inputs.app_name }}
+
+      - name: Package Desktop Artifacts
+        shell: bash
+        run: |
+          mkdir -p dist/${{ matrix.artifact_suffix }}
+          bin_name="${{ inputs.app_name }}"
+          [ "${{ runner.os }}" = "Windows" ] && bin_name="${bin_name}.exe"
+          
+          src_bin="target/${{ matrix.target }}/release/${bin_name}"
+          if [ -f "${src_bin}" ]; then
+            cp "${src_bin}" "dist/${{ matrix.artifact_suffix }}/"
+            cd "dist/${{ matrix.artifact_suffix }}"
+            sha256sum "${bin_name}" > "${bin_name}.sha256"
+          fi
+
+      - name: Upload Packaged Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app_name }}-${{ matrix.artifact_suffix }}
+          path: dist/${{ matrix.artifact_suffix }}/
+          retention-days: 30
+
+  build-mobile:
+    name: Build Mobile (Android APK & iOS Bundle)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.x'
+          channel: 'stable'
+
+      - name: Install Rust Toolchain & Android Targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Run Mobile Packaging Script
+        run: |
+          chmod +x scripts/package-mobile.sh
+          ./scripts/package-mobile.sh "${{ inputs.version }}" "dist/mobile"
+        shell: bash
+
+      - name: Upload Mobile Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app_name }}-mobile
+          path: dist/mobile/
+          retention-days: 30
+
+  publish-release:
+    name: Publish Release & Generate CycloneDX SBOM
+    needs: [build-desktop, build-mobile]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Install cargo-cyclonedx
+        uses: taiki-e/install-action@cargo-cyclonedx
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          cargo cyclonedx --package ${{ inputs.app_name }} --format json --output-pattern "${{ inputs.app_name }}-sbom.json"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "${{ inputs.app_display_name }} v${{ inputs.version }}"
+          tag_name: "${{ inputs.app_name }}-v${{ inputs.version }}"
+          files: |
+            ${{ inputs.app_name }}-*/*
+            ${{ inputs.app_name }}-sbom.json
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+

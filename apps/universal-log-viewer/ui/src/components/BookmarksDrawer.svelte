@@ -14,7 +14,7 @@
 
 {#if isOpen}
   <!-- Backdrop -->
-  <div class="backdrop" on:click={() => dispatch('close')} on:keydown={() => {}}></div>
+  <div class="backdrop" role="button" tabindex="0" on:click={() => dispatch('close')} on:keydown={(e) => e.key === 'Escape' && dispatch('close')}></div>
 
   <!-- Drawer -->
   <aside class="drawer glass-panel">
@@ -37,8 +37,14 @@
       {:else}
         <ul class="bookmark-list">
           {#each bookmarks as bm (bm.id)}
-            <li class="bookmark-item" on:click={() => dispatch('jumpToLine', bm.line_number)} on:keydown={() => {}}>
-              <div class="bm-info">
+            <li class="bookmark-item">
+              <div
+                class="bm-info"
+                role="button"
+                tabindex="0"
+                on:click={() => dispatch('jumpToLine', bm.line_number)}
+                on:keydown={(e) => (e.key === 'Enter' || e.key === ' ') && dispatch('jumpToLine', bm.line_number)}
+              >
                 <span class="badge line-badge">Line {bm.line_number + 1}</span>
                 <span class="bm-label">{bm.label}</span>
               </div>

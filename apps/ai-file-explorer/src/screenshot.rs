@@ -303,4 +303,23 @@ mod tests {
             PathBuf::from("/screenshots/terminal_err.png")
         );
     }
+
+    #[test]
+    fn test_screenshot_indexing_with_rendered_image_roundtrip() {
+        let catalog = ScreenshotCatalog::new();
+        let gray = crate::ocr::render_text_to_gray_image("ALERT 99", 80, 20);
+        let bmp_bytes = crate::ocr::encode_gray_to_bmp(&gray);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let img_path = temp_dir.path().join("alert.bmp");
+        std::fs::write(&img_path, bmp_bytes).unwrap();
+
+        let fp = catalog.index_screenshot(&img_path).unwrap();
+        assert!(fp.ocr_text.contains("ALERT"));
+        assert!(fp.dhash != 0);
+
+        let search_hits = catalog.search_by_ocr_text("ALERT", 5);
+        assert_eq!(search_hits.len(), 1);
+        assert_eq!(search_hits[0].path, img_path);
+    }
 }

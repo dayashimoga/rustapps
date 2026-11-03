@@ -75,7 +75,9 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "shared-ai-core",
  "shared-indexing",
+ "shared-licensing",
  "shared-logging",
  "shared-plugins",
  "shared-search",
@@ -178,6 +180,7 @@ dependencies = [
  "ai-file-explorer",
  "criterion",
  "devops-secret-vault",
+ "pro-av-editor",
  "rusqlite",
  "shared-encryption",
  "shared-search",
@@ -185,6 +188,7 @@ dependencies = [
  "shared-telemetry",
  "tempfile",
  "tokio",
+ "universal-live-translator",
  "universal-log-viewer",
 ]
 
@@ -561,6 +565,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shared-encryption",
+ "shared-licensing",
  "shared-logging",
  "shared-search",
  "shared-settings",
@@ -854,6 +859,7 @@ dependencies = [
  "ai-file-explorer",
  "devops-secret-vault",
  "platform-common",
+ "pro-av-editor",
  "rusqlite",
  "shared-encryption",
  "shared-indexing",
@@ -866,6 +872,7 @@ dependencies = [
  "shared-updater",
  "tempfile",
  "tokio",
+ "universal-live-translator",
 ]
 
 [[package]]
@@ -1206,11 +1213,15 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 name = "platform-common"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
+ "rand",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -1266,6 +1277,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
+]
+
+[[package]]
+name = "pro-av-editor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "platform-common",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "shared-ai-core",
+ "shared-licensing",
+ "shared-logging",
+ "shared-media-core",
+ "shared-model-hub",
+ "shared-settings",
+ "shared-storage",
+ "shared-telemetry",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]
@@ -1552,6 +1590,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "shared-ai-core"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "shared-encryption"
 version = "0.1.0"
 dependencies = [
@@ -1580,6 +1629,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "shared-licensing"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "rand",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "shared-logging"
 version = "0.1.0"
 dependencies = [
@@ -1588,6 +1650,31 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "shared-media-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "shared-model-hub"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "rand",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shared-storage",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]
@@ -1631,13 +1718,17 @@ dependencies = [
 name = "shared-storage"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "memmap2",
+ "rand",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -2157,6 +2248,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "universal-live-translator"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "platform-common",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "shared-ai-core",
+ "shared-licensing",
+ "shared-logging",
+ "shared-media-core",
+ "shared-model-hub",
+ "shared-settings",
+ "shared-storage",
+ "shared-telemetry",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zeroize",
+]
+
+[[package]]
 name = "universal-log-viewer"
 version = "0.1.0"
 dependencies = [
@@ -2170,6 +2288,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shared-indexing",
+ "shared-licensing",
  "shared-logging",
  "shared-plugins",
  "shared-search",

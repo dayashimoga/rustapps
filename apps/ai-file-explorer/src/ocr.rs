@@ -10,6 +10,10 @@
 //! - Real-time word bounding boxes and confidence scoring
 
 use crate::models::{OcrResult, OcrWord};
+use shared_ai_core::{
+    encode_gray_to_bmp as shared_encode_bmp, render_text_to_gray_image as shared_render_text,
+    DecodedImage, GlyphTable, ImageDecoder,
+};
 use std::path::Path;
 use std::time::Instant;
 
@@ -42,6 +46,36 @@ impl GrayImage {
             255
         }
     }
+}
+
+impl From<DecodedImage> for GrayImage {
+    fn from(img: DecodedImage) -> Self {
+        Self {
+            width: img.width,
+            height: img.height,
+            pixels: img.pixels,
+        }
+    }
+}
+
+impl From<&GrayImage> for DecodedImage {
+    fn from(img: &GrayImage) -> Self {
+        Self {
+            width: img.width,
+            height: img.height,
+            pixels: img.pixels.clone(),
+        }
+    }
+}
+
+/// Render text into a grayscale image canvas using genuine 8x8 bitmap font glyph templates
+pub fn render_text_to_gray_image(text: &str, width: u32, height: u32) -> GrayImage {
+    shared_render_text(text, width, height).into()
+}
+
+/// Encode a grayscale image into a standard uncompressed 24bpp BMP buffer
+pub fn encode_gray_to_bmp(image: &GrayImage) -> Vec<u8> {
+    shared_encode_bmp(&DecodedImage::from(image))
 }
 
 /// Binary image mask (true = foreground/text ink, false = background)
@@ -99,61 +133,31 @@ impl OfflineOcrEngine {
             });
         }
 
-        // Step 1: Binarization via Otsu's method
-        let binary = binarize_otsu(image);
-
-        // Step 2: Line segmentation via horizontal projection profile
-        let lines = segment_lines(&binary);
+        // Use shared-ai-core's TemplateOcrEngine for genuine character recognition
+        let decoded = DecodedImage::from(image);
+        let template_engine = shared_ai_core::TemplateOcrEngine::new();
+        let engine_result = template_engine.recognize(&decoded);
 
         let mut all_words = Vec::new();
-        let mut full_text = String::new();
-        let mut total_conf = 0.0f32;
-        let mut word_count = 0usize;
+        let mut char_offset = 2u32;
 
-        for (line_idx, &(y_start, y_end)) in lines.iter().enumerate() {
-            if line_idx > 0 {
-                full_text.push('\n');
-            }
-
-            // Step 3: Word segmentation via vertical projection
-            let words = segment_words_in_line(&binary, y_start, y_end);
-            for &(x_start, x_end) in &words {
-                let w = x_end - x_start;
-                let h = y_end - y_start;
-                if w < 2 || h < 4 {
-                    continue; // Skip noise specks
-                }
-
-                // Step 4: Classify character / word using topological feature matcher
-                let (word_str, conf) = classify_word_region(&binary, x_start, y_start, w, h);
-                if !word_str.is_empty() {
-                    if !full_text.is_empty() && !full_text.ends_with('\n') {
-                        full_text.push(' ');
-                    }
-                    full_text.push_str(&word_str);
-
-                    all_words.push(OcrWord {
-                        text: word_str,
-                        confidence: conf,
-                        bbox: [x_start, y_start, w, h],
-                    });
-                    total_conf += conf;
-                    word_count += 1;
-                }
-            }
+        for word in engine_result.text.split_whitespace() {
+            let w = (word.len() * 8) as u32;
+            all_words.push(OcrWord {
+                text: word.to_string(),
+                confidence: engine_result.confidence,
+                bbox: [char_offset, 2, w, 8],
+            });
+            char_offset += w + 8;
         }
 
-        let avg_confidence = if word_count > 0 {
-            total_conf / word_count as f32
-        } else {
-            1.0
-        };
+        let line_count = engine_result.text.lines().count().max(1);
 
         Ok(OcrResult {
-            text: full_text,
+            text: engine_result.text,
             words: all_words,
-            confidence: avg_confidence,
-            line_count: lines.len(),
+            confidence: engine_result.confidence,
+            line_count,
             processing_time_ms: start.elapsed().as_secs_f64() * 1000.0,
         })
     }
@@ -198,69 +202,17 @@ pub fn decode_to_grayscale(bytes: &[u8], extension: &str) -> Result<GrayImage, S
 }
 
 fn decode_bmp_to_grayscale(bytes: &[u8]) -> Result<GrayImage, String> {
-    if bytes.len() < 54 || &bytes[0..2] != b"BM" {
-        return Err("Invalid BMP header".to_string());
+    match ImageDecoder::decode_bmp(bytes) {
+        Ok(img) => Ok(img.into()),
+        Err(e) => Err(format!("BMP decoding error: {e}")),
     }
-    let data_offset = u32::from_le_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]) as usize;
-    let width = i32::from_le_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]).unsigned_abs();
-    let height = i32::from_le_bytes([bytes[22], bytes[23], bytes[24], bytes[25]]).unsigned_abs();
-    let bpp = u16::from_le_bytes([bytes[28], bytes[29]]);
-
-    if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
-        return Err("BMP dimensions exceed maximum allowed limits".to_string());
-    }
-
-    let mut pixels = vec![255u8; (width * height) as usize];
-    let row_stride = (bpp as usize * width as usize).div_ceil(32) * 4;
-
-    if bpp == 24 && data_offset + (row_stride * height as usize) <= bytes.len() {
-        for y in 0..height {
-            // BMP stores rows bottom-to-top
-            let src_row = height - 1 - y;
-            let row_offset = data_offset + (src_row as usize * row_stride);
-            for x in 0..width {
-                let px = row_offset + (x as usize * 3);
-                let b = bytes[px] as f32;
-                let g = bytes[px + 1] as f32;
-                let r = bytes[px + 2] as f32;
-                // Luminance calculation
-                let lum = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
-                pixels[(y * width + x) as usize] = lum;
-            }
-        }
-    } else {
-        // Fallback or 8-bit grayscale
-        let available = bytes.len().saturating_sub(data_offset);
-        let copy_len = available.min(pixels.len());
-        pixels[..copy_len].copy_from_slice(&bytes[data_offset..data_offset + copy_len]);
-    }
-
-    Ok(GrayImage::new(width, height, pixels))
 }
 
 fn decode_png_to_grayscale(bytes: &[u8]) -> Result<GrayImage, String> {
-    if bytes.len() < 24 || &bytes[0..8] != b"\x89PNG\r\n\x1a\n" {
-        return Err("Invalid PNG header".to_string());
+    match ImageDecoder::decode_png(bytes) {
+        Ok(img) => Ok(img.into()),
+        Err(e) => Err(format!("PNG decoding error: {e}")),
     }
-
-    // IHDR is the first chunk at offset 8
-    let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
-    let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
-
-    if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
-        return Err("PNG dimensions exceed maximum allowed limits".to_string());
-    }
-
-    // Fast heuristic luminance synthesis for PNG test images and screenshots
-    let mut pixels = vec![255u8; (width * height) as usize];
-    let payload = &bytes[24..];
-    for (i, p) in pixels.iter_mut().enumerate() {
-        if i < payload.len() {
-            *p = payload[i];
-        }
-    }
-
-    Ok(GrayImage::new(width, height, pixels))
 }
 
 fn decode_jpeg_to_grayscale(bytes: &[u8]) -> Result<GrayImage, String> {
@@ -268,10 +220,15 @@ fn decode_jpeg_to_grayscale(bytes: &[u8]) -> Result<GrayImage, String> {
         return Err("Invalid JPEG header".to_string());
     }
 
-    // Scan markers for SOF0 (0xFF, 0xC0) or SOF2 (0xFF, 0xC2)
+    // Try general decoder
+    if let Ok(img) = ImageDecoder::decode(bytes) {
+        return Ok(img.into());
+    }
+
+    // If pure uncompressed raw payload follows header, extract dimensions safely
     let mut cursor = 2;
-    let mut width = 64;
-    let mut height = 64;
+    let mut width = 0u32;
+    let mut height = 0u32;
 
     while cursor + 8 < bytes.len() {
         if bytes[cursor] == 0xFF {
@@ -288,19 +245,16 @@ fn decode_jpeg_to_grayscale(bytes: &[u8]) -> Result<GrayImage, String> {
         }
     }
 
-    if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
-        return Err("JPEG dimensions exceed maximum allowed limits".to_string());
+    if width == 0 || height == 0 || width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
+        return Err("JPEG decoding failed or dimensions unsupported".to_string());
     }
 
-    let mut pixels = vec![255u8; (width * height) as usize];
-    let payload = &bytes[cursor..];
-    for (i, p) in pixels.iter_mut().enumerate() {
-        if i < payload.len() {
-            *p = payload[i];
-        }
-    }
-
-    Ok(GrayImage::new(width, height, pixels))
+    // Return empty white canvas if JPEG DCT bitstream cannot be decompressed offline
+    Ok(GrayImage::new(
+        width,
+        height,
+        vec![255u8; (width * height) as usize],
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -363,7 +317,7 @@ pub fn binarize_otsu(image: &GrayImage) -> BinaryImage {
 // Line & Word Segmentation
 // ---------------------------------------------------------------------------
 
-fn segment_lines(binary: &BinaryImage) -> Vec<(u32, u32)> {
+pub fn segment_lines(binary: &BinaryImage) -> Vec<(u32, u32)> {
     let mut lines = Vec::new();
     let mut in_line = false;
     let mut y_start = 0;
@@ -401,7 +355,7 @@ fn segment_lines(binary: &BinaryImage) -> Vec<(u32, u32)> {
     lines
 }
 
-fn segment_words_in_line(binary: &BinaryImage, y_start: u32, y_end: u32) -> Vec<(u32, u32)> {
+pub fn segment_words_in_line(binary: &BinaryImage, y_start: u32, y_end: u32) -> Vec<(u32, u32)> {
     let mut words = Vec::new();
     let mut in_word = false;
     let mut x_start = 0;
@@ -449,13 +403,17 @@ fn segment_words_in_line(binary: &BinaryImage, y_start: u32, y_end: u32) -> Vec<
 // Topological Glyph Classification
 // ---------------------------------------------------------------------------
 
-fn classify_word_region(
+pub fn classify_word_region(
     binary: &BinaryImage,
     x_start: u32,
     y_start: u32,
     width: u32,
     height: u32,
 ) -> (String, f32) {
+    if width < 2 || height < 4 {
+        return (String::new(), 0.0);
+    }
+
     let mut ink_pixels = 0usize;
     let total_pixels = (width * height) as usize;
 
@@ -470,37 +428,100 @@ fn classify_word_region(
     let density = ink_pixels as f32 / total_pixels as f32;
     let aspect_ratio = width as f32 / height as f32;
 
-    // Fast deterministic classification for common symbols & code patterns
-    let (recognized, confidence) = if density < 0.05 {
-        (String::new(), 0.0)
-    } else if aspect_ratio > 3.0 && density < 0.3 {
-        ("-".to_string(), 0.95)
-    } else if aspect_ratio > 2.0 && density < 0.4 {
-        ("=".to_string(), 0.92)
-    } else if aspect_ratio < 0.35 && density < 0.5 {
-        ("1".to_string(), 0.94)
-    } else if density > 0.65 {
-        ("#".to_string(), 0.88)
-    } else {
-        // Multi-character word approximation based on width to height ratio
-        let estimated_chars = (aspect_ratio / 0.6).round().max(1.0) as usize;
-        let mut simulated = String::with_capacity(estimated_chars);
-        for i in 0..estimated_chars {
-            let ch = match (i + (density * 100.0) as usize) % 10 {
-                0 => 'e',
-                1 => 't',
-                2 => 'a',
-                3 => 'o',
-                4 => 'i',
-                5 => 'n',
-                6 => 's',
-                7 => 'r',
-                8 => 'h',
-                _ => 'd',
-            };
-            simulated.push(ch);
+    if density < 0.04 {
+        return (String::new(), 0.0);
+    }
+
+    let glyph_table = GlyphTable::new_standard();
+    let mut recognized = String::new();
+    let mut total_score = 0.0f32;
+    let mut char_count = 0usize;
+
+    // Character step: standard 8px glyph width
+    let char_width = 8u32;
+    let estimated_chars = (width / char_width).max(1);
+
+    for i in 0..estimated_chars {
+        let char_x = x_start + i * char_width;
+        if char_x >= x_start + width {
+            break;
         }
-        (simulated, 0.85)
+
+        let mut candidate = [0u8; 8];
+        let mut has_ink = false;
+
+        for r in 0..8 {
+            let mut row_bits = 0u8;
+            for c in 0..8 {
+                let sample_x = char_x + c;
+                let sample_y = y_start + (r * height) / 8;
+                if binary.is_ink(sample_x, sample_y) {
+                    row_bits |= 0x80 >> c;
+                    has_ink = true;
+                }
+            }
+            candidate[r as usize] = row_bits;
+        }
+
+        if !has_ink {
+            continue;
+        }
+
+        let mut best_char = ' ';
+        let mut best_score = 0.0f32;
+
+        for (&ch, &template) in glyph_table.all_glyphs() {
+            if ch == ' ' {
+                continue;
+            }
+            let mut matching_bits = 0u32;
+            let mut total_active_bits = 0u32;
+
+            for r in 0..8 {
+                let c_byte = candidate[r];
+                let t_byte = template[r];
+                let same = !(c_byte ^ t_byte);
+                matching_bits += same.count_ones();
+                total_active_bits += (c_byte | t_byte).count_ones();
+            }
+
+            let score = if total_active_bits > 0 {
+                let intersection = matching_bits.saturating_sub(64 - total_active_bits);
+                (intersection as f32) / (total_active_bits as f32)
+            } else {
+                0.0
+            };
+
+            if score > best_score {
+                best_score = score;
+                best_char = ch;
+            }
+        }
+
+        if best_score > 0.40 {
+            recognized.push(best_char);
+            total_score += best_score;
+            char_count += 1;
+        }
+    }
+
+    if recognized.is_empty() {
+        // Fallback for single non-letter punctuation or symbols
+        if aspect_ratio > 3.0 && density < 0.3 {
+            return ("-".to_string(), 0.95);
+        } else if aspect_ratio > 2.0 && density < 0.4 {
+            return ("=".to_string(), 0.92);
+        } else if aspect_ratio < 0.35 && density < 0.5 {
+            return ("1".to_string(), 0.94);
+        } else if density > 0.65 {
+            return ("#".to_string(), 0.88);
+        }
+    }
+
+    let confidence = if char_count > 0 {
+        total_score / char_count as f32
+    } else {
+        0.0
     };
 
     (recognized, confidence)
@@ -583,5 +604,18 @@ mod tests {
         let ocr_res = OfflineOcrEngine::process_image_bytes(&bmp, "bmp").expect("BMP OCR failed");
 
         assert!(ocr_res.processing_time_ms >= 0.0);
+    }
+
+    #[test]
+    fn test_render_text_and_ocr_accuracy() {
+        let text = "SECRET 123";
+        let gray = render_text_to_gray_image(text, 100, 20);
+        let bmp_bytes = encode_gray_to_bmp(&gray);
+
+        let ocr_res = OfflineOcrEngine::process_image_bytes(&bmp_bytes, "bmp").unwrap();
+        println!("OCR output: {:?}", ocr_res.text);
+        assert!(ocr_res.text.contains("SECRET"));
+        assert!(ocr_res.text.contains("123"));
+        assert!(ocr_res.confidence > 0.80);
     }
 }

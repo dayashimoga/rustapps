@@ -1,0 +1,21 @@
+name: Release Universal Live Translator
+
+on:
+  push:
+    tags:
+      - 'universal-live-translator-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string (e.g. 0.1.0)'
+        required: true
+        default: '0.1.0'
+
+jobs:
+  release:
+    uses: ./.github/workflows/reusable-app-release.yml
+    with:
+      app_name: 'universal-live-translator'
+      app_display_name: 'Universal Live Translator'
+      version: ${{ inputs.version || github.ref_name }}
+

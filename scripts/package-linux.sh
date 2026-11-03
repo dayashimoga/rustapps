@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Linux Packaging Automation Script (ADR-0030)
-# Packages DevOps Secret Vault, AI File Explorer, and Universal Log Viewer for Linux (x64 / ARM64)
+# Packages DevOps Secret Vault, AI File Explorer, Universal Log Viewer, Universal Live Translator, and Pro AV Editor for Linux (x64 / ARM64)
 set -euo pipefail
 
 TARGET="${1:-x86_64-unknown-linux-gnu}"
@@ -11,7 +11,7 @@ echo "=========================================================="
 echo "  Packaging Monorepo Apps for Linux (${TARGET}) v${VERSION}"
 echo "=========================================================="
 
-APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer")
+APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor")
 mkdir -p "${OUTPUT_DIR}"
 
 # 1. Compile Release Binaries

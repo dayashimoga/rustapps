@@ -222,3 +222,63 @@ pub fn parse_azure_json(
 pub fn parse_terraform_vars(content: &str) -> std::collections::HashMap<String, String> {
     crate::cloud_creds::TerraformSecret::parse_tfvars(content)
 }
+
+/// Verify tamper-evident cryptographic hash chain of audit logs
+pub async fn verify_audit_chain(service: &VaultService) -> Result<bool, String> {
+    service
+        .verify_audit_chain()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Check if native biometric unlock is supported and enrolled
+pub fn is_biometric_available(service: &VaultService) -> bool {
+    service.is_biometric_available()
+}
+
+/// Enable biometric unlock using active vault master key
+pub async fn enable_biometric_unlock(service: &VaultService) -> Result<(), String> {
+    service
+        .enable_biometric_unlock()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Disable biometric unlock and purge key from OS keyring
+pub fn disable_biometric_unlock(service: &VaultService) -> Result<(), String> {
+    service
+        .disable_biometric_unlock()
+        .map_err(|e| e.to_string())
+}
+
+/// Unlock vault with native OS biometrics (Windows Hello, Touch ID, Polkit)
+pub async fn unlock_with_biometrics(service: &VaultService) -> Result<(), String> {
+    service
+        .unlock_with_biometrics()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Split vault master key into k-of-n Shamir shares (Business Tier)
+pub async fn split_master_key(
+    service: &VaultService,
+    threshold: u8,
+    total_shares: u8,
+) -> Result<Vec<crate::shamir::ShamirShare>, String> {
+    let gate = shared_licensing::TierGate::enterprise();
+    service
+        .split_master_key(threshold, total_shares, &gate)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Unlock vault using k-of-n Shamir shares
+pub async fn unlock_with_shamir_shares(
+    service: &VaultService,
+    shares: Vec<crate::shamir::ShamirShare>,
+) -> Result<(), String> {
+    service
+        .unlock_with_shamir_shares(&shares)
+        .await
+        .map_err(|e| e.to_string())
+}

@@ -21,3 +21,5 @@ shared-telemetry.workspace = true
 shared-settings.workspace = true
 devops-secret-vault = { path = "../apps/devops-secret-vault" }
 ai-file-explorer = { path = "../apps/ai-file-explorer" }
+universal-live-translator = { path = "../apps/universal-live-translator" }
+pro-av-editor = { path = "../apps/pro-av-editor" }

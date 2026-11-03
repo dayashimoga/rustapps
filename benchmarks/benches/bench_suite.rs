@@ -620,6 +620,90 @@ fn benchmark_file_explorer_advanced_features(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_universal_live_translator(c: &mut Criterion) {
+    use ult_core::{
+        LanguageCode, LanguageDetector, OfflineTranslationEngine, SubtitleFormat,
+        SubtitleTranslator, TranslationRequest, TtsSynthesizer,
+    };
+
+    let mut group = c.benchmark_group("universal_live_translator");
+
+    // 1. Automatic Language Identification (< 500µs SLA)
+    let detector = LanguageDetector::new();
+    let sample_texts = [
+        "Hello world, welcome to real-time offline machine translation.",
+        "Bonjour tout le monde, bienvenue dans la traduction automatique hors ligne.",
+        "Guten Tag, willkommen bei der Echtzeit-Offline-Übersetzung.",
+        "Hola mundo, bienvenido a la traducción automática sin conexión.",
+        "Привет мир, добро пожаловать в автономный переводчик.",
+    ];
+
+    group.bench_function("ult_lid_latency_sub_500us", |b| {
+        let mut idx = 0;
+        b.iter(|| {
+            let text = sample_texts[idx % sample_texts.len()];
+            idx += 1;
+            let res = detector.detect(black_box(text));
+            black_box(res);
+        });
+    });
+
+    // 2. Offline Neural Machine Translation (< 150ms SLA)
+    let nmt = OfflineTranslationEngine::new();
+    let req = TranslationRequest {
+        text: "The patient was admitted to the hospital with acute myocardial infarction."
+            .to_string(),
+        source_lang: Some(LanguageCode::En),
+        target_lang: LanguageCode::Es,
+        preserve_formatting: false,
+        domain_glossary: None,
+    };
+
+    group.bench_function("ult_nmt_latency_sub_150ms", |b| {
+        b.iter(|| {
+            let res = nmt.translate(black_box(&req));
+            black_box(res).unwrap();
+        });
+    });
+
+    // 3. Formant Text-to-Speech (TTS) synthesis
+    let tts = TtsSynthesizer::new();
+    let tts_req = ult_core::TtsSynthesisRequest {
+        text: "Hello world, this is formant audio synthesis.".to_string(),
+        language: LanguageCode::En,
+        speaking_rate: 1.0,
+        pitch: 1.0,
+        sample_rate: 22050,
+    };
+    group.bench_function("ult_tts_formant_synthesis", |b| {
+        b.iter(|| {
+            let res = tts.synthesize(black_box(&tts_req));
+            black_box(res).unwrap();
+        });
+    });
+
+    // 4. Subtitle SRT cue translation & millisecond timestamp preservation
+    let sub_translator = SubtitleTranslator::new(
+        std::sync::Arc::new(nmt),
+        std::sync::Arc::new(ult_core::BatchSpeechRecognizer::new()),
+    );
+    let srt_content = "1\n00:00:01,000 --> 00:00:04,000\nHello and welcome.\n\n2\n00:00:05,000 --> 00:00:08,000\nOffline translation is fast.\n";
+
+    group.bench_function("ult_subtitle_srt_translation", |b| {
+        b.iter(|| {
+            let res = sub_translator.translate_subtitle_file(
+                black_box(srt_content),
+                black_box(SubtitleFormat::Srt),
+                black_box(Some(LanguageCode::En)),
+                black_box(LanguageCode::Es),
+            );
+            black_box(res).unwrap();
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -634,6 +718,7 @@ criterion_group!(
     benchmark_vault_search_and_crypto,
     benchmark_vault_advanced_features,
     benchmark_file_explorer_operations,
-    benchmark_file_explorer_advanced_features
+    benchmark_file_explorer_advanced_features,
+    benchmark_universal_live_translator
 );
 criterion_main!(benches);

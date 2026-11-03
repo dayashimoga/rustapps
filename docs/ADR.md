@@ -530,4 +530,43 @@ This document records the foundational architectural decisions made for the mono
 - **Rationale:** Balances enterprise-grade security with modern mobile ergonomics without sending data across network interfaces.
 - **Consequences:** Devices lacking biometric hardware or user enrollment gracefully fall back to master password entry.
 
+---
+
+## ADR-0034: 100% Offline Real-Time Translation, Speech Processing & Formant Synthesis
+
+- **Status:** Approved
+- **Date:** 2026-11-03
+- **Problem:** Real-time speech translation, language identification, and voice synthesis require low-latency execution (<150ms text, <400ms speech) across 32 languages while operating strictly 100% offline with zero cloud API dependencies.
+- **Alternatives Considered:**
+  1. *Cloud translation APIs (Google Cloud Translate, DeepL, Azure Speech):* Breaches air-gap contract and incurs ongoing operational costs and latency.
+  2. *Large multimodal transformer weights (>10GB LLMs):* Violates desktop/mobile RAM budgets and cold startup constraints.
+  3. *Tiered offline architecture:*
+     - Language Identification (LID): Unicode script categorization and n-gram frequency matrices (<500µs SLA).
+     - Neural Machine Translation (NMT): Quantized ONNX/pure-Rust local matrix projection with sub-150ms latency and domain glossary overrides.
+     - Speech Processing: Real-time mel-filterbank extraction, energy VAD, and pure-Rust formant acoustic speech synthesis (22.05kHz WAV).
+- **Decision:** Implement `apps/universal-live-translator` using lightweight, quantized offline acoustic models, pure-Rust formant synthesis, and SQLite WAL phrasebook persistence.
+- **Rationale:** Guarantees absolute offline autonomy, air-gapped security for sensitive conversations, and predictable sub-150ms translation response.
+- **Consequences:** Initial model weights must be pre-bundled or downloaded through user-initiated, cryptographically verified channels (`shared/model-hub`).
+
+---
+
+## ADR-0035: Non-Destructive Multi-Track Video/Audio Compositor, 60 FPS Render SLA & Offline AI Auto-Editing
+
+- **Status:** Approved
+- **Date:** 2026-11-03
+- **Problem:** Professional non-linear editing (NLE) requires multi-track timeline DAG compositing, 3-way color grading, studio audio DSP, and AI auto-editing with a 60 FPS preview SLA (<16.6ms per frame) on standard consumer hardware.
+- **Alternatives Considered:**
+  1. *Heavyweight FFmpeg CLI child process wrappers:* High process-spawn overhead, sluggish timeline scrubbing, and cross-platform binary distribution complexity.
+  2. *WebCodecs / Canvas-only browser rendering:* Limited to webview context; lacks native C-ABI FFI integration for mobile targets.
+  3. *Pure-Rust SIMD/GPU Compositor with Transactional CommandHistory:*
+     - Timeline DAG: Clips, tracks, keyframed transforms, magnetic snapping, and unlimited transactional undo/redo via `CommandHistory`.
+     - 60 FPS Compositor: SIMD blend modes, alpha compositing, green-screen chroma key removal with despill, and BMP streaming to webview/mobile canvas.
+     - 3-Way Color Grading: Adobe 3D `.cube` LUT parser with trilinear interpolation and real-time video scopes (RGB histogram, waveform, vectorscope).
+     - Audio Engine: 8-band Biquad Parametric EQ, compressor, EBU R128 loudness metering, and 16-bit linear PCM WAV master export.
+     - AI Suite: Perceptual visual scene-cut detection, silence ripple-cutter, and CMX 3600 EDL / FCPXML exporters.
+- **Decision:** Build `apps/pro-av-editor` (`pave_core`) around a modular, non-destructive Rust DAG with C-ABI FFI, Tauri IPC, Svelte 5 Studio UI, and Flutter mobile editor.
+- **Rationale:** Ensures guaranteed 60 FPS preview rendering, lossless audio DSP, and professional NLE interoperability while preserving 100% offline autonomy.
+- **Consequences:** Rendering 4K multi-layer composites requires multi-threaded tile/row processing and bounded memory caching.
+
+
 

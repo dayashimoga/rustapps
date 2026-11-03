@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 /// Standard vector dimensionality for the quantized embedding model
-pub const VECTOR_DIM: usize = 64;
+pub const VECTOR_DIM: usize = shared_ai_core::EMBEDDING_DIM;
 
-/// In-memory vector index for semantic similarity search
+/// In-memory vector index for semantic similarity search with disk persistence
 pub struct VectorIndex {
     embeddings: RwLock<HashMap<PathBuf, VectorEmbedding>>,
 }
@@ -34,7 +34,7 @@ impl VectorIndex {
         }
     }
 
-    /// Indexes a document's textual content by generating and storing its 64-dim embedding
+    /// Indexes a document's textual content by generating and storing its dense embedding
     pub fn index_document<P: AsRef<Path>>(&self, path: P, text: &str) -> VectorEmbedding {
         let embedding = LocalEmbeddingModel::infer_embedding(path.as_ref(), text);
         if let Ok(mut lock) = self.embeddings.write() {
@@ -65,6 +65,27 @@ impl VectorIndex {
     /// Returns whether the vector index is empty
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Save vector index to disk at specified path
+    pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> Result<(), std::io::Error> {
+        let lock = self
+            .embeddings
+            .read()
+            .map_err(|e| std::io::Error::other(format!("Lock error: {e}")))?;
+        let json = serde_json::to_string(&*lock)
+            .map_err(|e| std::io::Error::other(format!("Serialization error: {e}")))?;
+        std::fs::write(path.as_ref(), json)
+    }
+
+    /// Load vector index from disk at specified path
+    pub fn load_from_path<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
+        let data = std::fs::read_to_string(path.as_ref())?;
+        let map: HashMap<PathBuf, VectorEmbedding> = serde_json::from_str(&data)
+            .map_err(|e| std::io::Error::other(format!("Deserialization error: {e}")))?;
+        Ok(Self {
+            embeddings: RwLock::new(map),
+        })
     }
 
     /// Performs nearest-neighbor cosine similarity search for a natural language query
@@ -119,69 +140,17 @@ impl VectorIndex {
 pub struct LocalEmbeddingModel;
 
 impl LocalEmbeddingModel {
-    /// Generates a 64-dimensional quantized 8-bit embedding vector from text
+    /// Generates a normalized dense quantized 8-bit embedding vector from text using concept-aware semantic subspaces
     pub fn infer_embedding(doc_path: &Path, text: &str) -> VectorEmbedding {
-        let mut float_vec = [0.0f32; VECTOR_DIM];
+        let engine = shared_ai_core::ConceptEmbeddingEngine::new_standard();
+        let dense = engine.embed_text(text);
 
-        // Clean & tokenize text into lowercased tokens and character n-grams
-        let text_lower = text.to_lowercase();
-        let words: Vec<&str> = text_lower
-            .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
-            .filter(|w| !w.is_empty())
-            .collect();
-
-        if words.is_empty() {
-            return VectorEmbedding {
-                doc_path: doc_path.to_path_buf(),
-                vector: vec![0i8; VECTOR_DIM],
-                dimension: VECTOR_DIM,
-                magnitude: 0.0,
-            };
-        }
-
-        // Token and subword n-gram projection with positional weighting
-        for (pos, word) in words.iter().enumerate() {
-            let pos_decay = 1.0 / (1.0 + (pos as f32 * 0.05));
-
-            // Whole-word hash projection
-            let w_hash = hash_token(word);
-            let dim1 = (w_hash as usize) % VECTOR_DIM;
-            let sign1 = if (w_hash >> 16) & 1 == 1 { 1.0 } else { -1.0 };
-            float_vec[dim1] += sign1 * 2.0 * pos_decay;
-
-            // Character trigram hashes for subword capture (e.g. "error", "err", "ror")
-            let chars: Vec<char> = word.chars().collect();
-            if chars.len() >= 3 {
-                for i in 0..=chars.len() - 3 {
-                    let trigram: String = chars[i..i + 3].iter().collect();
-                    let t_hash = hash_token(&trigram);
-                    let dim2 = (t_hash as usize) % VECTOR_DIM;
-                    let sign2 = if (t_hash >> 16) & 1 == 1 { 1.0 } else { -1.0 };
-                    float_vec[dim2] += sign2 * 0.8 * pos_decay;
-                }
-            }
-        }
-
-        // Compute L2 norm for unit normalization
-        let mut sum_sq = 0.0f32;
-        for &val in &float_vec {
-            sum_sq += val * val;
-        }
-        let norm = sum_sq.sqrt();
-
-        // Quantize to [-127, 127]
         let mut quantized = Vec::with_capacity(VECTOR_DIM);
-        if norm > 0.0001 {
-            for &val in &float_vec {
-                let unit = val / norm;
-                let q = (unit * 127.0).round().clamp(-127.0, 127.0) as i8;
-                quantized.push(q);
-            }
-        } else {
-            quantized.resize(VECTOR_DIM, 0);
+        for &val in &dense.vector {
+            let q = (val * 127.0).round().clamp(-127.0, 127.0) as i8;
+            quantized.push(q);
         }
 
-        // Recompute actual quantized magnitude for exact cosine similarity
         let mut q_sum_sq = 0.0f32;
         for &q in &quantized {
             q_sum_sq += (q as f32) * (q as f32);
@@ -214,17 +183,6 @@ pub fn compute_cosine_similarity(a: &VectorEmbedding, b: &VectorEmbedding) -> f3
     ((sim + 1.0) / 2.0).clamp(0.0, 1.0)
 }
 
-/// Fast FNV-1a non-cryptographic token hasher
-#[inline]
-fn hash_token(token: &str) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for &byte in token.as_bytes() {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3u64);
-    }
-    hash
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,6 +195,53 @@ mod tests {
         );
         assert_eq!(emb.vector.len(), VECTOR_DIM);
         assert!(emb.magnitude > 0.0);
+    }
+
+    #[test]
+    fn test_concept_synonym_similarity() {
+        let doc_k8s = LocalEmbeddingModel::infer_embedding(
+            Path::new("/manifest.yaml"),
+            "k8s pod container deployment",
+        );
+        let doc_kube = LocalEmbeddingModel::infer_embedding(
+            Path::new("/cluster.tf"),
+            "kubernetes docker cluster",
+        );
+        let doc_db = LocalEmbeddingModel::infer_embedding(
+            Path::new("/init.sql"),
+            "postgres database query migration",
+        );
+
+        let sim_cloud = compute_cosine_similarity(&doc_k8s, &doc_kube);
+        let sim_cross = compute_cosine_similarity(&doc_k8s, &doc_db);
+
+        assert!(
+            sim_cloud > sim_cross,
+            "Cloud concepts (k8s/kubernetes) must have higher similarity: cloud={} cross={}",
+            sim_cloud,
+            sim_cross
+        );
+        assert!(sim_cloud > 0.80);
+    }
+
+    #[test]
+    fn test_vector_index_persistence() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let index_path = temp_dir.path().join("vectors.json");
+
+        let index = VectorIndex::new();
+        index.index_document("/docs/k8s.md", "kubernetes pod container deployment");
+        index.index_document("/docs/db.md", "postgres sql query database");
+
+        assert_eq!(index.len(), 2);
+        index.save_to_path(&index_path).unwrap();
+        assert!(index_path.exists());
+
+        let loaded = VectorIndex::load_from_path(&index_path).unwrap();
+        assert_eq!(loaded.len(), 2);
+
+        let hits = loaded.search("container deployment", 5);
+        assert_eq!(hits[0].path, PathBuf::from("/docs/k8s.md"));
     }
 
     #[test]

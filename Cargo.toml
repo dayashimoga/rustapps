@@ -11,9 +11,15 @@ members = [
     "shared/plugins",
     "shared/telemetry",
     "shared/settings",
+    "shared/licensing",
+    "shared/model-hub",
+    "shared/ai-core",
+    "shared/media-core",
     "apps/universal-log-viewer",
     "apps/devops-secret-vault",
     "apps/ai-file-explorer",
+    "apps/universal-live-translator",
+    "apps/pro-av-editor",
     "tests",
     "benchmarks",
 ]
@@ -78,6 +84,10 @@ shared-updater = { path = "shared/updater" }
 shared-plugins = { path = "shared/plugins" }
 shared-telemetry = { path = "shared/telemetry" }
 shared-settings = { path = "shared/settings" }
+shared-licensing = { path = "shared/licensing" }
+shared-model-hub = { path = "shared/model-hub" }
+shared-ai-core = { path = "shared/ai-core" }
+shared-media-core = { path = "shared/media-core" }
 
 [profile.dev]
 opt-level = 0

@@ -9,7 +9,7 @@ use shared_encryption::{
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::error::VaultError;
-use crate::models::SecretPayload;
+use crate::models::{EncryptedMetadataFields, SecretPayload};
 
 /// Magic token encrypted to verify master password correctness without storing plaintext
 pub const VAULT_VERIFIER_TOKEN: &[u8] = b"VAULT_VERIFIER_TOKEN_V1";
@@ -75,6 +75,14 @@ impl VaultKeyDerivationMetadata {
         let candidate_key = VaultMasterKey(key_bytes);
 
         // Verify key by attempting to decrypt the verifier token
+        self.verify_master_key(candidate_key)
+    }
+
+    /// Verify an already derived or reconstructed candidate master key against the verifier token
+    pub fn verify_master_key(
+        &self,
+        candidate_key: VaultMasterKey,
+    ) -> Result<VaultMasterKey, VaultError> {
         match decrypt_aes_gcm(&candidate_key.0, &self.verifier_ciphertext) {
             Ok(decrypted) if decrypted.as_slice() == VAULT_VERIFIER_TOKEN => Ok(candidate_key),
             _ => Err(VaultError::InvalidMasterPassword),
@@ -106,6 +114,30 @@ pub fn decrypt_secret_payload(
     let payload: SecretPayload = serde_json::from_slice(decrypted.as_slice())?;
     payload.validate()?;
     Ok(payload)
+}
+
+/// Encrypt sensitive metadata fields (username, url, notes, tags) using AES-256-GCM and the master key
+pub fn encrypt_metadata_fields(
+    master_key: &VaultMasterKey,
+    fields: &EncryptedMetadataFields,
+) -> Result<Vec<u8>, VaultError> {
+    let json_bytes = serde_json::to_vec(fields)?;
+    let ciphertext = encrypt_aes_gcm(&master_key.0, &json_bytes).map_err(VaultError::Crypto)?;
+    Ok(ciphertext)
+}
+
+/// Decrypt sensitive metadata fields using AES-256-GCM and the master key
+pub fn decrypt_metadata_fields(
+    master_key: &VaultMasterKey,
+    encrypted: &[u8],
+) -> Result<EncryptedMetadataFields, VaultError> {
+    let decrypted = decrypt_aes_gcm(&master_key.0, encrypted).map_err(|e| match e {
+        EncryptionError::DecryptionFailed => VaultError::Crypto(EncryptionError::DecryptionFailed),
+        other => VaultError::Crypto(other),
+    })?;
+
+    let fields: EncryptedMetadataFields = serde_json::from_slice(decrypted.as_slice())?;
+    Ok(fields)
 }
 
 #[cfg(test)]
@@ -144,5 +176,20 @@ mod tests {
 
         let decrypted = decrypt_secret_payload(&master_key, &encrypted).unwrap();
         assert_eq!(original_payload, decrypted);
+    }
+
+    #[test]
+    fn test_metadata_fields_encryption_roundtrip() {
+        let master_key = VaultMasterKey([0x77u8; 32]);
+        let original_fields = EncryptedMetadataFields {
+            tags: vec!["k8s".to_string(), "prod".to_string()],
+            username: Some("admin_user".to_string()),
+            url: Some("https://cluster.internal".to_string()),
+            notes: Some("High privilege token".to_string()),
+        };
+
+        let encrypted = encrypt_metadata_fields(&master_key, &original_fields).unwrap();
+        let decrypted = decrypt_metadata_fields(&master_key, &encrypted).unwrap();
+        assert_eq!(original_fields, decrypted);
     }
 }

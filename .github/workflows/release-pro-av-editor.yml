@@ -1,0 +1,21 @@
+name: Release Pro AV Editor
+
+on:
+  push:
+    tags:
+      - 'pro-av-editor-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string (e.g. 0.1.0)'
+        required: true
+        default: '0.1.0'
+
+jobs:
+  release:
+    uses: ./.github/workflows/reusable-app-release.yml
+    with:
+      app_name: 'pro-av-editor'
+      app_display_name: 'Professional Audio & Video Editor'
+      version: ${{ inputs.version || github.ref_name }}
+

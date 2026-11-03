@@ -10,14 +10,14 @@
 
 Performance is an explicit architectural constraint, not an afterthought. Every commit and release must satisfy the nonnegotiable Service Level Agreements (SLAs) defined below:
 
-| Metric | DevOps Secret Vault | AI File Explorer | Universal Log Viewer | SLA Gate (CI Block) |
-| :--- | :--- | :--- | :--- | :--- |
-| **Cold Startup Time** | $< 1,500\,\text{ms}$ | $< 2,000\,\text{ms}$ | $< 1,500\,\text{ms}$ | **$\ge 2,000\,\text{ms}$ Fails** |
-| **Search Query Latency** | $< 30\,\text{ms}$ (100k secrets) | $< 50\,\text{ms}$ (10M files) | $< 50\,\text{ms}$ (100GB log) | **$\ge 50\,\text{ms}$ Fails** |
-| **Peak Resident RAM (RSS)**| $< 120\,\text{MB}$ | $< 280\,\text{MB}$ | $< 250\,\text{MB}$ (500GB file) | **$\ge 300\,\text{MB}$ Fails** |
-| **Idle CPU Utilization**| $< 0.5\%$ | $< 1.0\%$ | $< 0.8\%$ | **$\ge 2.0\%$ Fails** |
-| **Throughput / Scan** | N/A | $> 100,000\,\text{files/s}$ | 100GB in $< 2\,\text{s}$ | **$> 2\,\text{s}$ Fails** |
-| **UI Render Frame Rate**| 60 FPS steady | 60 FPS steady | 60 FPS steady | **Any jank fails** |
+| Metric | Universal Log Viewer | DevOps Secret Vault | AI File Explorer | Universal Live Translator | Pro Audio & Video Editor | SLA Gate (CI Block) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Cold Startup Time** | $< 1,200\,\text{ms}$ | $< 1,200\,\text{ms}$ | $< 1,500\,\text{ms}$ | $< 1,500\,\text{ms}$ | $< 2,000\,\text{ms}$ | **$\ge 2,000\,\text{ms}$ Fails** |
+| **Primary Query / Op** | $< 50\,\text{ms}$ (100GB search) | $< 20\,\text{ms}$ (100k items) | $< 35\,\text{ms}$ (10M files) | $< 150\,\text{ms}$ text / $< 400\,\text{ms}$ ASR | $< 16.6\,\text{ms}$ frame render (60 FPS) | **Regression $> 5\%$ Fails** |
+| **Base Idle RAM (RSS)**| $< 180\,\text{MB}$ | $< 100\,\text{MB}$ | $< 220\,\text{MB}$ | $< 250\,\text{MB}$ (+ active model) | $< 350\,\text{MB}$ (+ frame cache) | **$\ge 400\,\text{MB}$ Fails** |
+| **Idle CPU Utilization**| $< 0.5\%$ | $< 0.2\%$ | $< 0.5\%$ | $< 0.5\%$ | $< 0.8\%$ | **$\ge 1.5\%$ Fails** |
+| **Throughput / Process**| 100GB in $< 2\,\text{s}$ | $> 10,000\,\text{crypto ops/s}$ | $> 100,000\,\text{files/s}$ | $< 500\,\text{µs}$ LID latency | $< 2\,\text{ms}$ Audio DSP frame budget | **Throughput drop Fails** |
+| **UI Render Frame Rate**| 60 FPS steady | 60 FPS steady | 60 FPS steady | 60 FPS steady | 60 FPS steady | **Any jank fails** |
 
 ---
 

@@ -32,6 +32,13 @@ struct UnlockedSession {
     search_index: VaultSearchIndex,
 }
 
+/// Failed unlock rate-limiter state
+#[derive(Debug, Default)]
+struct FailedUnlockTracker {
+    failed_attempts: u32,
+    last_failed_at: Option<std::time::Instant>,
+}
+
 /// Unified Vault Service coordinating storage, crypto, ephemeral search, and clipboard
 #[derive(Clone)]
 pub struct VaultService {
@@ -40,6 +47,7 @@ pub struct VaultService {
     clipboard: SecureClipboard,
     biometrics: BiometricService,
     argon_params: Argon2Params,
+    failed_unlocks: Arc<tokio::sync::Mutex<FailedUnlockTracker>>,
 }
 
 impl VaultService {
@@ -51,7 +59,65 @@ impl VaultService {
             clipboard: SecureClipboard::default(),
             biometrics: BiometricService::default(),
             argon_params: argon_params.unwrap_or_default(),
+            failed_unlocks: Arc::new(tokio::sync::Mutex::new(FailedUnlockTracker::default())),
         }
+    }
+
+    /// Create with a custom biometric service (e.g. for testing)
+    pub fn with_biometrics(
+        storage: VaultStorage,
+        biometrics: BiometricService,
+        argon_params: Option<Argon2Params>,
+    ) -> Self {
+        Self {
+            storage,
+            session: Arc::new(RwLock::new(None)),
+            clipboard: SecureClipboard::default(),
+            biometrics,
+            argon_params: argon_params.unwrap_or_default(),
+            failed_unlocks: Arc::new(tokio::sync::Mutex::new(FailedUnlockTracker::default())),
+        }
+    }
+
+    async fn check_unlock_rate_limit(&self) -> Result<(), VaultError> {
+        let tracker = self.failed_unlocks.lock().await;
+        if tracker.failed_attempts >= 3 {
+            if let Some(last_failed) = tracker.last_failed_at {
+                let backoff_secs = (1u64 << (tracker.failed_attempts - 3)).min(60);
+                let elapsed = last_failed.elapsed().as_secs();
+                if elapsed < backoff_secs {
+                    return Err(VaultError::RateLimited {
+                        retry_after_secs: backoff_secs - elapsed,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn record_successful_unlock(&self) {
+        let mut tracker = self.failed_unlocks.lock().await;
+        tracker.failed_attempts = 0;
+        tracker.last_failed_at = None;
+    }
+
+    async fn record_failed_unlock(&self) {
+        let mut tracker = self.failed_unlocks.lock().await;
+        tracker.failed_attempts += 1;
+        tracker.last_failed_at = Some(std::time::Instant::now());
+    }
+
+    async fn activate_session(&self, master_key: VaultMasterKey) -> Result<(), VaultError> {
+        let search_index = VaultSearchIndex::new()?;
+        let existing_metadata = self.storage.list_all_metadata_decrypted(&master_key)?;
+        search_index.index_batch(&existing_metadata)?;
+
+        let mut session_guard = self.session.write().await;
+        *session_guard = Some(UnlockedSession {
+            master_key,
+            search_index,
+        });
+        Ok(())
     }
 
     /// Check if the vault has been initialized with a master password
@@ -76,37 +142,151 @@ impl VaultService {
         self.storage.set_kdf_metadata(&meta)?;
 
         // Immediately unlock into an active session
-        let search_index = VaultSearchIndex::new()?;
-        let mut session_guard = self.session.write().await;
-        *session_guard = Some(UnlockedSession {
-            master_key,
-            search_index,
-        });
+        self.activate_session(master_key).await?;
 
         Ok(())
     }
 
     /// Unlock the vault using the master password
     pub async fn unlock(&self, master_password: &str) -> Result<(), VaultError> {
+        // 1. Check rate-limit backoff on repeated failed unlock attempts (AUD-13)
+        self.check_unlock_rate_limit().await?;
+
         let meta = self
             .storage
             .get_kdf_metadata()?
             .ok_or(VaultError::NotInitialized)?;
 
-        let master_key = meta.unlock(master_password)?;
-        let search_index = VaultSearchIndex::new()?;
+        let master_key = match meta.unlock(master_password) {
+            Ok(k) => {
+                self.record_successful_unlock().await;
+                k
+            }
+            Err(e) => {
+                self.record_failed_unlock().await;
+                return Err(e);
+            }
+        };
 
-        // Index all existing secret metadata into the ephemeral Tantivy index
-        let existing_metadata = self.storage.list_all_metadata()?;
-        search_index.index_batch(&existing_metadata)?;
+        self.activate_session(master_key).await
+    }
 
-        let mut session_guard = self.session.write().await;
-        *session_guard = Some(UnlockedSession {
-            master_key,
-            search_index,
-        });
+    /// Check whether native OS biometrics are available on this machine
+    pub fn is_biometric_available(&self) -> bool {
+        self.biometrics.is_available()
+    }
 
+    /// Enable biometric unlock by saving active master key in OS keyring
+    pub async fn enable_biometric_unlock(&self) -> Result<(), VaultError> {
+        let guard = self.session.read().await;
+        let session = guard.as_ref().ok_or(VaultError::Locked)?;
+        if !self.biometrics.is_available() {
+            return Err(VaultError::Biometric(
+                "Biometric hardware not available on this platform".to_string(),
+            ));
+        }
+        self.biometrics.store_biometric_key(&session.master_key)?;
         Ok(())
+    }
+
+    /// Disable biometric unlock by clearing stored key from OS keyring
+    pub fn disable_biometric_unlock(&self) -> Result<(), VaultError> {
+        self.biometrics.clear_biometric_key()
+    }
+
+    /// Unlock vault using native OS biometric authentication and retrieved key
+    pub async fn unlock_with_biometrics(&self) -> Result<(), VaultError> {
+        self.check_unlock_rate_limit().await?;
+
+        if !self.biometrics.is_available() {
+            return Err(VaultError::Biometric(
+                "Biometrics not available".to_string(),
+            ));
+        }
+
+        let auth_ok = self
+            .biometrics
+            .authenticate("DevOps Secret Vault Biometric Unlock")?;
+        if !auth_ok {
+            self.record_failed_unlock().await;
+            return Err(VaultError::Biometric(
+                "Biometric verification cancelled or rejected".to_string(),
+            ));
+        }
+
+        let stored_key = self.biometrics.retrieve_biometric_key()?.ok_or_else(|| {
+            VaultError::Biometric(
+                "No biometric key found in OS keyring. Unlock with master password and enable biometrics first.".to_string(),
+            )
+        })?;
+
+        let meta = self
+            .storage
+            .get_kdf_metadata()?
+            .ok_or(VaultError::NotInitialized)?;
+
+        let verified_key = match meta.verify_master_key(stored_key) {
+            Ok(k) => {
+                self.record_successful_unlock().await;
+                k
+            }
+            Err(e) => {
+                self.record_failed_unlock().await;
+                return Err(e);
+            }
+        };
+
+        self.activate_session(verified_key).await
+    }
+
+    /// Split active vault master key into k-of-n Shamir shares (Business Tier)
+    pub async fn split_master_key(
+        &self,
+        threshold: u8,
+        total_shares: u8,
+        tier_gate: &shared_licensing::TierGate,
+    ) -> Result<Vec<crate::shamir::ShamirShare>, VaultError> {
+        let guard = self.session.read().await;
+        let session = guard.as_ref().ok_or(VaultError::Locked)?;
+        crate::shamir::split_master_key(&session.master_key, threshold, total_shares, tier_gate)
+    }
+
+    /// Unlock vault by reconstructing master key from Shamir shares (Business Tier)
+    pub async fn unlock_with_shamir_shares(
+        &self,
+        shares: &[crate::shamir::ShamirShare],
+    ) -> Result<(), VaultError> {
+        self.check_unlock_rate_limit().await?;
+
+        let key_bytes = crate::shamir::reconstruct_secret(shares)?;
+        if key_bytes.len() != 32 {
+            self.record_failed_unlock().await;
+            return Err(VaultError::Shamir(
+                "Reconstructed secret length is not 32 bytes".to_string(),
+            ));
+        }
+
+        let mut key_arr = [0u8; 32];
+        key_arr.copy_from_slice(&key_bytes);
+        let candidate_key = VaultMasterKey(key_arr);
+
+        let meta = self
+            .storage
+            .get_kdf_metadata()?
+            .ok_or(VaultError::NotInitialized)?;
+
+        let verified_key = match meta.verify_master_key(candidate_key) {
+            Ok(k) => {
+                self.record_successful_unlock().await;
+                k
+            }
+            Err(e) => {
+                self.record_failed_unlock().await;
+                return Err(e);
+            }
+        };
+
+        self.activate_session(verified_key).await
     }
 
     /// Lock the vault, immediately zeroizing in-memory keys and destroying the RAM search index
@@ -121,11 +301,6 @@ impl VaultService {
     pub async fn is_locked(&self) -> bool {
         let session_guard = self.session.read().await;
         session_guard.is_none()
-    }
-
-    /// Check if biometric hardware authentication is available
-    pub fn is_biometric_available(&self) -> bool {
-        self.biometrics.is_available()
     }
 
     /// Access biometric service
@@ -168,7 +343,8 @@ impl VaultService {
             encrypted_payload,
         };
 
-        self.storage.insert_secret(&record)?;
+        self.storage
+            .insert_secret_encrypted(&record, &session.master_key)?;
         session.search_index.index_secret(&metadata)?;
 
         // Audit log
@@ -178,6 +354,8 @@ impl VaultService {
             action: SecretAuditAction::Created,
             timestamp: now,
             client: client.to_string(),
+            prev_hash: String::new(),
+            entry_hash: String::new(),
         };
         let _ = self.storage.insert_audit_log(&audit);
 
@@ -191,7 +369,7 @@ impl VaultService {
 
         let record = self
             .storage
-            .get_secret(id)?
+            .get_secret_decrypted(id, &session.master_key)?
             .ok_or_else(|| VaultError::SecretNotFound(id.to_string()))?;
 
         let payload = decrypt_secret_payload(&session.master_key, &record.encrypted_payload)?;
@@ -203,6 +381,8 @@ impl VaultService {
             action: SecretAuditAction::Read,
             timestamp: now_timestamp(),
             client: client.to_string(),
+            prev_hash: String::new(),
+            entry_hash: String::new(),
         };
         let _ = self.storage.insert_audit_log(&audit);
 
@@ -214,19 +394,28 @@ impl VaultService {
 
     /// Retrieve secret metadata without decrypting the payload
     pub async fn get_secret_metadata(&self, id: &str) -> Result<SecretMetadata, VaultError> {
-        let record = self
-            .storage
-            .get_secret(id)?
-            .ok_or_else(|| VaultError::SecretNotFound(id.to_string()))?;
-        Ok(record.metadata)
+        let session_guard = self.session.read().await;
+        if let Some(ref session) = *session_guard {
+            let record = self
+                .storage
+                .get_secret_decrypted(id, &session.master_key)?
+                .ok_or_else(|| VaultError::SecretNotFound(id.to_string()))?;
+            Ok(record.metadata)
+        } else {
+            let record = self
+                .storage
+                .get_secret(id)?
+                .ok_or_else(|| VaultError::SecretNotFound(id.to_string()))?;
+            Ok(record.metadata)
+        }
     }
 
     /// List all secret metadata records
     pub async fn list_secrets(&self) -> Result<Vec<SecretMetadata>, VaultError> {
-        if self.is_locked().await {
-            return Err(VaultError::Locked);
-        }
-        self.storage.list_all_metadata()
+        let session_guard = self.session.read().await;
+        let session = session_guard.as_ref().ok_or(VaultError::Locked)?;
+        self.storage
+            .list_all_metadata_decrypted(&session.master_key)
     }
 
     /// Update an existing secret
@@ -241,7 +430,7 @@ impl VaultService {
 
         let existing = self
             .storage
-            .get_secret(id)?
+            .get_secret_decrypted(id, &session.master_key)?
             .ok_or_else(|| VaultError::SecretNotFound(id.to_string()))?;
 
         let now = now_timestamp();
@@ -278,7 +467,8 @@ impl VaultService {
             encrypted_payload: new_payload_bytes,
         };
 
-        self.storage.update_secret(&updated_record)?;
+        self.storage
+            .update_secret_encrypted(&updated_record, &session.master_key)?;
         session.search_index.index_secret(&updated_metadata)?;
 
         // Audit log
@@ -288,6 +478,8 @@ impl VaultService {
             action: SecretAuditAction::Updated,
             timestamp: now,
             client: client.to_string(),
+            prev_hash: String::new(),
+            entry_hash: String::new(),
         };
         let _ = self.storage.insert_audit_log(&audit);
 
@@ -307,13 +499,13 @@ impl VaultService {
         session.search_index.remove_secret(id)?;
 
         // Audit log
-        let audit = SecretAuditEntry {
-            id: generate_uuid(),
-            secret_id: id.to_string(),
-            action: SecretAuditAction::Deleted,
-            timestamp: now_timestamp(),
-            client: client.to_string(),
-        };
+        let audit = SecretAuditEntry::new(
+            generate_uuid(),
+            id.to_string(),
+            SecretAuditAction::Deleted,
+            now_timestamp(),
+            client.to_string(),
+        );
         let _ = self.storage.insert_audit_log(&audit);
 
         Ok(())
@@ -343,13 +535,13 @@ impl VaultService {
         let ttl = self.clipboard.copy(secret_value, custom_ttl_secs).await?;
 
         // Audit log
-        let audit = SecretAuditEntry {
-            id: generate_uuid(),
-            secret_id: id.to_string(),
-            action: SecretAuditAction::CopiedToClipboard,
-            timestamp: now_timestamp(),
-            client: client.to_string(),
-        };
+        let audit = SecretAuditEntry::new(
+            generate_uuid(),
+            id.to_string(),
+            SecretAuditAction::CopiedToClipboard,
+            now_timestamp(),
+            client.to_string(),
+        );
         let _ = self.storage.insert_audit_log(&audit);
 
         Ok(ttl)
@@ -387,7 +579,9 @@ impl VaultService {
         let guard = self.session.read().await;
         let session = guard.as_ref().ok_or(VaultError::Locked)?;
 
-        let encrypted_records = self.storage.list_all_encrypted_secrets()?;
+        let encrypted_records = self
+            .storage
+            .list_all_encrypted_secrets_decrypted(&session.master_key)?;
         let mut decrypted_secrets = Vec::with_capacity(encrypted_records.len());
 
         for record in encrypted_records {
@@ -412,7 +606,7 @@ impl VaultService {
 
         let record = self
             .storage
-            .get_secret(secret_id)?
+            .get_secret_decrypted(secret_id, &session.master_key)?
             .ok_or_else(|| VaultError::SecretNotFound(secret_id.to_string()))?;
 
         let payload = decrypt_secret_payload(&session.master_key, &record.encrypted_payload)?;
@@ -455,7 +649,7 @@ impl VaultService {
 
         let record = self
             .storage
-            .get_secret(secret_id)?
+            .get_secret_decrypted(secret_id, &session.master_key)?
             .ok_or_else(|| VaultError::SecretNotFound(secret_id.to_string()))?;
 
         let payload = decrypt_secret_payload(&session.master_key, &record.encrypted_payload)?;
@@ -478,7 +672,9 @@ impl VaultService {
         let guard = self.session.read().await;
         let session = guard.as_ref().ok_or(VaultError::Locked)?;
 
-        let encrypted_records = self.storage.list_all_encrypted_secrets()?;
+        let encrypted_records = self
+            .storage
+            .list_all_encrypted_secrets_decrypted(&session.master_key)?;
         let mut decrypted_secrets = Vec::with_capacity(encrypted_records.len());
 
         for record in encrypted_records {
@@ -530,10 +726,12 @@ impl VaultService {
             };
 
             if exists {
-                self.storage.update_secret(&record)?;
+                self.storage
+                    .update_secret_encrypted(&record, &session.master_key)?;
                 total_overwritten += 1;
             } else {
-                self.storage.insert_secret(&record)?;
+                self.storage
+                    .insert_secret_encrypted(&record, &session.master_key)?;
                 total_imported += 1;
             }
 
@@ -546,6 +744,11 @@ impl VaultService {
             total_overwritten,
             original_exported_at: envelope.exported_at,
         })
+    }
+
+    /// Verify the complete cryptographic SHA-256 hash chain of the audit log
+    pub async fn verify_audit_chain(&self) -> Result<bool, VaultError> {
+        self.storage.verify_audit_chain()
     }
 }
 
@@ -642,5 +845,116 @@ mod tests {
         // Verify audit logs
         let audit_logs = service.get_audit_logs(Some(&meta.id), 10).await.unwrap();
         assert!(audit_logs.len() >= 3); // Created, Read, CopiedToClipboard
+        assert!(service.verify_audit_chain().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_failed_unlock_rate_limiting_backoff() {
+        let storage = VaultStorage::open_in_memory().unwrap();
+        let service = VaultService::new(storage, Some(Argon2Params::fast_for_tests()));
+
+        service.initialize("SecretPassword2026!").await.unwrap();
+        service.lock().await.unwrap();
+
+        // 1st fail
+        let err1 = service.unlock("Wrong1").await.unwrap_err();
+        assert!(matches!(err1, VaultError::InvalidMasterPassword));
+
+        // 2nd fail
+        let err2 = service.unlock("Wrong2").await.unwrap_err();
+        assert!(matches!(err2, VaultError::InvalidMasterPassword));
+
+        // 3rd fail -> triggers rate limit tracker
+        let err3 = service.unlock("Wrong3").await.unwrap_err();
+        assert!(matches!(err3, VaultError::InvalidMasterPassword));
+
+        // Immediate 4th attempt must be blocked by rate limiter
+        let rate_err = service.unlock("SecretPassword2026!").await.unwrap_err();
+        assert!(
+            matches!(rate_err, VaultError::RateLimited { .. }),
+            "Immediate attempt after 3 failures must be rate limited"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_biometric_unlock_lifecycle() {
+        let storage = VaultStorage::open_in_memory().unwrap();
+        let test_keyring = Arc::new(platform_common::InMemoryKeyring::for_test(true, true));
+        let biometrics = BiometricService::new(test_keyring);
+        let service = VaultService::with_biometrics(
+            storage,
+            biometrics,
+            Some(Argon2Params::fast_for_tests()),
+        );
+
+        service.initialize("MasterPassword123!").await.unwrap();
+        assert!(!service.is_locked().await);
+
+        // Enable biometric unlock while vault is open
+        service.enable_biometric_unlock().await.unwrap();
+
+        // Lock vault
+        service.lock().await.unwrap();
+        assert!(service.is_locked().await);
+
+        // Unlock with biometrics
+        service.unlock_with_biometrics().await.unwrap();
+        assert!(!service.is_locked().await);
+
+        // Disable biometrics
+        service.disable_biometric_unlock().unwrap();
+        service.lock().await.unwrap();
+
+        // Unlock with biometrics must now fail since key was removed
+        assert!(service.unlock_with_biometrics().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_shamir_master_key_split_and_unlock() {
+        let storage = VaultStorage::open_in_memory().unwrap();
+        let service = VaultService::new(storage, Some(Argon2Params::fast_for_tests()));
+
+        service.initialize("PassphraseShamir99!").await.unwrap();
+
+        // Create a test secret
+        service
+            .create_secret(
+                CreateSecretInput {
+                    title: "Kubernetes Admin Token".to_string(),
+                    tags: vec!["k8s".to_string()],
+                    username: None,
+                    url: None,
+                    notes: None,
+                    payload: SecretPayload::ApiKey {
+                        api_key: "k8s-cluster-token-12345".to_string(),
+                        api_secret: None,
+                        endpoint_url: None,
+                    },
+                },
+                "test",
+            )
+            .await
+            .unwrap();
+
+        // Split master key 2-of-3
+        let gate = shared_licensing::TierGate::enterprise();
+        let shares = service.split_master_key(2, 3, &gate).await.unwrap();
+        assert_eq!(shares.len(), 3);
+
+        // Lock vault
+        service.lock().await.unwrap();
+        assert!(service.is_locked().await);
+
+        // Unlock with 2 shares (e.g. shares[0] and shares[2])
+        let recovery_shares = vec![shares[0].clone(), shares[2].clone()];
+        service
+            .unlock_with_shamir_shares(&recovery_shares)
+            .await
+            .unwrap();
+        assert!(!service.is_locked().await);
+
+        // Search immediately returns data
+        let hits = service.search_secrets("Kubernetes", 5).await.unwrap();
+        assert_eq!(hits.len(), 1);
     }
 }

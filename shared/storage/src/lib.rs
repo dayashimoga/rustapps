@@ -3,11 +3,19 @@
 //! Provides SQLite connection management with WAL mode, automated migrations,
 //! safe atomic filesystem I/O, and zero-copy memory-mapped file readers.
 
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce,
+};
+use rand::{rngs::OsRng, RngCore};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 /// Storage error definitions
 #[derive(Debug, Error)]
@@ -22,6 +30,16 @@ pub enum StorageError {
     FileTooLarge { limit_bytes: u64 },
     #[error("Memory mapping error: {0}")]
     MmapError(String),
+    #[error("Cryptographic operation failed: {0}")]
+    CryptoError(String),
+    #[error("Audit log hash chain tampered at entry {index}: expected {expected}, got {actual}")]
+    AuditChainTampered {
+        index: usize,
+        expected: String,
+        actual: String,
+    },
+    #[error("Audit log previous hash mismatch at entry {index}")]
+    AuditChainLinkBroken { index: usize },
 }
 
 /// Represents a schema migration
@@ -246,6 +264,180 @@ impl MmapReader {
     }
 }
 
+/// Authenticated encrypted envelope wrapping arbitrary record payload with AES-256-GCM
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EncryptedEnvelope {
+    pub ciphertext: Vec<u8>,
+    pub nonce: [u8; 12],
+    pub salt: [u8; 16],
+}
+
+impl EncryptedEnvelope {
+    /// Encrypt plaintext using AES-256-GCM with a fresh random 96-bit nonce and 128-bit salt
+    pub fn encrypt(plaintext: &[u8], key: &[u8; 32]) -> Result<Self, StorageError> {
+        let mut nonce = [0u8; 12];
+        let mut salt = [0u8; 16];
+        OsRng.fill_bytes(&mut nonce);
+        OsRng.fill_bytes(&mut salt);
+
+        let cipher = Aes256Gcm::new_from_slice(key)
+            .map_err(|e| StorageError::CryptoError(format!("Cipher init failed: {}", e)))?;
+
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&nonce), plaintext)
+            .map_err(|e| StorageError::CryptoError(format!("Encryption failed: {}", e)))?;
+
+        Ok(Self {
+            ciphertext,
+            nonce,
+            salt,
+        })
+    }
+
+    /// Decrypt ciphertext using AES-256-GCM
+    pub fn decrypt(&self, key: &[u8; 32]) -> Result<Zeroizing<Vec<u8>>, StorageError> {
+        let cipher = Aes256Gcm::new_from_slice(key)
+            .map_err(|e| StorageError::CryptoError(format!("Cipher init failed: {}", e)))?;
+
+        let decrypted = cipher
+            .decrypt(Nonce::from_slice(&self.nonce), self.ciphertext.as_slice())
+            .map_err(|e| {
+                StorageError::CryptoError(format!("Decryption authentication failed: {}", e))
+            })?;
+
+        Ok(Zeroizing::new(decrypted))
+    }
+}
+
+/// Tamper-evident audit chain record entry
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditChainEntry {
+    pub entry_id: u64,
+    pub timestamp_secs: u64,
+    pub actor: String,
+    pub action: String,
+    pub subject: String,
+    pub prev_hash: [u8; 32],
+    pub entry_hash: [u8; 32],
+}
+
+/// Computes deterministic SHA-256 hash for an audit entry
+pub fn compute_audit_entry_hash(
+    prev_hash: &[u8; 32],
+    entry_id: u64,
+    timestamp_secs: u64,
+    actor: &str,
+    action: &str,
+    subject: &str,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"AUDIT_CHAIN_V1:");
+    hasher.update(prev_hash);
+    hasher.update(entry_id.to_be_bytes());
+    hasher.update(timestamp_secs.to_be_bytes());
+    hasher.update((actor.len() as u32).to_be_bytes());
+    hasher.update(actor.as_bytes());
+    hasher.update((action.len() as u32).to_be_bytes());
+    hasher.update(action.as_bytes());
+    hasher.update((subject.len() as u32).to_be_bytes());
+    hasher.update(subject.as_bytes());
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(&hasher.finalize());
+    hash
+}
+
+/// Helper converting byte slice to hex string
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// In-memory and SQLite-backed tamper-evident audit log manager
+#[derive(Debug, Default, Clone)]
+pub struct TamperEvidentAuditLog {
+    entries: Vec<AuditChainEntry>,
+}
+
+impl TamperEvidentAuditLog {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn from_entries(entries: Vec<AuditChainEntry>) -> Self {
+        Self { entries }
+    }
+
+    pub fn last_hash(&self) -> [u8; 32] {
+        self.entries
+            .last()
+            .map(|e| e.entry_hash)
+            .unwrap_or([0u8; 32])
+    }
+
+    pub fn append(
+        &mut self,
+        actor: &str,
+        action: &str,
+        subject: &str,
+        timestamp_secs: u64,
+    ) -> &AuditChainEntry {
+        let entry_id = self.entries.len() as u64 + 1;
+        let prev_hash = self.last_hash();
+        let entry_hash =
+            compute_audit_entry_hash(&prev_hash, entry_id, timestamp_secs, actor, action, subject);
+
+        let entry = AuditChainEntry {
+            entry_id,
+            timestamp_secs,
+            actor: actor.to_string(),
+            action: action.to_string(),
+            subject: subject.to_string(),
+            prev_hash,
+            entry_hash,
+        };
+
+        self.entries.push(entry);
+        self.entries.last().expect("Entry was just added")
+    }
+
+    pub fn entries(&self) -> &[AuditChainEntry] {
+        &self.entries
+    }
+
+    /// Verifies that all entries in the chain have valid cryptographic linkage
+    pub fn verify_chain(entries: &[AuditChainEntry]) -> Result<(), StorageError> {
+        let mut expected_prev_hash = [0u8; 32];
+
+        for (idx, entry) in entries.iter().enumerate() {
+            if entry.prev_hash != expected_prev_hash {
+                return Err(StorageError::AuditChainLinkBroken { index: idx });
+            }
+
+            let computed = compute_audit_entry_hash(
+                &entry.prev_hash,
+                entry.entry_id,
+                entry.timestamp_secs,
+                &entry.actor,
+                &entry.action,
+                &entry.subject,
+            );
+
+            if computed != entry.entry_hash {
+                return Err(StorageError::AuditChainTampered {
+                    index: idx,
+                    expected: bytes_to_hex(&computed),
+                    actual: bytes_to_hex(&entry.entry_hash),
+                });
+            }
+
+            expected_prev_hash = entry.entry_hash;
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,5 +525,50 @@ mod tests {
         assert_eq!(slice, &sample_text[0..10]);
 
         assert!(reader.slice(0, 9999).is_none());
+    }
+
+    #[test]
+    fn test_encrypted_envelope() {
+        let key = [42u8; 32];
+        let plaintext = b"Confidential Vault Secret Payload 2026";
+
+        let envelope = EncryptedEnvelope::encrypt(plaintext, &key).unwrap();
+        assert_ne!(envelope.ciphertext, plaintext);
+
+        let decrypted = envelope.decrypt(&key).unwrap();
+        assert_eq!(decrypted.as_slice(), plaintext);
+
+        // Wrong key must fail authenticated decryption
+        let wrong_key = [99u8; 32];
+        assert!(envelope.decrypt(&wrong_key).is_err());
+    }
+
+    #[test]
+    fn test_tamper_evident_audit_chain() {
+        let mut log = TamperEvidentAuditLog::new();
+        log.append("admin", "CREATE", "vault:db-creds", 1700000000);
+        log.append("dev", "READ", "vault:db-creds", 1700000100);
+        log.append("admin", "UPDATE", "vault:db-creds", 1700000200);
+
+        assert_eq!(log.entries().len(), 3);
+        assert!(TamperEvidentAuditLog::verify_chain(log.entries()).is_ok());
+
+        // Tampering test 1: Modify action
+        let mut tampered_entries = log.entries().to_vec();
+        tampered_entries[1].action = "DELETE".to_string();
+        let err = TamperEvidentAuditLog::verify_chain(&tampered_entries).unwrap_err();
+        assert!(matches!(
+            err,
+            StorageError::AuditChainTampered { index: 1, .. }
+        ));
+
+        // Tampering test 2: Break link
+        let mut broken_link = log.entries().to_vec();
+        broken_link[2].prev_hash = [0u8; 32];
+        let err2 = TamperEvidentAuditLog::verify_chain(&broken_link).unwrap_err();
+        assert!(matches!(
+            err2,
+            StorageError::AuditChainLinkBroken { index: 2 }
+        ));
     }
 }

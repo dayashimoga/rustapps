@@ -160,6 +160,17 @@ pub fn search_screenshots_by_text_cmd(
     Ok(svc.search_screenshots_by_text(&query, limit))
 }
 
+/// Business-tier PII & sensitive data compliance scan command
+pub fn scan_compliance_cmd(
+    path: String,
+) -> Result<crate::compliance::ComplianceScanSummary, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    let gate = shared_licensing::TierGate::enterprise();
+    svc.scan_directory_compliance(&path, &gate)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

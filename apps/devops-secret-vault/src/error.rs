@@ -45,6 +45,17 @@ pub enum VaultError {
     #[error("Secure clipboard error: {0}")]
     Clipboard(String),
 
+    #[error(
+        "Too many failed unlock attempts. Rate limited. Retry after {retry_after_secs} seconds."
+    )]
+    RateLimited { retry_after_secs: u64 },
+
+    #[error("Shamir secret sharing error: {0}")]
+    Shamir(String),
+
+    #[error("Licensing error: {0}")]
+    Licensing(#[from] shared_licensing::LicensingError),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }

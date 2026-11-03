@@ -4,6 +4,7 @@
 //! Provides asynchronous, high-throughput filesystem traversal,
 //! streaming chunking pipelines, and responsive cancellation.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use thiserror::Error;
@@ -160,6 +161,132 @@ impl ChunkingPipeline {
     }
 }
 
+/// Changes detected between two directory snapshots
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DirectoryDelta {
+    pub added: Vec<PathBuf>,
+    pub modified: Vec<PathBuf>,
+    pub removed: Vec<PathBuf>,
+}
+
+impl DirectoryDelta {
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.modified.is_empty() && self.removed.is_empty()
+    }
+}
+
+/// Individual filesystem change event
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FsDeltaEvent {
+    Created(PathBuf),
+    Modified(PathBuf),
+    Deleted(PathBuf),
+}
+
+/// Point-in-time recursive snapshot of directory entries
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectorySnapshot {
+    pub root: PathBuf,
+    pub files: HashMap<PathBuf, (u64, u64)>, // path -> (size_bytes, modified_timestamp_secs)
+}
+
+impl DirectorySnapshot {
+    /// Capture a full recursive snapshot of the target directory
+    pub fn capture<P: AsRef<Path>>(root: P, follow_symlinks: bool) -> Result<Self, IndexingError> {
+        let root_path = root.as_ref().to_path_buf();
+        let mut files = HashMap::new();
+
+        let walker = WalkDir::new(&root_path).follow_links(follow_symlinks);
+        for entry_res in walker {
+            let entry = match entry_res {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            let path = entry.path().to_path_buf();
+            let metadata = match entry.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            let size = metadata.len();
+            let modified = metadata
+                .modified()
+                .unwrap_or(SystemTime::UNIX_EPOCH)
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+
+            files.insert(path, (size, modified));
+        }
+
+        Ok(Self {
+            root: root_path,
+            files,
+        })
+    }
+
+    /// Compare previous snapshot with current snapshot to detect additions, modifications, and removals
+    pub fn diff(&self, current: &DirectorySnapshot) -> DirectoryDelta {
+        let mut delta = DirectoryDelta::default();
+
+        for (path, (curr_size, curr_mod)) in &current.files {
+            match self.files.get(path) {
+                None => {
+                    delta.added.push(path.clone());
+                }
+                Some((prev_size, prev_mod)) => {
+                    if prev_size != curr_size || prev_mod != curr_mod {
+                        delta.modified.push(path.clone());
+                    }
+                }
+            }
+        }
+
+        for path in self.files.keys() {
+            if !current.files.contains_key(path) {
+                delta.removed.push(path.clone());
+            }
+        }
+
+        delta.added.sort();
+        delta.modified.sort();
+        delta.removed.sort();
+
+        delta
+    }
+}
+
+/// Recursive change detector maintaining rolling state across poll intervals
+pub struct RecursiveChangeDetector {
+    root: PathBuf,
+    follow_symlinks: bool,
+    last_snapshot: DirectorySnapshot,
+}
+
+impl RecursiveChangeDetector {
+    pub fn new<P: AsRef<Path>>(root: P, follow_symlinks: bool) -> Result<Self, IndexingError> {
+        let root_path = root.as_ref().to_path_buf();
+        let snapshot = DirectorySnapshot::capture(&root_path, follow_symlinks)?;
+        Ok(Self {
+            root: root_path,
+            follow_symlinks,
+            last_snapshot: snapshot,
+        })
+    }
+
+    pub fn poll_changes(&mut self) -> Result<DirectoryDelta, IndexingError> {
+        let current = DirectorySnapshot::capture(&self.root, self.follow_symlinks)?;
+        let delta = self.last_snapshot.diff(&current);
+        self.last_snapshot = current;
+        Ok(delta)
+    }
+
+    pub fn current_snapshot(&self) -> &DirectorySnapshot {
+        &self.last_snapshot
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +336,43 @@ mod tests {
 
         // Cancelled early, count should be small (< 100)
         assert!(count < 100);
+    }
+
+    #[test]
+    fn test_recursive_directory_snapshot_and_diff() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub1 = temp.path().join("level1");
+        let sub2 = sub1.join("level2");
+        std::fs::create_dir_all(&sub2).unwrap();
+
+        let file_a = temp.path().join("root.txt");
+        let file_b = sub1.join("nested.md");
+        let file_c = sub2.join("deep.rs");
+
+        std::fs::write(&file_a, "root file").unwrap();
+        std::fs::write(&file_b, "nested file").unwrap();
+        std::fs::write(&file_c, "deep file").unwrap();
+
+        let mut detector = RecursiveChangeDetector::new(temp.path(), false).unwrap();
+        assert_eq!(detector.current_snapshot().files.len(), 6); // root, sub1, sub2, file_a, file_b, file_c
+
+        // First poll with no changes should be empty
+        let initial_delta = detector.poll_changes().unwrap();
+        assert!(initial_delta.is_empty());
+
+        // Now modify file_c, remove file_b, and add file_d deep inside level2
+        std::fs::write(
+            &file_c,
+            "deep file modified content that is definitely longer",
+        )
+        .unwrap();
+        std::fs::remove_file(&file_b).unwrap();
+        let file_d = sub2.join("deep_new.json");
+        std::fs::write(&file_d, "{\"hello\": \"world\"}").unwrap();
+
+        let delta = detector.poll_changes().unwrap();
+        assert_eq!(delta.added, vec![file_d]);
+        assert_eq!(delta.removed, vec![file_b]);
+        assert_eq!(delta.modified, vec![file_c]);
     }
 }

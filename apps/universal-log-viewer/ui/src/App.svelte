@@ -6,9 +6,18 @@
   import TimelineHistogram from './components/TimelineHistogram.svelte';
   import AiInsightsDrawer from './components/AiInsightsDrawer.svelte';
   import StatusBar from './components/StatusBar.svelte';
-  import type { LogLineRecord, OpenedFileInfo, BookmarkRecord, ProcessResourceUsage } from './types';
-  import type { TimelineBucketUi } from './components/TimelineHistogram.svelte';
-  import type { TemplateClusterUi, AnomalySpikeUi, ErrorClusterUi } from './components/AiInsightsDrawer.svelte';
+  import type {
+    LogLineRecord,
+    OpenedFileInfo,
+    LogSearchReport,
+    BookmarkRecord,
+    ProcessResourceUsage,
+    TimelineBucketUi,
+    TimelineHistogramUi,
+    TemplateClusterUi,
+    AnomalySpikeUi,
+    ErrorClusterUi,
+  } from './types';
 
   let filePath = '';
   let fileSizeBytes = 0;
@@ -48,6 +57,81 @@
 
   // In-memory mock database for standalone browser preview / testing
   let mockFileLines: string[] = [];
+
+  const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI__;
+
+  async function tauriInvoke<T>(cmd: string, args?: Record<string, any>): Promise<T | null> {
+    if (isTauri && (window as any).__TAURI__?.invoke) {
+      try {
+        return await (window as any).__TAURI__.invoke(cmd, args);
+      } catch (err) {
+        console.error(`Tauri IPC error for ${cmd}:`, err);
+        throw err;
+      }
+    }
+    return null;
+  }
+
+  async function openRealFile(path: string) {
+    if (isTauri) {
+      try {
+        const info = await tauriInvoke<OpenedFileInfo>('open_file', { path });
+        if (info) {
+          filePath = info.path;
+          totalLines = info.total_lines;
+          fileSizeBytes = info.file_size_bytes;
+          await fetchSlice(0, 60);
+          await loadAiInsights();
+          return;
+        }
+      } catch (e) {
+        console.error('Failed to open file via Tauri:', e);
+      }
+    }
+    generateSampleLogs(100000);
+  }
+
+  async function handleOpenFilePrompt() {
+    if (isTauri && (window as any).__TAURI__?.dialog?.open) {
+      try {
+        const selected = await (window as any).__TAURI__.dialog.open({
+          multiple: false,
+          filters: [{ name: 'Log Files', extensions: ['log', 'txt', 'jsonl', 'csv', 'tsv'] }],
+        });
+        if (typeof selected === 'string') {
+          await openRealFile(selected);
+          return;
+        }
+      } catch (err) {
+        console.warn('Native open dialog failed:', err);
+      }
+    }
+    // Browser fallback
+    generateSampleLogs(100000);
+  }
+
+  async function loadAiInsights() {
+    if (isTauri && filePath) {
+      try {
+        const [hist, templates, anomalies, errors] = await Promise.all([
+          tauriInvoke<TimelineHistogramUi>('get_timeline_histogram', { targetBuckets: 60 }),
+          tauriInvoke<TemplateClusterUi[]>('mine_templates', { maxRecords: 50000 }),
+          tauriInvoke<AnomalySpikeUi[]>('detect_anomalies', { targetBuckets: 60, zThreshold: 2.5 }),
+          tauriInvoke<ErrorClusterUi[]>('cluster_errors', { maxRecords: 50000 }),
+        ]);
+        if (hist) {
+          timelineBuckets = hist.buckets;
+          minEpochMs = hist.min_epoch_ms;
+          maxEpochMs = hist.max_epoch_ms;
+        }
+        if (templates) minedTemplates = templates;
+        if (anomalies) detectedAnomalies = anomalies;
+        if (errors) detectedErrorClusters = errors;
+      } catch (e) {
+        console.warn('Failed to load AI insights from backend:', e);
+      }
+    }
+  }
 
   function generateSampleLogs(count: number) {
     const services = ['auth-service', 'payment-gateway', 'ingress-controller', 'database-pool', 'worker-queue'];
@@ -188,9 +272,24 @@
     fetchSlice(0, 60);
   }
 
-  function fetchSlice(start: number, count: number) {
+  async function fetchSlice(start: number, count: number) {
     visibleStart = start;
     visibleCount = count;
+
+    if (isTauri && filePath) {
+      try {
+        const slice = await tauriInvoke<LogLineRecord[]>('get_lines_slice', {
+          startLine: start,
+          count,
+        });
+        if (slice && slice.length > 0) {
+          lines = slice;
+          return;
+        }
+      } catch (err) {
+        console.warn('Backend slice error, using cache:', err);
+      }
+    }
 
     if (mockFileLines.length > 0) {
       const sliceEnd = Math.min(start + count, mockFileLines.length);
@@ -207,7 +306,7 @@
     fetchSlice(event.detail.startLine, event.detail.count);
   }
 
-  function handleSearch(event: CustomEvent<{ query: string; isRegex: boolean; caseSensitive: boolean }>) {
+  async function handleSearch(event: CustomEvent<{ query: string; isRegex: boolean; caseSensitive: boolean }>) {
     searchQuery = event.detail.query;
     isRegex = event.detail.isRegex;
     caseSensitive = event.detail.caseSensitive;
@@ -216,6 +315,31 @@
       searchMatchCount = null;
       searchLatencyMicros = null;
       return;
+    }
+
+    if (isTauri && filePath) {
+      try {
+        const report = await tauriInvoke<LogSearchReport>('search', {
+          query: {
+            pattern: searchQuery,
+            is_regex: isRegex,
+            case_sensitive: caseSensitive,
+            limit: 1000,
+            start_line: 0,
+          },
+        });
+        if (report) {
+          searchMatchCount = report.total_matched_in_scan;
+          searchLatencyMicros = report.elapsed_micros;
+          if (report.matches.length > 0 && viewportComponent) {
+            viewportComponent.scrollToLine(report.matches[0].line_number);
+            activeLine = report.matches[0].line_number;
+          }
+          return;
+        }
+      } catch (err) {
+        console.warn('Backend search error, falling back to client-side:', err);
+      }
     }
 
     const start = performance.now();
@@ -259,14 +383,21 @@
     }
   }
 
-  function toggleTailMode() {
+  async function toggleTailMode() {
     tailModeActive = !tailModeActive;
+    if (isTauri && filePath) {
+      try {
+        tailModeActive = (await tauriInvoke<boolean>('toggle_tail_mode', { enable: tailModeActive })) ?? tailModeActive;
+      } catch (err) {
+        console.warn('Failed to toggle tail mode via IPC:', err);
+      }
+    }
   }
 
-  // Periodic tail stream simulation
+  // Periodic tail stream simulation when in preview mode
   let tailInterval: number | null = null;
   $: {
-    if (tailModeActive && !tailInterval) {
+    if (tailModeActive && !tailInterval && !isTauri) {
       tailInterval = window.setInterval(() => {
         if (mockFileLines.length > 0) {
           const newLine = `${new Date().toISOString()} [INFO] [tail-worker] Appended real-time event #${totalLines + 1}`;
@@ -293,8 +424,24 @@
     }
   }
 
-  function handleBookmarkLine(event: CustomEvent<{ line: number }>) {
+  async function handleBookmarkLine(event: CustomEvent<{ line: number }>) {
     const line = event.detail.line;
+    if (isTauri && filePath) {
+      try {
+        const saved = await tauriInvoke<BookmarkRecord>('add_bookmark', {
+          lineNumber: line,
+          note: `Line ${line + 1}: ${lines.find((l) => l.line_number === line)?.text.slice(0, 40) || 'Bookmarked line'}...`,
+        });
+        if (saved) {
+          bookmarks = [...bookmarks, saved];
+          isBookmarksOpen = true;
+          return;
+        }
+      } catch (e) {
+        console.warn('Failed to save bookmark via IPC:', e);
+      }
+    }
+
     const exists = bookmarks.find((b) => b.line_number === line);
     if (!exists) {
       bookmarks = [
@@ -316,8 +463,24 @@
     bookmarks = bookmarks.filter((b) => b.id !== id);
   }
 
-  function handleRangeSelected(event: CustomEvent<{ startMs: number; endMs: number }>) {
+  async function handleRangeSelected(event: CustomEvent<{ startMs: number; endMs: number }>) {
     selectedRange = [event.detail.startMs, event.detail.endMs];
+    if (isTauri && filePath) {
+      try {
+        const matchedLines = await tauriInvoke<number[]>('filter_by_timerange', {
+          startMs: event.detail.startMs,
+          endMs: event.detail.endMs,
+        });
+        if (matchedLines && matchedLines.length > 0 && viewportComponent) {
+          viewportComponent.scrollToLine(matchedLines[0]);
+          activeLine = matchedLines[0];
+          return;
+        }
+      } catch (e) {
+        console.warn('Timerange filter IPC error:', e);
+      }
+    }
+
     // Find approximate first line corresponding to startMs
     if (mockFileLines.length > 0 && maxEpochMs > minEpochMs) {
       const frac = Math.max(0, Math.min(1, (event.detail.startMs - minEpochMs) / (maxEpochMs - minEpochMs)));
@@ -349,18 +512,37 @@
       showAiInsights = !showAiInsights;
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
       e.preventDefault();
-      generateSampleLogs(100000);
+      handleOpenFilePrompt();
+    }
+  }
+
+  let metricsInterval: number | null = null;
+
+  async function updateMetrics() {
+    if (isTauri) {
+      try {
+        const sampled = await tauriInvoke<ProcessResourceUsage>('get_system_metrics');
+        if (sampled) {
+          systemMetrics = sampled;
+        }
+      } catch {
+        // ignore
+      }
     }
   }
 
   onMount(() => {
     window.addEventListener('keydown', handleKeyDown);
+
     // Auto-load sample logs on initial preview
     generateSampleLogs(50000);
+
+    metricsInterval = window.setInterval(updateMetrics, 2500);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       if (tailInterval) clearInterval(tailInterval);
+      if (metricsInterval) clearInterval(metricsInterval);
     };
   });
 </script>
@@ -379,7 +561,7 @@
     {showTimeline}
     {showAiInsights}
     bookmarksCount={bookmarks.length}
-    on:openFile={() => generateSampleLogs(100000)}
+    on:openFile={handleOpenFilePrompt}
     on:toggleTail={toggleTailMode}
     on:search={handleSearch}
     on:jumpLine={handleJumpLine}
@@ -415,8 +597,8 @@
           <h2>Open Massive Logs Instantaneously</h2>
           <p>Zero-copy memory mapping processes 500GB+ logs within a 300MB RAM budget.</p>
 
-          <button class="btn btn-primary hero-btn" on:click={() => generateSampleLogs(100000)}>
-            Load 100,000 Line Sample
+          <button class="btn btn-primary hero-btn" on:click={handleOpenFilePrompt}>
+            Open Log File
           </button>
         </div>
       </div>

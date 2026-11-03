@@ -23,6 +23,7 @@ pub mod models;
 pub mod risk_scoring;
 pub mod search;
 pub mod service;
+pub mod shamir;
 pub mod storage;
 pub mod totp;
 
@@ -37,5 +38,8 @@ pub use models::*;
 pub use risk_scoring::{SecurityRecommendation, Severity, VaultHealthReport};
 pub use search::VaultSearchIndex;
 pub use service::VaultService;
+pub use shamir::{
+    reconstruct_master_key, reconstruct_secret, split_master_key, split_secret, ShamirShare,
+};
 pub use storage::VaultStorage;
 pub use totp::{TotpAlgorithm, TotpCodeResponse, TotpConfig};

@@ -8,43 +8,43 @@
 
 ## 1. System Overview & Architectural Topology
 
-The monorepo contains three desktop/mobile applications sharing a unified, robust, and reusable Rust foundation. The architectural philosophy prioritizes strict encapsulation, memory safety, zero-copy operations, sub-millisecond local execution, and total offline autonomy.
+The monorepo contains five flagship standalone desktop/mobile applications sharing a unified, robust, and reusable Rust foundation. The architectural philosophy prioritizes strict encapsulation, memory safety, zero-copy operations, sub-millisecond local execution, and total offline autonomy.
 
 ```
-+-----------------------------------------------------------------------------------+
-|                                 USER INTERFACES                                   |
-|   Desktop: Tauri v2 + Svelte (TypeScript)     |   Mobile: Flutter (Dart)          |
-|   - Virtualized Viewports (60 FPS)           |   - Mobile Shell (Phase 8)        |
-|   - Hardware Canvas / WebGL                   |   - Native Platform Channels      |
-+-----------------------------------------------------------------------------------+
-                                         |
-                       [ Tauri IPC / C-ABI / Rust FFI ]
-                                         v
-+-----------------------------------------------------------------------------------+
-|                              APPLICATION DOMAIN CORE                              |
-|   apps/devops-secret-vault    apps/ai-file-explorer    apps/universal-log-viewer  |
-|   - Vault State & Orchestr.   - Crawl & Dedupe Coord.  - Log Mmap & Tail Stream   |
-|   - TOTP & Cert Monitors      - Semantic Query Engine  - Filter & Anomaly Engine  |
-+-----------------------------------------------------------------------------------+
-                                         |
-                                         v
-+-----------------------------------------------------------------------------------+
-|                               SHARED CRATE ECOSYSTEM                              |
-|  +--------------------+  +--------------------+  +--------------------+           |
-|  |   shared/logging   |  |   shared/storage   |  | shared/encryption  |           |
-|  +--------------------+  +--------------------+  +--------------------+           |
-|  |   shared/search    |  |  shared/indexing   |  |   shared/settings  |           |
-|  +--------------------+  +--------------------+  +--------------------+           |
-|  |  shared/telemetry  |  |   shared/updater   |  |   shared/plugins   |           |
-|  +--------------------+  +--------------------+  +--------------------+           |
-|  |                           platform (OS Abstractions)                       |   |
-|  +--------------------------------------------------------------------+-----------+
-                                         |
-                                         v
-+-----------------------------------------------------------------------------------+
-|                                INFRASTRUCTURE & OS                                |
-|   Native Filesystem  |  SQLite / SQLCipher (WAL)  |  OS Biometrics / Hardware     |
-+-----------------------------------------------------------------------------------+
++-----------------------------------------------------------------------------------------------------------------------+
+|                                                   USER INTERFACES                                                     |
+|   Desktop: Tauri v2 + Svelte 5 (TypeScript)                 |   Mobile: Flutter 3.x (Dart)                            |
+|   - Virtualized 60 FPS Viewports / Hardware Canvases        |   - Native Platform FFI Channels (`*_ffi.dart`)         |
+|   - 100% Offline UI & Zero Unsolicited Network Egress       |   - Android BiometricPrompt & iOS LocalAuthentication   |
++-----------------------------------------------------------------------------------------------------------------------+
+                                                            |
+                                        [ Tauri IPC / C-ABI / Rust FFI ]
+                                                            v
++-----------------------------------------------------------------------------------------------------------------------+
+|                                                APPLICATION DOMAIN CORES                                               |
+|   universal-log-viewer      devops-secret-vault    ai-file-explorer       universal-live-translator   pro-av-editor   |
+|   - Mmap & Tail Stream      - Envelope Encryption  - Tantivy & Crawler    - Sub-500µs LID & NMT       - 60 FPS Compositor
+|   - SIMD Sparse Indexer     - Shamir GF(2^8) Keys  - OCR & Vector Index   - Formant TTS & ASR         - EBU R128 Loudness
+|   - Anomaly / Drain Mining  - TOTP & Cert Monitors - PII Scanner & Dedup  - Camera OCR & Subtitles    - AI Silence Cutter
++-----------------------------------------------------------------------------------------------------------------------+
+                                                            |
+                                                            v
++-----------------------------------------------------------------------------------------------------------------------+
+|                                                 SHARED CRATE ECOSYSTEM                                                |
+|  +--------------------+  +--------------------+  +--------------------+  +--------------------+  +-----------------+  |
+|  |   shared/logging   |  |   shared/storage   |  | shared/encryption  |  |   shared/search    |  | shared/indexing |  |
+|  +--------------------+  +--------------------+  +--------------------+  +--------------------+  +-----------------+  |
+|  |   shared/settings  |  |  shared/telemetry  |  |   shared/updater   |  |   shared/plugins   |  | shared/licensing|  |
+|  +--------------------+  +--------------------+  +--------------------+  +--------------------+  +-----------------+  |
+|  |  shared/model-hub  |  |   shared/ai-core   |  | shared/media-core  |  |     platform (Native OS Subsystems)     |  |
+|  +--------------------+  +--------------------+  +--------------------+  +-----------------------------------------+  |
++-----------------------------------------------------------------------------------------------------------------------+
+                                                            |
+                                                            v
++-----------------------------------------------------------------------------------------------------------------------+
+|                                                  INFRASTRUCTURE & OS                                                  |
+|   Native Filesystem  |  SQLite WAL Connection Pools  |  Win32 / Keychain / Secret Service  |  DirectML / Vulkan / AVX2|
++-----------------------------------------------------------------------------------------------------------------------+
 ```
 
 ---
@@ -53,7 +53,7 @@ The monorepo contains three desktop/mobile applications sharing a unified, robus
 
 ```text
 /
-├── platform/                      # Native OS abstractions (paths, biometrics, resource meters)
+├── platform/                      # Native OS abstractions (Win32 Credential, macOS Keychain, Linux Secret Service, Polkit)
 ├── shared/
 │   ├── logging/                   # Structured logging, rolling appenders, tracing subscriber
 │   ├── storage/                   # SQLite/SQLCipher connection pools, migrations, atomic file I/O
@@ -63,15 +63,21 @@ The monorepo contains three desktop/mobile applications sharing a unified, robus
 │   ├── updater/                   # Cryptographically signed standalone update verifier & staged replacer
 │   ├── plugins/                   # Sandboxed plugin lifecycle, capability manifests, isolated sinks
 │   ├── telemetry/                 # Local-only performance counters & metrics (opt-in; default OFF)
-│   └── settings/                  # Persistent configuration manager with schema validation
+│   ├── settings/                  # Persistent configuration manager with schema validation
+│   ├── model-hub/                 # Offline AI model catalog, Ed25519 verification, weight storage
+│   ├── ai-core/                   # Pure-Rust & ONNX inference, tokenizers, image decoders
+│   ├── media-core/                # Audio DSP, SIMD color conversion, 3D LUT parser
+│   └── licensing/                 # Offline cryptographic license validation and tier gating
 ├── apps/
-│   ├── devops-secret-vault/       # Secret Vault application (Tauri + Svelte UI & Core)
-│   ├── ai-file-explorer/          # AI File Explorer application (Tauri + Svelte UI & Core)
-│   └── universal-log-viewer/      # Universal Log Viewer application (Tauri + Svelte UI & Core)
-├── docs/                          # Standardized 15 architectural & governance documents
+│   ├── devops-secret-vault/       # Secret Vault application (Tauri + Svelte UI, Core & Flutter mobile)
+│   ├── ai-file-explorer/          # AI File Explorer application (Tauri + Svelte UI, Core & Flutter mobile)
+│   ├── universal-log-viewer/      # Universal Log Viewer application (Tauri + Svelte UI, Core & Flutter mobile)
+│   ├── universal-live-translator/ # Universal Live Translator application (Tauri + Svelte UI, Core & Flutter mobile)
+│   └── pro-av-editor/             # Professional Audio & Video Editor (Tauri + Svelte UI, Core & Flutter mobile)
+├── docs/                          # Standardized architectural & governance specifications
 ├── assets/                        # Shared vector icons, design tokens, typography, static assets
-├── scripts/                       # PowerShell and Bash CI/CD, coverage, benchmark, SBOM scripts
-├── tests/                         # End-to-end and cross-crate integration suites
+├── scripts/                       # Multi-platform CI/CD, packaging (Win/Linux/macOS/Mobile), benchmark, SBOM scripts
+├── tests/                         # Cross-crate integration test suites
 ├── benchmarks/                    # Comprehensive Criterion benchmark harnesses
 └── .github/workflows/             # 7 strict GitHub Actions CI/CD workflows
 ```

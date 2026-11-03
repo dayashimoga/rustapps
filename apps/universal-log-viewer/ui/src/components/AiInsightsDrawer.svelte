@@ -1,33 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-
-  export interface TemplateClusterUi {
-    cluster_id: number;
-    template: string;
-    token_count: number;
-    frequency: number;
-    sample_lines: number[];
-  }
-
-  export interface AnomalySpikeUi {
-    spike_id: number;
-    start_epoch_ms: number;
-    end_epoch_ms: number;
-    z_score: number;
-    observed_value: number;
-    expected_value: number;
-    metric_name: string;
-    description: string;
-    severity: string;
-  }
-
-  export interface ErrorClusterUi {
-    cluster_id: number;
-    template: string;
-    error_count: number;
-    affected_sources: string[];
-    sample_lines: number[];
-  }
+  import type { TemplateClusterUi, AnomalySpikeUi, ErrorClusterUi } from '../types';
 
   export let isOpen = false;
   export let templates: TemplateClusterUi[] = [];

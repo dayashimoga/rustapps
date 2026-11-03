@@ -98,7 +98,10 @@
       {#each lines as line (line.line_number)}
         <div
           class="log-row {getLogLevelClass(line.text)} {line.line_number === activeLine ? 'row-active' : ''}"
+          role="button"
+          tabindex="0"
           on:dblclick={() => dispatch('bookmarkLine', { line: line.line_number })}
+          on:keydown={(e) => e.key === 'Enter' && dispatch('bookmarkLine', { line: line.line_number })}
           title="Double click to bookmark line {line.line_number + 1}"
         >
           <!-- Line Number Gutter -->

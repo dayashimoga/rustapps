@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # macOS Packaging Automation Script (ADR-0030)
-# Packages DevOps Secret Vault, AI File Explorer, and Universal Log Viewer for macOS (Intel / Apple Silicon / Universal)
+# Packages DevOps Secret Vault, AI File Explorer, Universal Log Viewer, Universal Live Translator, and Pro AV Editor for macOS (Intel / Apple Silicon / Universal)
 set -euo pipefail
 
 VERSION="${1:-0.1.0}"
@@ -10,7 +10,7 @@ echo "=========================================================="
 echo "  Packaging Monorepo Apps for macOS (Universal) v${VERSION}"
 echo "=========================================================="
 
-APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer")
+APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor")
 mkdir -p "${OUTPUT_DIR}"
 
 # 1. Compile Targets (Apple Silicon & Intel)

@@ -154,4 +154,38 @@ export interface ContentSearchResult {
   execution_time_ms: number;
 }
 
-export type ActiveTab = 'browser' | 'duplicates' | 'treemap' | 'batch_rename' | 'content_search' | 'screenshots';
+export type FindingSeverity = 'critical' | 'high' | 'medium';
+export type SensitiveDataType =
+  | 'private_key'
+  | 'aws_access_key'
+  | 'ssn'
+  | 'credit_card'
+  | 'connection_string_password';
+
+export interface SensitiveFinding {
+  id: string;
+  data_type: SensitiveDataType;
+  severity: FindingSeverity;
+  file_path: string;
+  line_number: number;
+  redacted_preview: string;
+}
+
+export interface ComplianceScanSummary {
+  scanned_files_count: number;
+  findings_count: number;
+  critical_count: number;
+  high_count: number;
+  medium_count: number;
+  findings: SensitiveFinding[];
+  scan_duration_ms: number;
+}
+
+export type ActiveTab =
+  | 'browser'
+  | 'duplicates'
+  | 'treemap'
+  | 'batch_rename'
+  | 'content_search'
+  | 'screenshots'
+  | 'compliance';

@@ -1,7 +1,7 @@
 # Windows Packaging Automation Script (ADR-0030)
-# Packages DevOps Secret Vault, AI File Explorer, and Universal Log Viewer for Windows
+# Packages DevOps Secret Vault, AI File Explorer, Universal Log Viewer, Universal Live Translator, and Pro AV Editor for Windows
 param (
-    [string]$Target = "x86_64-pc-windows-msvc",
+    [string]$Target = $( (rustc -vV | Select-String "host:").ToString().Split(':')[1].Trim() ),
     [string]$Version = "0.1.0",
     [string]$OutputDir = "dist/windows"
 )
@@ -11,7 +11,7 @@ Write-Host "==========================================================" -Foregro
 Write-Host "  Packaging Monorepo Apps for Windows ($Target) v$Version" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
-$Apps = @("devops-secret-vault", "ai-file-explorer", "universal-log-viewer")
+$Apps = @("devops-secret-vault", "ai-file-explorer", "universal-log-viewer", "universal-live-translator", "pro-av-editor")
 
 # Ensure output directory exists
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null

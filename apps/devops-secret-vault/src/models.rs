@@ -9,7 +9,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use crate::error::VaultError;
 
 /// Supported secret types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Zeroize)]
 #[serde(rename_all = "snake_case")]
 pub enum SecretType {
     Password,
@@ -54,7 +54,7 @@ impl SecretType {
 }
 
 /// Non-sensitive secret metadata stored and indexed
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize)]
 pub struct SecretMetadata {
     pub id: String,
     pub title: String,
@@ -307,8 +307,9 @@ impl SecretPayload {
 }
 
 /// Fully decrypted secret combining metadata and sensitive payload
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct DecryptedSecret {
+    #[zeroize(skip)]
     pub metadata: SecretMetadata,
     pub payload: SecretPayload,
 }
@@ -321,7 +322,7 @@ pub struct EncryptedSecretRecord {
 }
 
 /// Creation payload passed from UI / API
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Zeroize)]
 pub struct CreateSecretInput {
     pub title: String,
     pub tags: Vec<String>,
@@ -332,7 +333,7 @@ pub struct CreateSecretInput {
 }
 
 /// Update payload
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Zeroize)]
 pub struct UpdateSecretInput {
     pub title: Option<String>,
     pub tags: Option<Vec<String>>,
@@ -390,14 +391,68 @@ impl SecretAuditAction {
     }
 }
 
-/// Audit entry
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Sensitive metadata fields that are encrypted at rest with AES-256-GCM
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize)]
+pub struct EncryptedMetadataFields {
+    pub tags: Vec<String>,
+    pub username: Option<String>,
+    pub url: Option<String>,
+    pub notes: Option<String>,
+}
+
+/// Audit entry with tamper-evident cryptographic hash chain
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecretAuditEntry {
     pub id: String,
     pub secret_id: String,
     pub action: SecretAuditAction,
     pub timestamp: i64,
     pub client: String,
+    #[serde(default)]
+    pub prev_hash: String,
+    #[serde(default)]
+    pub entry_hash: String,
+}
+
+impl SecretAuditEntry {
+    pub fn new(
+        id: String,
+        secret_id: String,
+        action: SecretAuditAction,
+        timestamp: i64,
+        client: String,
+    ) -> Self {
+        Self {
+            id,
+            secret_id,
+            action,
+            timestamp,
+            client,
+            prev_hash: String::new(),
+            entry_hash: String::new(),
+        }
+    }
+
+    /// Compute deterministic SHA-256 hash chaining this entry with its predecessor
+    pub fn compute_hash(
+        prev_hash: &str,
+        id: &str,
+        secret_id: &str,
+        action: &str,
+        timestamp: i64,
+        client: &str,
+    ) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(b"DEV_VAULT_AUDIT_V1:");
+        hasher.update(prev_hash.as_bytes());
+        hasher.update(id.as_bytes());
+        hasher.update(secret_id.as_bytes());
+        hasher.update(action.as_bytes());
+        hasher.update(timestamp.to_be_bytes());
+        hasher.update(client.as_bytes());
+        format!("{:064x}", hasher.finalize())
+    }
 }
 
 /// Password entropy classification

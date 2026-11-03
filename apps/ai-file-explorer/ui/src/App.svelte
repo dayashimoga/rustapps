@@ -9,16 +9,19 @@
   import ContentSearch from './components/ContentSearch.svelte';
   import ScreenshotGallery from './components/ScreenshotGallery.svelte';
   import DocumentModal from './components/DocumentModal.svelte';
+  import ComplianceScanner from './components/ComplianceScanner.svelte';
   import type {
     ActiveTab,
     BatchRenameResult,
     BatchRenameRule,
+    ComplianceScanSummary,
     DeduplicationSummary,
     DirectoryListing,
     ExtractedDocument,
     FileItem,
     FolderStats,
     RenamePreview,
+    SensitiveFinding,
     TreemapNode,
   } from './types';
 
@@ -227,6 +230,37 @@
       } as unknown as T;
     }
 
+    if (cmd === 'scan_compliance_cmd') {
+      const scanPath = (args.path as string) || currentPath;
+      const mockSummary: ComplianceScanSummary = {
+        scanned_files_count: 18,
+        findings_count: 2,
+        critical_count: 1,
+        high_count: 1,
+        medium_count: 0,
+        scan_duration_ms: 12.4,
+        findings: [
+          {
+            id: 'find-1',
+            data_type: 'private_key',
+            severity: 'critical',
+            file_path: `${scanPath}/id_rsa`,
+            line_number: 1,
+            redacted_preview: '-----BEGIN RSA PRIVATE KEY-----[REDACTED]-----END RSA PRIVATE KEY-----',
+          },
+          {
+            id: 'find-2',
+            data_type: 'ssn',
+            severity: 'high',
+            file_path: `${scanPath}/employees.csv`,
+            line_number: 42,
+            redacted_preview: 'Employee ID: 410, SSN: XXX-XX-6789, Status: Active',
+          },
+        ],
+      };
+      return mockSummary as unknown as T;
+    }
+
     throw new Error(`Unhandled mock Tauri command: ${cmd}`);
   }
 
@@ -359,6 +393,15 @@
     selectedPaths = [];
   }
 
+  async function handleScanDirectoryCompliance(path: string): Promise<ComplianceScanSummary> {
+    return await invokeTauri<ComplianceScanSummary>('scan_compliance_cmd', { path });
+  }
+
+  async function handleScanFileCompliance(path: string): Promise<SensitiveFinding[]> {
+    const summary = await invokeTauri<ComplianceScanSummary>('scan_compliance_cmd', { path });
+    return summary.findings;
+  }
+
   onMount(() => {
     loadDirectory(currentPath);
   });
@@ -417,6 +460,12 @@
         onGeneratePreview={handlePreviewBatchRename}
         onExecuteRename={handleExecuteBatchRename}
         onClearSelection={handleDeselectAll}
+      />
+    {:else if activeTab === 'compliance'}
+      <ComplianceScanner
+        {currentPath}
+        onScanDirectory={handleScanDirectoryCompliance}
+        onScanFile={handleScanFileCompliance}
       />
     {/if}
   </div>

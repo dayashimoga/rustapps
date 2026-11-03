@@ -50,6 +50,10 @@ struct ActiveFileState {
     index: SparseLineIndex,
     tail: Option<TailFollower>,
     detected_format: LogFormat,
+    cached_records: Option<Arc<Vec<NormalizedLogRecord>>>,
+    cached_timeline: Option<Arc<TimelineIndex>>,
+    cached_template_clusters: Option<Arc<Vec<LogTemplateCluster>>>,
+    cached_error_clusters: Option<Arc<Vec<ErrorCluster>>>,
 }
 
 /// Shared application state container
@@ -110,6 +114,10 @@ impl LogViewerService {
                 index,
                 tail: None,
                 detected_format,
+                cached_records: None,
+                cached_timeline: None,
+                cached_template_clusters: None,
+                cached_error_clusters: None,
             });
         }
 
@@ -168,6 +176,12 @@ impl LogViewerService {
         let state = active_lock
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No active log file opened"))?;
+
+        // If all records are cached and cover the requested count, slice from cache
+        if let Some(ref cached) = state.cached_records {
+            let limit = cached.len().min(max_records);
+            return Ok(cached[..limit].to_vec());
+        }
 
         let total_lines = state.index.total_lines();
         let limit = total_lines.min(max_records);
@@ -235,43 +249,150 @@ impl LogViewerService {
         Ok(records)
     }
 
-    /// Retrieve or compute aggregated timeline histogram
+    /// Ensure timeline index, error clusters, and Drain templates are analyzed and cached
+    pub async fn ensure_analyzed(&self) -> anyhow::Result<()> {
+        let mut active_lock = self.active_file.write().await;
+        let state = active_lock
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("No active log file opened"))?;
+
+        if state.cached_timeline.is_some() {
+            return Ok(());
+        }
+
+        let total_lines = state.index.total_lines();
+        let bytes = state.engine.as_bytes();
+        let format = state.detected_format;
+        let k8s_meta =
+            KubernetesImporter::extract_metadata_from_path(&state.path.to_string_lossy());
+
+        let csv_parser = if format == LogFormat::Csv || format == LogFormat::Tsv {
+            let delim = if format == LogFormat::Tsv {
+                b'\t'
+            } else {
+                b','
+            };
+            let mut p = StreamingCsvParser::new(delim);
+            if let Some((start, end)) = state.index.get_line_byte_range(0, bytes) {
+                if let Ok(hdr) = state.engine.read_text_range(start, end) {
+                    p.with_header_line(&hdr);
+                }
+            }
+            Some(p)
+        } else {
+            None
+        };
+
+        let mut records = Vec::with_capacity(total_lines);
+        let mut miner = DrainLogMiner::new();
+
+        for line_idx in 0..total_lines {
+            if let Some((start, end)) = state.index.get_line_byte_range(line_idx, bytes) {
+                if let Ok(text) = state.engine.read_text_range(start, end) {
+                    let rec = match format {
+                        LogFormat::JsonLines => StreamingJsonParser::parse_line(line_idx, &text),
+                        LogFormat::CloudWatch => CloudWatchImporter::parse_line(line_idx, &text)
+                            .unwrap_or_else(|| StreamingJsonParser::parse_line(line_idx, &text)),
+                        LogFormat::Kubernetes => {
+                            KubernetesImporter::parse_cri_line(line_idx, &text, k8s_meta.as_ref())
+                        }
+                        LogFormat::Csv | LogFormat::Tsv => {
+                            if let Some(ref p) = csv_parser {
+                                p.parse_row(line_idx, &text)
+                            } else {
+                                StreamingJsonParser::parse_line(line_idx, &text)
+                            }
+                        }
+                        _ => {
+                            let sev = LogSeverity::parse_str(&text);
+                            NormalizedLogRecord {
+                                line_number: line_idx,
+                                raw: text.clone(),
+                                timestamp_raw: None,
+                                timestamp_epoch_ms: crate::parsers::parse_timestamp(&text),
+                                severity: sev,
+                                message: text.clone(),
+                                source: None,
+                                attributes: std::collections::BTreeMap::new(),
+                            }
+                        }
+                    };
+                    miner.add_log(rec.line_number, &rec.message);
+                    records.push(rec);
+                }
+            }
+        }
+
+        let timeline = TimelineIndex::from_records(&records);
+        let error_clusters = AnomalyDetector::cluster_errors(&records);
+        let template_clusters = miner.get_clusters();
+
+        state.cached_records = Some(Arc::new(records));
+        state.cached_timeline = Some(Arc::new(timeline));
+        state.cached_template_clusters = Some(Arc::new(template_clusters));
+        state.cached_error_clusters = Some(Arc::new(error_clusters));
+
+        Ok(())
+    }
+
+    /// Retrieve or compute aggregated timeline histogram (sub-millisecond when cached)
     pub async fn get_timeline_histogram(
         &self,
         target_buckets: usize,
     ) -> anyhow::Result<TimelineHistogram> {
-        let records = self.parse_records(50000).await?;
-        let timeline_index = TimelineIndex::from_records(&records);
+        self.ensure_analyzed().await?;
+        let active_lock = self.active_file.read().await;
+        let state = active_lock
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No active log file opened"))?;
 
-        timeline_index
+        let timeline = state
+            .cached_timeline
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Timeline index was not cached"))?;
+
+        timeline
             .generate_histogram(target_buckets)
             .ok_or_else(|| anyhow::anyhow!("No timestamped records available for timeline"))
     }
 
-    /// Filter line numbers by time range [start_ms, end_ms]
+    /// Filter line numbers by time range [start_ms, end_ms] (sub-millisecond when cached)
     pub async fn filter_by_timerange(
         &self,
         start_ms: i64,
         end_ms: i64,
     ) -> anyhow::Result<Vec<usize>> {
-        let records = self.parse_records(50000).await?;
-        let timeline_index = TimelineIndex::from_records(&records);
-        Ok(timeline_index.filter_by_timerange(start_ms, end_ms))
+        self.ensure_analyzed().await?;
+        let active_lock = self.active_file.read().await;
+        let state = active_lock
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No active log file opened"))?;
+
+        let timeline = state
+            .cached_timeline
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Timeline index was not cached"))?;
+
+        Ok(timeline.filter_by_timerange(start_ms, end_ms))
     }
 
-    /// Mine log templates using offline Drain prefix tree
+    /// Mine log templates using offline Drain prefix tree (sub-millisecond when cached)
     pub async fn mine_templates(
         &self,
-        max_records: usize,
+        _max_records: usize,
     ) -> anyhow::Result<Vec<LogTemplateCluster>> {
-        let records = self.parse_records(max_records).await?;
-        let mut miner = DrainLogMiner::new();
+        self.ensure_analyzed().await?;
+        let active_lock = self.active_file.read().await;
+        let state = active_lock
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No active log file opened"))?;
 
-        for r in &records {
-            miner.add_log(r.line_number, &r.message);
-        }
+        let clusters = state
+            .cached_template_clusters
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Template clusters were not cached"))?;
 
-        Ok(miner.get_clusters())
+        Ok((**clusters).clone())
     }
 
     /// Detect volume spikes and error anomalies
@@ -297,10 +418,20 @@ impl LogViewerService {
         Ok(AnomalyDetector::detect_spikes(&bucket_tuples, z_threshold))
     }
 
-    /// Group error records by template clusters
-    pub async fn cluster_errors(&self, max_records: usize) -> anyhow::Result<Vec<ErrorCluster>> {
-        let records = self.parse_records(max_records).await?;
-        Ok(AnomalyDetector::cluster_errors(&records))
+    /// Group error records by template clusters (sub-millisecond when cached)
+    pub async fn cluster_errors(&self, _max_records: usize) -> anyhow::Result<Vec<ErrorCluster>> {
+        self.ensure_analyzed().await?;
+        let active_lock = self.active_file.read().await;
+        let state = active_lock
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No active log file opened"))?;
+
+        let clusters = state
+            .cached_error_clusters
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Error clusters were not cached"))?;
+
+        Ok((**clusters).clone())
     }
 
     /// Correlate container failure chains across time window
@@ -310,6 +441,29 @@ impl LogViewerService {
     ) -> anyhow::Result<Vec<CorrelatedFailureChain>> {
         let records = self.parse_records(10000).await?;
         Ok(KubernetesImporter::correlate_failures(&records, window_ms))
+    }
+
+    /// Redact active log records and export to destination file (Business Tier)
+    pub async fn export_redacted(
+        &self,
+        dest_path: &Path,
+        gate: &shared_licensing::TierGate,
+    ) -> anyhow::Result<usize> {
+        self.ensure_analyzed().await?;
+        let active_lock = self.active_file.read().await;
+        let state = active_lock
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No active log file opened"))?;
+
+        let records = state
+            .cached_records
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Records not cached"))?;
+
+        let engine = crate::redaction::RedactionEngine::new();
+        let mut file = std::fs::File::create(dest_path)?;
+        let count = engine.export_redacted_stream(records, &mut file, gate)?;
+        Ok(count)
     }
 
     /// Execute a registered plugin

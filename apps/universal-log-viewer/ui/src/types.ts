@@ -47,3 +47,53 @@ export interface ProcessResourceUsage {
   resident_set_size_bytes: number;
   cpu_percentage: number;
 }
+
+export interface TimelineBucketUi {
+  bucket_index: number;
+  start_epoch_ms: number;
+  end_epoch_ms: number;
+  total_count: number;
+  trace_count: number;
+  debug_count: number;
+  info_count: number;
+  warn_count: number;
+  error_count: number;
+  fatal_count: number;
+  volume_per_second: number;
+}
+
+export interface TimelineHistogramUi {
+  min_epoch_ms: number;
+  max_epoch_ms: number;
+  total_records: number;
+  bucket_width_ms: number;
+  buckets: TimelineBucketUi[];
+}
+
+export interface TemplateClusterUi {
+  cluster_id: number;
+  template: string;
+  token_count: number;
+  frequency: number;
+  sample_lines: number[];
+}
+
+export interface AnomalySpikeUi {
+  spike_id: number;
+  start_epoch_ms: number;
+  end_epoch_ms: number;
+  z_score: number;
+  observed_value: number;
+  expected_value: number;
+  metric_name: string;
+  description: string;
+  severity: string;
+}
+
+export interface ErrorClusterUi {
+  cluster_id: number;
+  template: string;
+  error_count: number;
+  affected_sources: string[];
+  sample_lines: number[];
+}

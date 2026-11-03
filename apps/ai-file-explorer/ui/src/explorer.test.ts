@@ -94,10 +94,10 @@ describe('AI File Explorer Frontend Utilities', () => {
       return a.file_name.localeCompare(b.file_name);
     });
 
-    expect(sorted[0].is_dir).toBe(true);
-    expect(sorted[0].file_name).toBe('src');
-    expect(sorted[1].file_name).toBe('app.rs');
-    expect(sorted[2].file_name).toBe('doc.txt');
+    expect(sorted[0]!.is_dir).toBe(true);
+    expect(sorted[0]!.file_name).toBe('src');
+    expect(sorted[1]!.file_name).toBe('app.rs');
+    expect(sorted[2]!.file_name).toBe('doc.txt');
   });
 
   it('calculates Hamming distance and similarity percentage for visual screenshot matching', () => {
@@ -118,8 +118,26 @@ describe('AI File Explorer Frontend Utilities', () => {
     ];
 
     const sorted = [...results].sort((a, b) => b.score - a.score);
-    expect(sorted[0].file_name).toBe('b.pdf');
-    expect(sorted[1].file_name).toBe('c.rs');
-    expect(sorted[2].file_name).toBe('a.md');
+    expect(sorted[0]!.file_name).toBe('b.pdf');
+    expect(sorted[1]!.file_name).toBe('c.rs');
+    expect(sorted[2]!.file_name).toBe('a.md');
+  });
+
+  it('aggregates compliance findings by severity properly', () => {
+    const findings = [
+      { id: '1', data_type: 'private_key', severity: 'critical' },
+      { id: '2', data_type: 'ssn', severity: 'high' },
+      { id: '3', data_type: 'credit_card', severity: 'high' },
+      { id: '4', data_type: 'connection_string_password', severity: 'medium' },
+    ];
+
+    const critical = findings.filter(f => f.severity === 'critical').length;
+    const high = findings.filter(f => f.severity === 'high').length;
+    const medium = findings.filter(f => f.severity === 'medium').length;
+
+    expect(critical).toBe(1);
+    expect(high).toBe(2);
+    expect(medium).toBe(1);
+    expect(findings.length).toBe(4);
   });
 });

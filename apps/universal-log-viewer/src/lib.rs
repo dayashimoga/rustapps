@@ -1,4 +1,3 @@
-#![forbid(unsafe_code)]
 //! Universal Log Viewer Core Library
 //!
 //! High-throughput, memory-mapped log analysis engine capable of processing
@@ -6,10 +5,12 @@
 
 pub mod cloud_importers;
 pub mod commands;
+pub mod ffi;
 pub mod local_ai;
 pub mod mmap_engine;
 pub mod parsers;
 pub mod plugin_integration;
+pub mod redaction;
 pub mod search_engine;
 pub mod sparse_index;
 pub mod tail_mode;
@@ -30,6 +31,7 @@ pub use parsers::{
     StreamingCsvParser, StreamingJsonParser,
 };
 pub use plugin_integration::LogViewerPluginManager;
+pub use redaction::{RedactionEngine, RedactionError};
 pub use search_engine::{LogQuery, LogSearchEngine, LogSearchMatch, LogSearchReport};
 pub use sparse_index::SparseLineIndex;
 pub use tail_mode::{TailEvent, TailFollower};

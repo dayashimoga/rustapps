@@ -160,3 +160,18 @@ The advanced intelligence capabilities of AI File Explorer (Phase 6) adhere to s
    - 8-bit integer quantization (`[i8; 64]`) consumes exactly 64 bytes per document, allowing 100,000 indexed documents to fit in $< 6.4\,\text{MB}$ of vector memory, well within the 300MB RAM budget.
    - Zero-call external API isolation: All tokenization, character n-gram hashing, and vector projections are calculated on-device with zero cloud telemetry or network egress.
 
+---
+
+## 9. Universal Live Translator & Pro AV Editor Offline Security Controls
+
+1. **Universal Live Translator Security Controls:**
+   - **Local Acoustic & NMT Isolation:** Language identification (LID), Neural Machine Translation (NMT), Speech Recognition (ASR), and Formant Speech Synthesis (TTS) execute 100% locally on-device. Audio streams from WASAPI, CoreAudio, ALSA, or PipeWire are processed in volatile memory buffers and immediately zeroized on drop.
+   - **Encrypted Local History & Phrasebook:** User phrasebook records and translation logs are stored in a dedicated local SQLite database operating in WAL mode, with sensitive notes encrypted via AES-256-GCM.
+   - **Offline Camera OCR & Subtitle Parsing:** Camera image frames and SRT/VTT subtitle files are parsed using pure-Rust decoders with strict memory bounds, preventing memory corruption or script injection vulnerabilities.
+
+2. **Professional Audio & Video Editor Security Controls:**
+   - **Atomic Project Persistence:** Project files (`.avedproj`) use atomic staging write patterns and are verified on load with BLAKE3 cryptographic hashes, preventing corrupted or tampered timelines from causing denial of service.
+   - **Bounded Compositor & Frame Safety:** Frame decoding enforces dimension boundaries (`render_width <= 7680`, `render_height <= 4320`) and executes layer compositing in memory-safe Rust buffers with strict numeric overflow checks.
+   - **Air-Gapped Media Processing:** Multi-track audio mixing, 8-band Biquad EQ filtering, EBU R128 loudness metering, and video color grading operate strictly offline with zero external network dependencies.
+
+

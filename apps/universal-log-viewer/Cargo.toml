@@ -8,6 +8,7 @@ license.workspace = true
 [lib]
 name = "universal_log_viewer"
 path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "universal-log-viewer"
@@ -35,6 +36,7 @@ shared-settings = { path = "../../shared/settings" }
 shared-telemetry = { path = "../../shared/telemetry" }
 shared-plugins = { path = "../../shared/plugins" }
 shared-indexing = { path = "../../shared/indexing" }
+shared-licensing = { path = "../../shared/licensing" }
 
 [dev-dependencies]
 tempfile.workspace = true

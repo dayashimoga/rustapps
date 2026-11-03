@@ -94,6 +94,41 @@ typedef _dart_vault_import_backup = Pointer<Utf8> Function(
 typedef _c_vault_free_string = Void Function(Pointer<Utf8> s);
 typedef _dart_vault_free_string = void Function(Pointer<Utf8> s);
 
+typedef _c_vault_verify_audit_chain = Int32 Function(
+    Pointer<VaultHandleOpaque> handle);
+typedef _dart_vault_verify_audit_chain = int Function(
+    Pointer<VaultHandleOpaque> handle);
+
+typedef _c_vault_is_biometric_available = Int32 Function(
+    Pointer<VaultHandleOpaque> handle);
+typedef _dart_vault_is_biometric_available = int Function(
+    Pointer<VaultHandleOpaque> handle);
+
+typedef _c_vault_enable_biometric_unlock = Int32 Function(
+    Pointer<VaultHandleOpaque> handle);
+typedef _dart_vault_enable_biometric_unlock = int Function(
+    Pointer<VaultHandleOpaque> handle);
+
+typedef _c_vault_disable_biometric_unlock = Int32 Function(
+    Pointer<VaultHandleOpaque> handle);
+typedef _dart_vault_disable_biometric_unlock = int Function(
+    Pointer<VaultHandleOpaque> handle);
+
+typedef _c_vault_unlock_with_biometrics = Int32 Function(
+    Pointer<VaultHandleOpaque> handle);
+typedef _dart_vault_unlock_with_biometrics = int Function(
+    Pointer<VaultHandleOpaque> handle);
+
+typedef _c_vault_split_master_key = Pointer<Utf8> Function(
+    Pointer<VaultHandleOpaque> handle, Uint8 threshold, Uint8 totalShares);
+typedef _dart_vault_split_master_key = Pointer<Utf8> Function(
+    Pointer<VaultHandleOpaque> handle, int threshold, int totalShares);
+
+typedef _c_vault_unlock_with_shamir_shares = Int32 Function(
+    Pointer<VaultHandleOpaque> handle, Pointer<Utf8> sharesJson);
+typedef _dart_vault_unlock_with_shamir_shares = int Function(
+    Pointer<VaultHandleOpaque> handle, Pointer<Utf8> sharesJson);
+
 /// Dynamic loader and FFI interface to Rust `vault_core`
 class VaultFfiBindings {
   static VaultFfiBindings? _instance;
@@ -115,6 +150,13 @@ class VaultFfiBindings {
   late _dart_vault_export_backup exportBackup;
   late _dart_vault_import_backup importBackup;
   late _dart_vault_free_string freeString;
+  late _dart_vault_verify_audit_chain verifyAuditChain;
+  late _dart_vault_is_biometric_available isBiometricAvailable;
+  late _dart_vault_enable_biometric_unlock enableBiometricUnlock;
+  late _dart_vault_disable_biometric_unlock disableBiometricUnlock;
+  late _dart_vault_unlock_with_biometrics unlockWithBiometrics;
+  late _dart_vault_split_master_key splitMasterKey;
+  late _dart_vault_unlock_with_shamir_shares unlockWithShamirShares;
 
   VaultFfiBindings._(DynamicLibrary lib) {
     _lib = lib;
@@ -149,6 +191,20 @@ class VaultFfiBindings {
         _dart_vault_import_backup>('vault_import_backup');
     freeString = _lib.lookupFunction<_c_vault_free_string,
         _dart_vault_free_string>('vault_free_string');
+    verifyAuditChain = _lib.lookupFunction<_c_vault_verify_audit_chain,
+        _dart_vault_verify_audit_chain>('vault_verify_audit_chain');
+    isBiometricAvailable = _lib.lookupFunction<_c_vault_is_biometric_available,
+        _dart_vault_is_biometric_available>('vault_is_biometric_available');
+    enableBiometricUnlock = _lib.lookupFunction<_c_vault_enable_biometric_unlock,
+        _dart_vault_enable_biometric_unlock>('vault_enable_biometric_unlock');
+    disableBiometricUnlock = _lib.lookupFunction<_c_vault_disable_biometric_unlock,
+        _dart_vault_disable_biometric_unlock>('vault_disable_biometric_unlock');
+    unlockWithBiometrics = _lib.lookupFunction<_c_vault_unlock_with_biometrics,
+        _dart_vault_unlock_with_biometrics>('vault_unlock_with_biometrics');
+    splitMasterKey = _lib.lookupFunction<_c_vault_split_master_key,
+        _dart_vault_split_master_key>('vault_split_master_key');
+    unlockWithShamirShares = _lib.lookupFunction<_c_vault_unlock_with_shamir_shares,
+        _dart_vault_unlock_with_shamir_shares>('vault_unlock_with_shamir_shares');
   }
 
   /// Factory resolving OS-specific dynamic library binary path

@@ -383,4 +383,76 @@ class VaultService {
       calloc.free(pathPtr);
     }
   }
+
+  /// Verify tamper-evident cryptographic hash chain of audit logs
+  Future<bool> verifyAuditChain() async {
+    if (_mockMode) return true;
+    if (_handle == null) throw StateError('Vault handle not opened');
+    return _ffi!.verifyAuditChain(_handle!) == 1;
+  }
+
+  /// Check whether biometric authentication is supported on this mobile device
+  Future<bool> isBiometricAvailable() async {
+    if (_mockMode) return true;
+    if (_handle == null) return false;
+    return _ffi!.isBiometricAvailable(_handle!) == 1;
+  }
+
+  /// Enable biometric unlock by saving active master key in platform keyring
+  Future<bool> enableBiometricUnlock() async {
+    if (_mockMode) return true;
+    if (_handle == null) throw StateError('Vault handle not opened');
+    return _ffi!.enableBiometricUnlock(_handle!) == 0;
+  }
+
+  /// Disable biometric unlock by clearing key from platform keyring
+  Future<bool> disableBiometricUnlock() async {
+    if (_mockMode) return true;
+    if (_handle == null) throw StateError('Vault handle not opened');
+    return _ffi!.disableBiometricUnlock(_handle!) == 0;
+  }
+
+  /// Unlock vault with native platform biometrics
+  Future<bool> unlockWithBiometrics() async {
+    if (_mockMode) {
+      _mockLocked = false;
+      return true;
+    }
+    if (_handle == null) throw StateError('Vault handle not opened');
+    final res = _ffi!.unlockWithBiometrics(_handle!);
+    return res == 0;
+  }
+
+  /// Split vault master key into Shamir shares JSON
+  Future<String> splitMasterKey(int threshold, int totalShares) async {
+    if (_mockMode) {
+      return jsonEncode([
+        {'index': 1, 'threshold': threshold, 'total_shares': totalShares, 'data': [1, 2, 3]},
+        {'index': 2, 'threshold': threshold, 'total_shares': totalShares, 'data': [4, 5, 6]},
+      ]);
+    }
+    if (_handle == null) throw StateError('Vault handle not opened');
+    final resPtr = _ffi!.splitMasterKey(_handle!, threshold, totalShares);
+    final outStr = _ffi!.readAndFreeString(resPtr);
+    if (outStr == null) {
+      throw Exception('Failed to split master key');
+    }
+    return outStr;
+  }
+
+  /// Unlock vault using Shamir shares JSON
+  Future<bool> unlockWithShamirShares(String sharesJson) async {
+    if (_mockMode) {
+      _mockLocked = false;
+      return true;
+    }
+    if (_handle == null) throw StateError('Vault handle not opened');
+    final jsonPtr = sharesJson.toNativeUtf8();
+    try {
+      final res = _ffi!.unlockWithShamirShares(_handle!, jsonPtr);
+      return res == 0;
+    } finally {
+      calloc.free(jsonPtr);
+    }
+  }
 }

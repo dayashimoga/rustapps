@@ -203,45 +203,45 @@ pub trait BiometricProvider: Send + Sync {
     fn authenticate(&self, prompt_message: &str) -> Result<bool, EncryptionError>;
 }
 
-/// Mock / Platform biometric authenticator for testing and fallback
-pub struct MockBiometricProvider {
-    pub available: bool,
-    pub allow_authentication: bool,
-}
-
-impl Default for MockBiometricProvider {
-    fn default() -> Self {
-        Self {
-            available: true,
-            allow_authentication: true,
-        }
-    }
-}
-
-impl BiometricProvider for MockBiometricProvider {
-    fn is_available(&self) -> bool {
-        self.available
-    }
-
-    fn authenticate(&self, _prompt_message: &str) -> Result<bool, EncryptionError> {
-        if !self.available {
-            return Err(EncryptionError::BiometricFailed(
-                "Biometric hardware unavailable".to_string(),
-            ));
-        }
-        if self.allow_authentication {
-            Ok(true)
-        } else {
-            Err(EncryptionError::BiometricFailed(
-                "User cancelled or verification failed".to_string(),
-            ))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test-only Mock biometric authenticator
+    struct MockBiometricProvider {
+        available: bool,
+        allow_authentication: bool,
+    }
+
+    impl Default for MockBiometricProvider {
+        fn default() -> Self {
+            Self {
+                available: true,
+                allow_authentication: true,
+            }
+        }
+    }
+
+    impl BiometricProvider for MockBiometricProvider {
+        fn is_available(&self) -> bool {
+            self.available
+        }
+
+        fn authenticate(&self, _prompt_message: &str) -> Result<bool, EncryptionError> {
+            if !self.available {
+                return Err(EncryptionError::BiometricFailed(
+                    "Biometric hardware unavailable".to_string(),
+                ));
+            }
+            if self.allow_authentication {
+                Ok(true)
+            } else {
+                Err(EncryptionError::BiometricFailed(
+                    "User cancelled or verification failed".to_string(),
+                ))
+            }
+        }
+    }
 
     #[test]
     fn test_aes_gcm_roundtrip() {

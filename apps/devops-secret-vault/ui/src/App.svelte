@@ -36,6 +36,7 @@
   let isNewSecretModalOpen = false;
   let isHealthDashboardOpen = false;
   let isBackupModalOpen = false;
+  let biometricAvailable = true;
   let clipboardSeconds: number | null = null;
   let clipboardTimer: number | null = null;
 
@@ -141,6 +142,11 @@
         const res: any = await (window as any).__TAURI__.invoke('get_vault_status');
         isInitialized = res.is_initialized;
         isLocked = res.is_locked;
+        try {
+          biometricAvailable = await (window as any).__TAURI__.invoke('is_biometric_available');
+        } catch (_) {
+          biometricAvailable = false;
+        }
         if (!isLocked) {
           await loadSecrets();
         }
@@ -151,6 +157,7 @@
       // Mock mode default: initialized but locked
       isInitialized = true;
       isLocked = true;
+      biometricAvailable = true;
     }
   }
 
@@ -205,12 +212,16 @@
     isLoading = true;
     errorMessage = '';
     try {
-      await new Promise(r => setTimeout(r, 600));
+      if (isTauri) {
+        await (window as any).__TAURI__.invoke('unlock_with_biometrics');
+      } else {
+        await new Promise(r => setTimeout(r, 600));
+      }
       isLocked = false;
       await loadSecrets();
       showToast('Unlocked via Windows Hello / Hardware Biometrics.');
     } catch (err: any) {
-      errorMessage = 'Biometric verification failed.';
+      errorMessage = err?.toString() || 'Biometric verification failed.';
     } finally {
       isLoading = false;
     }
@@ -511,6 +522,7 @@
       {isInitialized}
       {errorMessage}
       {isLoading}
+      {biometricAvailable}
       on:unlock={handleUnlock}
       on:initialize={handleInitialize}
       on:biometricUnlock={handleBiometricUnlock}

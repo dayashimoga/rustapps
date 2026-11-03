@@ -427,6 +427,150 @@ pub unsafe extern "C" fn vault_free_string(s: *mut c_char) {
     }
 }
 
+/// Verify the complete cryptographic hash chain of the audit log (returns 1 if valid, 0 if tampered/error)
+///
+/// # Safety
+/// `handle` must be a valid non-null pointer.
+#[no_mangle]
+pub unsafe extern "C" fn vault_verify_audit_chain(handle: *mut VaultHandle) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+    let h = &*handle;
+    match h.rt.block_on(h.service.verify_audit_chain()) {
+        Ok(valid) => {
+            if valid {
+                1
+            } else {
+                0
+            }
+        }
+        Err(_) => 0,
+    }
+}
+
+/// Check if biometrics are supported on this device (1 = yes, 0 = no)
+///
+/// # Safety
+/// `handle` must be a valid pointer from `vault_create_handle`.
+#[no_mangle]
+pub unsafe extern "C" fn vault_is_biometric_available(handle: *mut VaultHandle) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+    let h = &*handle;
+    if h.service.is_biometric_available() {
+        1
+    } else {
+        0
+    }
+}
+
+/// Enable biometric unlock by saving active master key in platform keyring (0 on success, -1 on failure)
+///
+/// # Safety
+/// `handle` must be a valid pointer from `vault_create_handle`.
+#[no_mangle]
+pub unsafe extern "C" fn vault_enable_biometric_unlock(handle: *mut VaultHandle) -> i32 {
+    if handle.is_null() {
+        return -1;
+    }
+    let h = &*handle;
+    match h.rt.block_on(h.service.enable_biometric_unlock()) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Disable biometric unlock by clearing key from platform keyring (0 on success, -1 on failure)
+///
+/// # Safety
+/// `handle` must be a valid pointer from `vault_create_handle`.
+#[no_mangle]
+pub unsafe extern "C" fn vault_disable_biometric_unlock(handle: *mut VaultHandle) -> i32 {
+    if handle.is_null() {
+        return -1;
+    }
+    let h = &*handle;
+    match h.service.disable_biometric_unlock() {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Unlock vault with native biometrics (0 on success, -1 on failure)
+///
+/// # Safety
+/// `handle` must be a valid pointer from `vault_create_handle`.
+#[no_mangle]
+pub unsafe extern "C" fn vault_unlock_with_biometrics(handle: *mut VaultHandle) -> i32 {
+    if handle.is_null() {
+        return -1;
+    }
+    let h = &*handle;
+    match h.rt.block_on(h.service.unlock_with_biometrics()) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Split vault master key into Shamir shares JSON (Business Tier)
+///
+/// # Safety
+/// `handle` must be a valid pointer from `vault_create_handle`. The returned string must be freed with `vault_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn vault_split_master_key(
+    handle: *mut VaultHandle,
+    threshold: u8,
+    total_shares: u8,
+) -> *mut c_char {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+    let h = &*handle;
+    let gate = shared_licensing::TierGate::enterprise();
+    match h
+        .rt
+        .block_on(h.service.split_master_key(threshold, total_shares, &gate))
+    {
+        Ok(shares) => match serde_json::to_string(&shares) {
+            Ok(json) => match CString::new(json) {
+                Ok(c_str) => c_str.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            },
+            Err(_) => std::ptr::null_mut(),
+        },
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Unlock vault using Shamir shares JSON (0 on success, -1 on failure)
+///
+/// # Safety
+/// `handle` must be a valid pointer from `vault_create_handle`. `shares_json` must be a valid null-terminated JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn vault_unlock_with_shamir_shares(
+    handle: *mut VaultHandle,
+    shares_json: *const c_char,
+) -> i32 {
+    if handle.is_null() || shares_json.is_null() {
+        return -1;
+    }
+    let h = &*handle;
+    let c_str = match CStr::from_ptr(shares_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let shares: Vec<crate::shamir::ShamirShare> = match serde_json::from_str(c_str) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    match h.rt.block_on(h.service.unlock_with_shamir_shares(&shares)) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,6 +667,26 @@ mod tests {
             assert!(!backup_ptr.is_null());
             vault_free_string(backup_ptr);
             assert!(backup_file.exists());
+
+            // Verify audit chain
+            assert_eq!(vault_verify_audit_chain(handle), 1);
+
+            // Test Shamir split and unlock via FFI
+            let shares_ptr = vault_split_master_key(handle, 2, 3);
+            assert!(!shares_ptr.is_null());
+            let shares_json = CStr::from_ptr(shares_ptr).to_str().unwrap().to_string();
+            vault_free_string(shares_ptr);
+
+            // Lock vault and reconstruct using shares
+            assert_eq!(vault_lock(handle), 0);
+            assert_eq!(vault_is_locked(handle), 1);
+
+            let c_shares = CString::new(shares_json).unwrap();
+            assert_eq!(
+                vault_unlock_with_shamir_shares(handle, c_shares.as_ptr()),
+                0
+            );
+            assert_eq!(vault_is_locked(handle), 0);
 
             vault_free_handle(handle);
         }

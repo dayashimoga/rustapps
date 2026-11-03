@@ -8,10 +8,12 @@
 
 ## 1. Introduction & The Offline Guarantee
 
-Welcome to the next generation of developer utilities. This suite comprises three high-performance, lightweight, standalone applications:
-1. **DevOps Secret Vault:** Secure credential management with biometric authentication.
-2. **AI File Explorer:** Blazing fast local file cataloging, deduplication, and semantic search.
-3. **Universal Log Viewer:** Instant inspection and pattern mining for massive multi-gigabyte log files.
+Welcome to the next generation of developer utilities. This suite comprises five high-performance, lightweight, standalone applications:
+1. **Universal Log Viewer:** Instant inspection and pattern mining for massive multi-gigabyte log files.
+2. **DevOps Secret Vault:** Secure credential management with biometric authentication.
+3. **AI File Explorer:** Blazing fast local file cataloging, deduplication, and semantic search.
+4. **Universal Live Translator:** 100% offline real-time voice, text, conversation, camera OCR, and subtitle translator.
+5. **Professional Audio & Video Editor:** Non-destructive 60 FPS multi-track NLE, 3-way color grading, audio mixer & AI tools.
 
 ### 🛡️ The 100% Offline Guarantee
 - **No Cloud:** All data remains strictly on your local machine.
@@ -138,20 +140,72 @@ Welcome to the next generation of developer utilities. This suite comprises thre
 
 ---
 
-## 5. Global Keyboard Shortcuts
+## 5. Universal Live Translator Guide
+
+### 5.1 Real-Time Text Translation & LID
+1. Type or paste text into the source pane.
+2. The language identification engine detects scripts in $< 500\,\text{µs}$ across 32 languages (including Arabic, Persian, Hebrew, CJK, and Indic).
+3. Offline translation renders in $< 150\,\text{ms}$ with domain glossary overrides.
+4. Click **Listen** to trigger formant text-to-speech (TTS) synthesis.
+
+### 5.2 Split-Screen Voice Conversation
+1. Select **Voice Conversation** from the top bar.
+2. Choose Party A and Party B languages.
+3. Tap the microphone button to speak: streaming voice activity detection (VAD) segments utterances in $< 400\,\text{ms}$, auto-translates, and speaks the translation.
+
+### 5.3 Camera OCR Document & Subtitle Translation
+1. Upload or capture an image document to overlay translated text directly onto visual bounding boxes.
+2. Drag and drop `.srt` or `.vtt` subtitle files: translates cue texts while preserving millisecond timestamps.
+3. Save favorite phrases to the local SQLite WAL phrasebook with categorized tags.
+
+---
+
+## 6. Professional Audio & Video Editor (PAVE) Guide
+
+### 6.1 Multi-Track Timeline & Cutting
+1. Create a project from template (`Standard 1080p60`, `4K Cinema`, `Vertical Shorts 9:16`, or `Podcast`).
+2. Add video, audio, adjustment, and subtitle tracks to the DAG timeline.
+3. Use `Split Clip` (`Ctrl+K` or `S`) and `Ripple Delete` (`Shift+Delete` or `X`) with magnetic snapping.
+4. Perform unlimited, transactional undo and redo (`Ctrl+Z` / `Ctrl+Y`).
+
+### 6.2 3-Way Color Grading & Broadcast Scopes
+1. Switch to the **Color Grading** tab.
+2. Adjust Lift (shadows), Gamma (midtones), Gain (highlights), exposure, contrast, and saturation.
+3. Load Adobe 3D `.cube` LUTs with trilinear interpolation.
+4. Monitor live RGB histograms, luma waveforms, and polar chrominance vectorscopes in real-time.
+
+### 6.3 Studio Audio Mixer & Master WAV Exporter
+1. Switch to the **Audio Mixer** tab.
+2. Adjust track channel strips with constant-power panning and 8-band Biquad Parametric EQ.
+3. Monitor EBU R128 integrated loudness ($-23.0\,\text{LUFS}$) and true peak levels ($< -1.0\,\text{dBFS}$).
+4. Export broadcast-quality 16-bit linear PCM WAV master tracks.
+
+### 6.4 Offline AI Editing & NLE Interchange
+1. Click **AI Studio Tools** (`✨` icon).
+2. **AI Silence Ripple-Cutter:** Detects dead air and pauses across takes, ripple-cutting tracks with speech padding.
+3. **AI Beat Detector:** Computes spectral flux and places musical snap markers on the timeline.
+4. **AI Auto-Captions:** Transcribes speech offline into synchronized subtitle cues.
+5. **NLE Interchange:** Export projects to CMX 3600 EDL or Final Cut Pro XML (FCPXML) for DaVinci Resolve and Premiere Pro.
+
+---
+
+## 7. Global Keyboard Shortcuts
 
 | Shortcut (Win/Linux) | Shortcut (macOS) | Action | Scope |
 | :--- | :--- | :--- | :--- |
-| `Ctrl+O` | `Cmd+O` | Open file / workspace | Log Viewer / Explorer |
+| `Ctrl+O` | `Cmd+O` | Open file / workspace / project | All Apps |
 | `Ctrl+F` | `Cmd+F` | Focus search bar / Omnibar | All Apps |
 | `Ctrl+Shift+F` | `Cmd+Shift+F` | Focus Content & Semantic Search | AI File Explorer |
 | `Ctrl+T` | `Cmd+T` | Toggle live tail mode | Universal Log Viewer |
 | `Ctrl+I` | `Cmd+I` | Toggle AI insights drawer | Universal Log Viewer |
-| `Ctrl+K` | `Cmd+K` | Open global command palette | All Apps |
-| `Ctrl+N` | `Cmd+N` | Create new secret / folder | DevOps Secret Vault |
+| `Ctrl+K` | `Cmd+K` | Open command palette / Split clip | All Apps / Pro AV Editor |
+| `Ctrl+N` | `Cmd+N` | Create new secret / project / folder | DevOps Vault / Pro AV Editor |
 | `F2` | `F2` | Open Batch Rename modal | AI File Explorer |
-| `Ctrl+S` | `Cmd+S` | Toggle Storage Stats drawer | AI File Explorer |
+| `Ctrl+S` | `Cmd+S` | Save project / secret | All Apps |
+| `Ctrl+Z` | `Cmd+Z` | Undo previous action | All Apps |
+| `Ctrl+Y` | `Cmd+Shift+Z` | Redo previously undone action | All Apps |
 | `Ctrl+B` | `Cmd+B` | Toggle sidebar / bookmarks | All Apps |
 | `Ctrl+,` | `Cmd+,` | Open application settings | All Apps |
+
 
 

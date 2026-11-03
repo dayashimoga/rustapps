@@ -8,6 +8,7 @@ license.workspace = true
 [lib]
 name = "ai_file_explorer"
 path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "ai-file-explorer"
@@ -37,6 +38,8 @@ shared-indexing = { path = "../../shared/indexing" }
 shared-settings = { path = "../../shared/settings" }
 shared-telemetry = { path = "../../shared/telemetry" }
 shared-plugins = { path = "../../shared/plugins" }
+shared-ai-core = { path = "../../shared/ai-core" }
+shared-licensing = { path = "../../shared/licensing" }
 
 [dev-dependencies]
 tempfile.workspace = true

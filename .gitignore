@@ -1,9 +1,9 @@
-/target
-/node_modules
-/.pnp
+target/
+node_modules/
+.pnp
 .pnp.js
-dist
-coverage
+dist/
+coverage/
 .DS_Store
 Thumbs.db
 *.tmp
@@ -12,4 +12,6 @@ Thumbs.db
 *.bak
 .portable
 portable.flag
-target/
+.vite/
+vitest.results.json
+results.json

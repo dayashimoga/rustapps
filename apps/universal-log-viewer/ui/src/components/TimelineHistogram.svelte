@@ -1,19 +1,6 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-
-  export interface TimelineBucketUi {
-    bucket_index: number;
-    start_epoch_ms: number;
-    end_epoch_ms: number;
-    total_count: number;
-    trace_count: number;
-    debug_count: number;
-    info_count: number;
-    warn_count: number;
-    error_count: number;
-    fatal_count: number;
-    volume_per_second: number;
-  }
+  import { createEventDispatcher, onMount } from 'svelte';
+  import type { TimelineBucketUi } from '../types';
 
   export let buckets: TimelineBucketUi[] = [];
   export let minEpochMs: number = 0;
@@ -69,9 +56,16 @@
     dragEndIndex = null;
     dispatch('clearRange');
   }
+
+  onMount(() => {
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  });
 </script>
 
-<div class="timeline-container glass-panel" on:mouseup={handleMouseUp} role="region" aria-label="Log volume timeline">
+<div class="timeline-container glass-panel" role="region" aria-label="Log volume timeline">
   <div class="timeline-header">
     <div class="timeline-title">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

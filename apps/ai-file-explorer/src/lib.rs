@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 //! # AI File Explorer Core Library
 //!
 //! Ultra-fast, lightweight, offline-first local file browser, deduplicator,
@@ -9,15 +9,17 @@
 //! - Sub-50ms search latency across 10,000,000 indexed files.
 //! - Peak resident memory (RSS) strictly below 300MB.
 //! - 100% offline-first: zero network egress, zero SaaS/cloud dependencies.
-//! - `#![forbid(unsafe_code)]` compliance.
 
 pub mod analytics;
 pub mod batch_rename;
 pub mod commands;
+pub mod compliance;
 pub mod crawler;
 pub mod dedup;
 pub mod doc_extract;
 pub mod embeddings;
+#[allow(unsafe_code)]
+pub mod ffi;
 pub mod indexer;
 pub mod models;
 pub mod ocr;
@@ -29,6 +31,7 @@ pub mod watcher;
 // Re-exports
 pub use analytics::StorageAnalytics;
 pub use batch_rename::BatchRenamer;
+pub use compliance::{ComplianceScanSummary, ComplianceScanner, SensitiveFinding};
 pub use crawler::FileCrawler;
 pub use dedup::DuplicateDetector;
 pub use doc_extract::DocumentExtractor;

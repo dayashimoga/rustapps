@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-11-03 (Master Plan Stages 6 & 7: Pro AV Editor & Ecosystem Release)
+- **Stage 6: Professional Audio & Video Editor (`apps/pro-av-editor`):**
+  - Implemented multi-track timeline DAG (`models.rs`, `timeline.rs`) with transactional `CommandHistory` (unlimited undo/redo) and atomic `.avedproj` persistence.
+  - Built 60 FPS real-time compositor (`compositor.rs`) with keyframe animation, 8 blend modes, and hardware green-screen chroma key despill.
+  - Developed 3-way color grading & video scopes (`color.rs`) with 3D `.cube` LUT parser and RGB histogram, luma waveform, vectorscope.
+  - Implemented studio audio engine (`audio_engine.rs`) with 8-band parametric EQ, compressor, EBU R128 loudness meter, and 16-bit linear PCM WAV exporter.
+  - Built offline AI editing suite (`ai_editor.rs`, `templates.rs`) with silence ripple-cutter, visual scene-cut detector, beat detector, auto-captions, and CMX 3600 EDL / FCPXML exporters.
+  - Added full C-ABI FFI endpoints (`ave_*`) and Tauri IPC command bindings in `service.rs`, `commands.rs`, `ffi.rs`.
+  - Built desktop Svelte 5 studio UI (`apps/pro-av-editor/ui/`) and Flutter mobile editor (`apps/pro-av-editor/mobile/`).
+- **Stage 7: Independent Per-App Packaging, CI/CD & Full Ecosystem Certification:**
+  - Upgraded `scripts/package-windows.ps1`, `scripts/package-linux.sh`, `scripts/package-macos.sh` to package all 5 flagship applications with portable archives, WiX MSI configs, and SHA-256 checksums.
+  - Created `scripts/package-mobile.sh` for Flutter Android (APK/AAB) and iOS (XCFramework) native packaging.
+  - Created `.github/workflows/reusable-app-release.yml` and 5 individual application release workflows:
+    - `.github/workflows/release-ai-file-explorer.yml`
+    - `.github/workflows/release-devops-secret-vault.yml`
+    - `.github/workflows/release-universal-log-viewer.yml`
+    - `.github/workflows/release-universal-live-translator.yml`
+    - `.github/workflows/release-pro-av-editor.yml`
+  - Integrated `pave_core` lifecycle integration test into `tests/src/lib.rs` and performance benchmarks into `benchmarks/benches/bench_suite.rs`.
+  - Passed zero-mock audit and security benchmark gate: 100% test pass rate, 0 clippy warnings, 0 fmt diffs, 0 TypeScript errors.
+
+### Added - 2026-11-03 (Master Plan Stage 5: Universal Live Translator)
+- **Universal Live Translator Core & Cross-Platform UI (`apps/universal-live-translator`):**
+  - Implemented sub-500µs language identification (`lid.rs`), sub-150ms NMT translation (`nmt.rs`), sub-400ms streaming ASR (`speech.rs`), formant TTS (`tts.rs`), camera OCR translation, subtitle translation, and phrasebook.
+  - Desktop Svelte UI and Flutter mobile client completed and verified.
+
 ### Added - 2026-10-19
 - **Monorepo Foundation (Phase 0):**
   - Initialized Cargo root workspace and directory structure (`platform`, `shared/*`, `apps/*`, `docs`, `assets`, `scripts`, `tests`, `benchmarks`, `.github/workflows`).

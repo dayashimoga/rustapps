@@ -45,6 +45,8 @@ pub enum ServiceError {
     Extract(#[from] crate::doc_extract::ExtractError),
     #[error("OCR error: {0}")]
     Ocr(String),
+    #[error("Compliance error: {0}")]
+    Compliance(#[from] crate::compliance::ComplianceError),
     #[error("Service internal error: {0}")]
     Internal(String),
 }
@@ -55,20 +57,48 @@ pub struct FileExplorerService {
     watcher: Arc<DirectoryWatcher>,
     vector_index: Arc<VectorIndex>,
     screenshot_catalog: Arc<ScreenshotCatalog>,
+    compliance_scanner: Arc<crate::compliance::ComplianceScanner>,
 }
 
 impl FileExplorerService {
-    /// Initialize application service with in-memory or on-disk indexer
+    /// Initialize application service with in-memory indexer
     pub fn new() -> Result<Self, ServiceError> {
         let indexer = Arc::new(FileSearchIndexer::create_in_memory()?);
         let watcher = Arc::new(DirectoryWatcher::new());
         let vector_index = Arc::new(VectorIndex::new());
         let screenshot_catalog = Arc::new(ScreenshotCatalog::new());
+        let compliance_scanner = Arc::new(crate::compliance::ComplianceScanner::new()?);
         Ok(Self {
             indexer,
             watcher,
             vector_index,
             screenshot_catalog,
+            compliance_scanner,
+        })
+    }
+
+    /// Initialize application service with persistent on-disk Tantivy index and VectorIndex
+    pub fn open_persistent<P: AsRef<Path>>(data_dir: P) -> Result<Self, ServiceError> {
+        let data_dir = data_dir.as_ref();
+        let tantivy_path = data_dir.join("tantivy_index");
+        let vector_path = data_dir.join("vector_index.json");
+
+        let indexer = Arc::new(FileSearchIndexer::open_or_create(tantivy_path)?);
+        let watcher = Arc::new(DirectoryWatcher::new());
+        let vector_index = if vector_path.exists() {
+            Arc::new(VectorIndex::load_from_path(&vector_path).unwrap_or_default())
+        } else {
+            Arc::new(VectorIndex::new())
+        };
+        let screenshot_catalog = Arc::new(ScreenshotCatalog::new());
+        let compliance_scanner = Arc::new(crate::compliance::ComplianceScanner::new()?);
+
+        Ok(Self {
+            indexer,
+            watcher,
+            vector_index,
+            screenshot_catalog,
+            compliance_scanner,
         })
     }
 
@@ -277,6 +307,26 @@ impl FileExplorerService {
     ) -> Vec<ScreenshotSearchResult> {
         self.screenshot_catalog.search_by_ocr_text(query, limit)
     }
+
+    /// Perform Business-tier PII & sensitive data compliance scan across a directory
+    pub fn scan_directory_compliance<P: AsRef<Path>>(
+        &self,
+        root: P,
+        gate: &shared_licensing::TierGate,
+    ) -> Result<crate::compliance::ComplianceScanSummary, ServiceError> {
+        Ok(self
+            .compliance_scanner
+            .scan_directory(root.as_ref(), gate)?)
+    }
+
+    /// Perform Business-tier PII scan on a specific file
+    pub fn scan_file_compliance<P: AsRef<Path>>(
+        &self,
+        path: P,
+        gate: &shared_licensing::TierGate,
+    ) -> Result<Vec<crate::compliance::SensitiveFinding>, ServiceError> {
+        Ok(self.compliance_scanner.scan_file(path.as_ref(), gate)?)
+    }
 }
 
 impl Default for FileExplorerService {
@@ -363,5 +413,28 @@ mod tests {
         let sem_res = service.search_content(&sem_query).unwrap();
         assert_eq!(sem_res.total_matches, 1);
         assert!(sem_res.items[0].score > 0.0);
+    }
+
+    #[test]
+    fn test_persistent_service_and_compliance_scan() {
+        let temp_dir = tempdir().unwrap();
+        let service = FileExplorerService::open_persistent(temp_dir.path()).unwrap();
+
+        // Write a test file with exposed credentials
+        let cred_file = temp_dir.path().join("aws_creds.env");
+        std::fs::write(
+            &cred_file,
+            "AWS_KEY = AKIAIOSFODNN7EXAMPLE\nSSN = 456-78-1234",
+        )
+        .unwrap();
+
+        let gate = shared_licensing::TierGate::enterprise();
+        let summary = service
+            .scan_directory_compliance(temp_dir.path(), &gate)
+            .unwrap();
+
+        assert!(summary.scanned_files_count >= 1);
+        assert!(summary.findings_count >= 2);
+        assert!(summary.critical_count >= 1);
     }
 }
