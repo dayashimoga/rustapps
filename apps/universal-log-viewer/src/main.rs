@@ -79,6 +79,12 @@ impl DesktopIpcHandler for LogViewerDesktopHandler {
                 command: "get_system_metrics",
                 payload: json!({}),
             },
+            SelfTestCheck {
+                command: "export_redacted",
+                payload: json!({
+                    "destPath": std::env::temp_dir().join("ulv_redact_selftest.log").to_string_lossy()
+                }),
+            },
         ]
     }
 }

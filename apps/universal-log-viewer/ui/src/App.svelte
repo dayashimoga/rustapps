@@ -5,6 +5,7 @@
   import BookmarksDrawer from './components/BookmarksDrawer.svelte';
   import TimelineHistogram from './components/TimelineHistogram.svelte';
   import AiInsightsDrawer from './components/AiInsightsDrawer.svelte';
+  import RedactExportModal from './components/RedactExportModal.svelte';
   import StatusBar from './components/StatusBar.svelte';
   import type {
     LogLineRecord,
@@ -39,6 +40,7 @@
   let isBookmarksOpen = false;
   let showTimeline = true;
   let showAiInsights = false;
+  let isRedactModalOpen = false;
 
   let bookmarks: BookmarkRecord[] = [];
   let systemMetrics: ProcessResourceUsage = {
@@ -557,6 +559,21 @@
     fetchSlice(0, 60);
   }
 
+  async function handleExportRedacted(destPath: string): Promise<{ dest_path: string; records_redacted: number }> {
+    if (isTauri && filePath) {
+      const res = await tauriInvoke<{ dest_path: string; records_redacted: number }>('export_redacted', {
+        destPath,
+      });
+      if (res) return res;
+    }
+    // Preview / browser fallback
+    await new Promise((r) => setTimeout(r, 500));
+    return {
+      dest_path: destPath,
+      records_redacted: totalLines,
+    };
+  }
+
   // Global Keyboard Shortcuts
   function handleKeyDown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
@@ -634,6 +651,7 @@
     on:toggleBookmarks={() => (isBookmarksOpen = !isBookmarksOpen)}
     on:toggleTimeline={() => (showTimeline = !showTimeline)}
     on:toggleAiInsights={() => (showAiInsights = !showAiInsights)}
+    on:openRedactModal={() => (isRedactModalOpen = true)}
   />
 
   <!-- Interactive Timeline Histogram (Phase 2 Advanced) -->
@@ -717,6 +735,15 @@
       showAiInsights = false;
     }}
     on:refresh={loadAiInsights}
+  />
+
+  <!-- PII & Credential Redacted Stream Export Modal -->
+  <RedactExportModal
+    isOpen={isRedactModalOpen}
+    {totalLines}
+    {filePath}
+    onExport={handleExportRedacted}
+    on:close={() => (isRedactModalOpen = false)}
   />
 
   <!-- Bottom Operational Status Bar -->

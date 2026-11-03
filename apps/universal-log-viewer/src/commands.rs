@@ -875,6 +875,22 @@ pub fn dispatch_ipc_command(
                 let metrics = svc.get_system_metrics();
                 serde_json::to_value(metrics).map_err(|e| e.to_string())
             }
+            "export_redacted" => {
+                let dest_path_str = args
+                    .get("destPath")
+                    .or_else(|| args.get("dest_path"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("redacted_export.log");
+                let gate = shared_licensing::TierGate::for_tier(shared_licensing::LicenseTier::Business);
+                let count = svc
+                    .export_redacted(std::path::Path::new(dest_path_str), &gate)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
+                    "dest_path": dest_path_str,
+                    "records_redacted": count,
+                }))
+            }
             _ => Err(format!("Unknown Universal Log Viewer IPC command: {}", cmd)),
         }
     })
@@ -938,5 +954,12 @@ mod tests {
         // Metrics
         let metrics = service.get_system_metrics();
         assert!(metrics.resident_set_size_bytes > 0);
+
+        // Export redacted
+        let export_path = temp.path().join("redacted_out.log");
+        let gate = shared_licensing::TierGate::for_tier(shared_licensing::LicenseTier::Business);
+        let redacted_count = service.export_redacted(&export_path, &gate).await.unwrap();
+        assert_eq!(redacted_count, 3);
+        assert!(export_path.exists());
     }
 }

@@ -22,6 +22,7 @@
     toggleBookmarks: void;
     toggleTimeline: void;
     toggleAiInsights: void;
+    openRedactModal: void;
   }>();
 
   let jumpLineInput: string = '';
@@ -188,6 +189,19 @@
         <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
       </svg>
       Bookmarks ({bookmarksCount})
+    </button>
+
+    <!-- PII Redaction Export Trigger -->
+    <button
+      class="btn btn-redact"
+      on:click={() => dispatch('openRedactModal')}
+      title="Mask PII & Export Cleaned Logs (Business Tier)"
+      id="btn-redact-export"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+      </svg>
+      Redact
     </button>
 
     <!-- Live Telemetry SLA Badge -->
@@ -366,5 +380,17 @@
   .metric-sub {
     font-size: 9px;
     color: var(--text-muted);
+  }
+
+  .btn-redact {
+    background: hsla(145, 80%, 45%, 0.12);
+    border-color: hsla(145, 80%, 45%, 0.3);
+    color: hsl(145, 80%, 60%);
+  }
+
+  .btn-redact:hover {
+    background: hsla(145, 80%, 45%, 0.25);
+    border-color: hsla(145, 80%, 45%, 0.5);
+    color: #fff;
   }
 </style>
