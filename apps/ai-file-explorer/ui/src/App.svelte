@@ -590,6 +590,7 @@
         {currentPath}
         onScanDirectory={handleScanDirectoryCompliance}
         onScanFile={handleScanFileCompliance}
+        onInspectDoc={handleInspectDoc}
       />
     {/if}
   </div>

@@ -187,6 +187,22 @@ pub fn scan_compliance_cmd(
         .map_err(|e| e.to_string())
 }
 
+/// Export compliance findings to CSV or JSON file
+pub fn export_compliance_report_cmd(
+    target_dir: String,
+    output_path: String,
+    format: String,
+) -> Result<usize, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    let gate = shared_licensing::TierGate::enterprise();
+    let summary = svc
+        .scan_directory_compliance(&target_dir, &gate)
+        .map_err(|e| e.to_string())?;
+    svc.export_compliance_report(&summary, &output_path, &format)
+        .map_err(|e| e.to_string())
+}
+
 fn resolve_valid_path(raw: Option<&str>) -> String {
     if let Some(s) = raw {
         let trimmed = s.trim();
@@ -388,6 +404,27 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let res = scan_compliance_cmd(path)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "export_compliance_report_cmd" => {
+            let target_dir = resolve_valid_path(
+                args.get("target_dir")
+                    .or_else(|| args.get("targetDir"))
+                    .or_else(|| args.get("path"))
+                    .and_then(|v| v.as_str()),
+            );
+            let output_path = args
+                .get("output_path")
+                .or_else(|| args.get("outputPath"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("compliance_report.csv")
+                .to_string();
+            let format = args
+                .get("format")
+                .and_then(|v| v.as_str())
+                .unwrap_or("csv")
+                .to_string();
+            let count = export_compliance_report_cmd(target_dir, output_path, format)?;
+            Ok(json!({ "exported_findings": count }))
+        }
         _ => Err(format!("Unknown AI File Explorer IPC command: {}", cmd)),
     }
 }
@@ -480,5 +517,24 @@ mod tests {
         )
         .unwrap();
         assert!(!val.as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_commands_export_compliance_report() {
+        let dir = tempdir().unwrap();
+        let target_file = dir.path().join("secrets.txt");
+        std::fs::write(&target_file, b"AKIAIOSFODNN7EXAMPLE\n-----BEGIN RSA PRIVATE KEY-----\n").unwrap();
+
+        let out_csv = dir.path().join("report.csv");
+        let dir_str = dir.path().to_string_lossy().to_string();
+        let out_str = out_csv.to_string_lossy().to_string();
+
+        let count = export_compliance_report_cmd(dir_str, out_str, "csv".to_string()).unwrap();
+        assert!(count >= 2);
+        assert!(out_csv.exists());
+
+        let contents = std::fs::read_to_string(&out_csv).unwrap();
+        assert!(contents.contains("AKIA"));
+        assert!(contents.contains("PRIVATE KEY"));
     }
 }

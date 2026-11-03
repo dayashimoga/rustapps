@@ -4,6 +4,7 @@
   export let currentPath: string;
   export let onScanDirectory: (path: string) => Promise<ComplianceScanSummary>;
   export let onScanFile: (path: string) => Promise<SensitiveFinding[]>;
+  export let onInspectDoc: (path: string) => void = () => {};
 
   let scanPath = currentPath;
   $: scanPath = currentPath;
@@ -12,6 +13,46 @@
   let summary: ComplianceScanSummary | null = null;
   let errorMsg: string | null = null;
   let selectedSeverityFilter: 'all' | 'critical' | 'high' | 'medium' = 'all';
+  let exportStatus = '';
+
+  function exportCsv() {
+    if (!summary || summary.findings.length === 0) return;
+    const header = 'id,severity,data_type,file_path,line_number,redacted_preview\n';
+    const rows = summary.findings
+      .map((f) => {
+        const p = String(f.file_path).replace(/"/g, '""');
+        const r = f.redacted_preview.replace(/"/g, '""');
+        return `"${f.id}","${f.severity}","${f.data_type}","${p}",${f.line_number},"${r}"`;
+      })
+      .join('\n');
+    const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `compliance-audit-${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    exportStatus = 'Exported CSV audit log.';
+    setTimeout(() => {
+      exportStatus = '';
+    }, 4000);
+  }
+
+  function exportJson() {
+    if (!summary) return;
+    const jsonStr = JSON.stringify(summary, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `compliance-audit-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    exportStatus = 'Exported JSON audit log.';
+    setTimeout(() => {
+      exportStatus = '';
+    }, 4000);
+  }
 
   async function handleStartScan() {
     if (!scanPath.trim()) return;
@@ -127,9 +168,9 @@
       </div>
     </div>
 
-    <!-- Filter Buttons -->
+    <!-- Filter Buttons & Export Actions -->
     <div class="filter-bar">
-      <span class="filter-label">Filter by Severity:</span>
+      <span class="filter-label">Filter:</span>
       <button
         class="filter-btn {selectedSeverityFilter === 'all' ? 'active' : ''}"
         on:click={() => (selectedSeverityFilter = 'all')}
@@ -154,6 +195,23 @@
       >
         Medium ({summary.medium_count})
       </button>
+
+      <div class="export-group">
+        <button class="export-btn" on:click={exportCsv} title="Export findings as CSV spreadsheet">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+          Export CSV
+        </button>
+        <button class="export-btn" on:click={exportJson} title="Export full report JSON">
+          Export JSON
+        </button>
+        {#if exportStatus}
+          <span class="export-status">{exportStatus}</span>
+        {/if}
+      </div>
     </div>
 
     <!-- Findings Table -->
@@ -170,9 +228,14 @@
             <div class="finding-header">
               <span class="badge sev-badge sev-{finding.severity}">{finding.severity.toUpperCase()}</span>
               <span class="type-badge">{formatType(finding.data_type)}</span>
-              <span class="file-path" title={finding.file_path}>
+              <button
+                type="button"
+                class="file-path clickable"
+                title="Inspect file: {finding.file_path}"
+                on:click={() => onInspectDoc(finding.file_path)}
+              >
                 {finding.file_path} <span class="line-tag">Line {finding.line_number}</span>
-              </span>
+              </button>
             </div>
             <div class="preview-box">
               <code>{finding.redacted_preview}</code>
@@ -324,6 +387,40 @@
     align-items: center;
     gap: 8px;
     padding: 6px 0;
+    flex-wrap: wrap;
+  }
+
+  .export-group {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .export-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #e2e8f0;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .export-btn:hover {
+    background: rgba(0, 229, 255, 0.15);
+    border-color: rgba(0, 229, 255, 0.4);
+    color: #00e5ff;
+  }
+
+  .export-status {
+    font-size: 0.78rem;
+    color: #4ade80;
+    margin-left: 6px;
   }
 
   .filter-label {
@@ -425,6 +522,17 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    background: none;
+    border: none;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+    max-width: 550px;
+  }
+
+  .file-path.clickable:hover {
+    color: #00e5ff;
+    text-decoration: underline;
   }
 
   .line-tag {

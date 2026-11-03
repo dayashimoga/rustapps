@@ -400,6 +400,39 @@ impl FileExplorerService {
     ) -> Result<Vec<crate::compliance::SensitiveFinding>, ServiceError> {
         Ok(self.compliance_scanner.scan_file(path.as_ref(), gate)?)
     }
+
+    /// Export compliance scan summary as CSV or JSON report to a file
+    pub fn export_compliance_report<P: AsRef<Path>>(
+        &self,
+        summary: &crate::compliance::ComplianceScanSummary,
+        output_path: P,
+        format: &str,
+    ) -> Result<usize, ServiceError> {
+        let output_path = output_path.as_ref();
+        let content = match format.to_lowercase().as_str() {
+            "json" => serde_json::to_string_pretty(summary)
+                .map_err(|e| ServiceError::Internal(e.to_string()))?,
+            _ => {
+                let mut csv =
+                    String::from("id,severity,data_type,file_path,line_number,redacted_preview\n");
+                for f in &summary.findings {
+                    let path_escaped = f.file_path.to_string_lossy().replace('"', "\"\"");
+                    let preview_escaped = f.redacted_preview.replace('"', "\"\"");
+                    csv.push_str(&format!(
+                        "\"{}\",\"{:?}\",\"{:?}\",\"{}\",{},\"{}\"\n",
+                        f.id, f.severity, f.data_type, path_escaped, f.line_number, preview_escaped
+                    ));
+                }
+                csv
+            }
+        };
+
+        std::fs::write(output_path, content.as_bytes()).map_err(|e| {
+            ServiceError::Internal(format!("Failed to write compliance report: {}", e))
+        })?;
+
+        Ok(summary.findings_count)
+    }
 }
 
 impl Default for FileExplorerService {
