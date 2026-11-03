@@ -500,7 +500,28 @@ pub fn dispatch_ipc_command(
                     .cloned()
                     .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
                 let shares: Vec<crate::shamir::ShamirShare> =
-                    serde_json::from_value(shares_val).map_err(|e| e.to_string())?;
+                    match serde_json::from_value(shares_val.clone()) {
+                        Ok(parsed_shares) => parsed_shares,
+                        Err(_) => {
+                            if let Ok(string_shares) =
+                                serde_json::from_value::<Vec<String>>(shares_val)
+                            {
+                                let mut parsed = Vec::new();
+                                for s in string_shares {
+                                    let share =
+                                        crate::shamir::ShamirShare::from_formatted_string(&s)
+                                            .map_err(|e| e.to_string())?;
+                                    parsed.push(share);
+                                }
+                                parsed
+                            } else {
+                                return Err(
+                                    "Invalid Shamir shares format. Expected share objects or string tokens."
+                                        .to_string(),
+                                );
+                            }
+                        }
+                    };
                 unlock_with_shamir_shares(&svc, shares).await?;
                 Ok(serde_json::json!(true))
             }

@@ -7,6 +7,7 @@
   import NewSecretModal from './components/NewSecretModal.svelte';
   import HealthDashboard from './components/HealthDashboard.svelte';
   import BackupModal from './components/BackupModal.svelte';
+  import ShamirModal from './components/ShamirModal.svelte';
   import type {
     BackupExportSummary,
     BackupImportSummary,
@@ -36,6 +37,8 @@
   let isNewSecretModalOpen = false;
   let isHealthDashboardOpen = false;
   let isBackupModalOpen = false;
+  let isShamirModalOpen = false;
+  let shamirModalMode: 'split' | 'unlock' = 'split';
   let biometricAvailable = true;
   let clipboardSeconds: number | null = null;
   let clipboardTimer: number | null = null;
@@ -484,6 +487,7 @@
     on:openNewSecretModal={() => { isNewSecretModalOpen = true; }}
     on:openHealthDashboard={() => { isHealthDashboardOpen = true; }}
     on:openBackupModal={() => { isBackupModalOpen = true; }}
+    on:openShamirModal={() => { shamirModalMode = 'split'; isShamirModalOpen = true; }}
     on:lockVault={handleLock}
     on:clearClipboard={handleClearClipboard}
   />
@@ -526,6 +530,7 @@
       on:unlock={handleUnlock}
       on:initialize={handleInitialize}
       on:biometricUnlock={handleBiometricUnlock}
+      on:openShamirRecovery={() => { shamirModalMode = 'unlock'; isShamirModalOpen = true; }}
     />
   {/if}
 
@@ -558,6 +563,19 @@
       onRefreshVault={loadSecrets}
     />
   {/if}
+
+  <!-- Shamir Secret Sharing Modal -->
+  <ShamirModal
+    isOpen={isShamirModalOpen}
+    mode={shamirModalMode}
+    on:close={() => { isShamirModalOpen = false; }}
+    on:unlocked={async () => {
+      isLocked = false;
+      isShamirModalOpen = false;
+      await loadSecrets();
+      showToast('Vault master key reconstructed via Shamir threshold shares.');
+    }}
+  />
 
   <!-- Toast Notification -->
   {#if toastMessage}

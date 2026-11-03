@@ -158,6 +158,21 @@
             Unlock with Biometrics
           </button>
         {/if}
+
+        {#if isInitialized}
+          <button
+            type="button"
+            class="btn btn-shamir"
+            on:click={() => dispatch('openShamirRecovery')}
+            disabled={isLoading}
+            title="Recover master vault using k-of-n Shamir shares"
+          >
+            <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+              <path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.599-.8a1 1 0 01.894 1.79l-1.233.616 1.738 5.42a1 1 0 01-.285 1.05A3.989 3.989 0 0115 15a3.989 3.989 0 01-2.667-1.019 1 1 0 01-.285-1.05l1.715-5.349L11 6.477V16h2a1 1 0 110 2H7a1 1 0 110-2h2V6.477L6.237 7.582l1.715 5.349a1 1 0 01-.285 1.05A3.989 3.989 0 015 15a3.989 3.989 0 01-2.667-1.019 1 1 0 01-.285-1.05l1.738-5.42-1.233-.617a1 1 0 01.894-1.788l1.599.799L9 4.323V3a1 1 0 011-1z" clip-rule="evenodd" />
+            </svg>
+            Emergency Shamir Recovery
+          </button>
+        {/if}
       </div>
     </form>
 
@@ -316,6 +331,20 @@
   .btn-biometric:hover {
     background: rgba(255, 255, 255, 0.1);
     border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  .btn-shamir {
+    background: rgba(168, 85, 247, 0.1);
+    border: 1px solid rgba(168, 85, 247, 0.25);
+    color: #c084fc;
+    padding: 10px;
+    font-size: 13px;
+  }
+
+  .btn-shamir:hover {
+    background: rgba(168, 85, 247, 0.2);
+    border-color: rgba(168, 85, 247, 0.4);
+    color: #e9d5ff;
   }
 
   .security-footer {
