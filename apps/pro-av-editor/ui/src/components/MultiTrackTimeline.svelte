@@ -198,7 +198,18 @@
     <div class="timeline-body-scroll">
       <div class="timeline-content" style={`width: ${timelineWidthPx}px;`}>
         <!-- Timecode Ruler -->
-        <div class="ruler" on:click={handleRulerClick} role="region" aria-label="Timeline Ruler">
+        <!-- svelte-ignore a11y-click-events-have-key-events -->
+        <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+        <div
+          class="ruler"
+          role="slider"
+          aria-label="Timeline Ruler"
+          aria-valuemin="0"
+          aria-valuemax={durationMs}
+          aria-valuenow={playheadMs}
+          tabindex="0"
+          on:click={handleRulerClick}
+        >
           {#each Array(Math.ceil(durationMs / 1000) + 1) as _, sec}
             <div
               class="ruler-tick"
@@ -222,6 +233,8 @@
                   <!-- svelte-ignore a11y-click-events-have-key-events -->
                   <div
                     class="clip-box"
+                    role="button"
+                    tabindex="0"
                     class:selected={selectedClipId === clip.id}
                     class:video-clip={track.track_type === 'Video'}
                     class:audio-clip={track.track_type === 'Audio'}

@@ -133,6 +133,7 @@
           {playheadMs}
           {durationMs}
           fps={60.0}
+          on:timeupdate={(e) => (playheadMs = e.detail)}
         />
       </div>
 
