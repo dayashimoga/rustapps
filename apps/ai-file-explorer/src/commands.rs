@@ -148,6 +148,13 @@ pub fn index_screenshot_cmd(path: String) -> Result<ScreenshotFingerprint, Strin
     svc.index_screenshot(&path).map_err(|e| e.to_string())
 }
 
+/// Discover and index all screenshots in a target directory
+pub fn scan_screenshots_dir_cmd(path: String) -> Result<Vec<ScreenshotFingerprint>, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.scan_screenshots_dir(&path).map_err(|e| e.to_string())
+}
+
 /// Visual similarity screenshot search
 pub fn search_screenshots_by_hash_cmd(
     target_hash: u64,
@@ -190,6 +197,21 @@ fn resolve_valid_path(raw: Option<&str>) -> String {
     std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| ".".to_string())
+}
+
+fn parse_u64_val(val: Option<&Value>) -> Option<u64> {
+    let v = val?;
+    if let Some(n) = v.as_u64() {
+        return Some(n);
+    }
+    if let Some(s) = v.as_str() {
+        let s = s.trim();
+        if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+            return u64::from_str_radix(hex, 16).ok();
+        }
+        return s.parse::<u64>().ok();
+    }
+    None
 }
 
 /// Dispatch desktop IPC commands from the Svelte 5 AI File Explorer frontend
@@ -331,12 +353,17 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let res = index_screenshot_cmd(path)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "scan_screenshots_dir_cmd" => {
+            let path = resolve_valid_path(args.get("path").and_then(|v| v.as_str()));
+            let res = scan_screenshots_dir_cmd(path)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
         "search_screenshots_by_hash_cmd" => {
-            let target_hash = args
-                .get("target_hash")
-                .or_else(|| args.get("targetHash"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            let target_hash = parse_u64_val(
+                args.get("target_hash")
+                    .or_else(|| args.get("targetHash"))
+            )
+            .unwrap_or(0);
             let max_distance = args
                 .get("max_distance")
                 .or_else(|| args.get("maxDistance"))
@@ -423,5 +450,35 @@ mod tests {
         assert_eq!(res.deleted_count, 1);
         assert_eq!(res.reclaimed_bytes, 22);
         assert!(!file_path.exists());
+    }
+
+    #[test]
+    fn test_commands_screenshot_indexing_and_search() {
+        let dir = tempdir().unwrap();
+        let gray = crate::ocr::render_text_to_gray_image("PAYLOAD", 80, 20);
+        let bmp_bytes = crate::ocr::encode_gray_to_bmp(&gray);
+        let img_path = dir.path().join("shot.bmp");
+        std::fs::write(&img_path, bmp_bytes).unwrap();
+
+        let dir_str = dir.path().to_string_lossy().to_string();
+        let scanned = scan_screenshots_dir_cmd(dir_str).unwrap();
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(scanned[0].path, img_path);
+
+        // Text search
+        let text_res = search_screenshots_by_text_cmd("PAYLOAD".to_string(), 10).unwrap();
+        assert_eq!(text_res.len(), 1);
+
+        // Visual hash search
+        let hash_res = search_screenshots_by_hash_cmd(scanned[0].dhash, 2, 10).unwrap();
+        assert_eq!(hash_res.len(), 1);
+
+        // Dispatch IPC verification
+        let val = dispatch_ipc_command(
+            "search_screenshots_by_text_cmd",
+            serde_json::json!({ "query": "PAYLOAD", "limit": 5 }),
+        )
+        .unwrap();
+        assert!(!val.as_array().unwrap().is_empty());
     }
 }

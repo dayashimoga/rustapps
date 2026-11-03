@@ -327,6 +327,40 @@ impl FileExplorerService {
         Ok(fp)
     }
 
+    /// Discover image files in directory and index into screenshot catalog
+    pub fn scan_screenshots_dir<P: AsRef<Path>>(
+        &self,
+        dir: P,
+    ) -> Result<Vec<ScreenshotFingerprint>, ServiceError> {
+        let dir = dir.as_ref();
+        if !dir.is_dir() {
+            return Err(ServiceError::Internal(format!(
+                "Not a directory: {}",
+                dir.display()
+            )));
+        }
+
+        let mut fingerprints = Vec::new();
+        let entries = std::fs::read_dir(dir).map_err(|e| ServiceError::Internal(e.to_string()))?;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                    let ext_lower = ext.to_lowercase();
+                    if matches!(ext_lower.as_str(), "png" | "jpg" | "jpeg" | "bmp" | "webp") {
+                        if let Ok(fp) = self.index_screenshot(&path) {
+                            fingerprints.push(fp);
+                        }
+                    }
+                }
+            }
+        }
+
+        fingerprints.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(fingerprints)
+    }
+
     /// Searches for screenshots by visual dHash similarity
     pub fn search_screenshots_by_hash(
         &self,

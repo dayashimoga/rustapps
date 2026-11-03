@@ -22,6 +22,8 @@
     FileItem,
     FolderStats,
     RenamePreview,
+    ScreenshotFingerprint,
+    ScreenshotSearchResult,
     SensitiveFinding,
     TreemapNode,
   } from './types';
@@ -296,6 +298,45 @@
       return mockSummary as unknown as T;
     }
 
+    if (cmd === 'scan_screenshots_dir_cmd') {
+      const mockScreenshots: ScreenshotFingerprint[] = [
+        {
+          path: `${currentPath}/vscode_terminal_error.png`,
+          dhash: 0xa5a5_5a5a_3333_cccc,
+          ocr_text: 'cargo test --workspace --all-targets\nerror: connection timeout to PostgreSQL on port 5432\nfatal: worker process aborted unexpectedly',
+          dimensions: [1920, 1080],
+        },
+      ];
+      return mockScreenshots as unknown as T;
+    }
+
+    if (cmd === 'search_screenshots_by_hash_cmd') {
+      const results: ScreenshotSearchResult[] = [
+        {
+          path: `${currentPath}/vscode_terminal_error.png`,
+          dhash: 0xa5a5_5a5a_3333_cccc,
+          hamming_distance: 0,
+          similarity_pct: 100.0,
+          ocr_snippet: 'cargo test --workspace --all-targets\nerror: connection timeout',
+        },
+      ];
+      return results as unknown as T;
+    }
+
+    if (cmd === 'search_screenshots_by_text_cmd') {
+      const q = ((args.query as string) || '').toLowerCase();
+      const results: ScreenshotSearchResult[] = [
+        {
+          path: `${currentPath}/vscode_terminal_error.png`,
+          dhash: 0xa5a5_5a5a_3333_cccc,
+          hamming_distance: 0,
+          similarity_pct: 100.0,
+          ocr_snippet: `cargo test --workspace (Matched: ${q})`,
+        },
+      ];
+      return results as unknown as T;
+    }
+
     throw new Error(`Unhandled mock Tauri command: ${cmd}`);
   }
 
@@ -506,7 +547,19 @@
         onInspectDoc={handleInspectDoc}
       />
     {:else if activeTab === 'screenshots'}
-      <ScreenshotGallery />
+      <ScreenshotGallery
+        {currentPath}
+        onInspectDoc={handleInspectDoc}
+        onScanFolder={(path) => invokeTauri('scan_screenshots_dir_cmd', { path })}
+        onSearchSimilar={(hash, maxDist, limit) =>
+          invokeTauri('search_screenshots_by_hash_cmd', {
+            target_hash: hash,
+            max_distance: maxDist,
+            limit,
+          })}
+        onSearchOcr={(query, limit) =>
+          invokeTauri('search_screenshots_by_text_cmd', { query, limit })}
+      />
     {:else if activeTab === 'duplicates'}
       <DuplicateFinder
         searchRoot={currentPath}

@@ -70,6 +70,14 @@ impl DesktopIpcHandler for ExplorerDesktopHandler {
                 command: "scan_compliance_cmd",
                 payload: json!({ "path": cwd }),
             },
+            SelfTestCheck {
+                command: "scan_screenshots_dir_cmd",
+                payload: json!({ "path": cwd }),
+            },
+            SelfTestCheck {
+                command: "search_screenshots_by_text_cmd",
+                payload: json!({ "query": "error", "limit": 5 }),
+            },
         ]
     }
 }
