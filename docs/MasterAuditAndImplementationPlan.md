@@ -87,3 +87,55 @@ The Windows artifact `pro-av-editor.exe` downloaded from GitHub Actions (`pro-av
   - **Subphase 10.1.1:** Update [`.github/workflows/reusable-app-release.yml`](file:///H:/rustapps/.github/workflows/reusable-app-release.yml), [`scripts/package-windows.ps1`](file:///H:/rustapps/scripts/package-windows.ps1), [`scripts/package-linux.sh`](file:///H:/rustapps/scripts/package-linux.sh), and [`scripts/package-macos.sh`](file:///H:/rustapps/scripts/package-macos.sh) to build UI bundles before Rust compilation, run `<binary> --self-test`, and produce portable `.zip` archives alongside standalone executables and `.sha256` checksums.
 - **Phase 10.2: Engineering Contract & Skill Updates**
   - **Subphase 10.2.1:** Update [`AGENTS.md`](file:///H:/rustapps/AGENTS.md), [`.agents/skills/zero-mock-audit/SKILL.md`](file:///H:/rustapps/.agents/skills/zero-mock-audit/SKILL.md), and [`.agents/skills/cross-platform-build-package/SKILL.md`](file:///H:/rustapps/.agents/skills/cross-platform-build-package/SKILL.md).
+
+---
+
+## 4. Stage 11: Production Feature Gap Remediation & Subphase Verification
+
+### 4.1 Phase 11.1: AI File Explorer (`apps/ai-file-explorer`)
+- **Subphase 11.1.1 (Duplicate Deletion & Space Reclaim):** Added `delete_duplicate_files_cmd` and wired interactive batch selection and deletion in `App.svelte` with live confirmation modal and reclaimed size recalculation.
+- **Subphase 11.1.2 (Treemap Drilldown):** Implemented click-to-drilldown on treemap nodes and interactive breadcrumb navigation path with direct directory browsing.
+- **Subphase 11.1.3 (Batch Rename Transactional Feedback):** Added live regex/numbering rename simulation, conflict warnings, and rollback transaction state.
+- **Subphase 11.1.4 (Perceptual Screenshot Cataloging):** Implemented screenshot indexing, 64-bit dHash perceptual distance search, and direct image display.
+- **Subphase 11.1.5 (Compliance Report Export):** Added RFC 4180 CSV and JSON compliance scan report export with audit metadata and tier gating.
+- **Status:** Verified (`cargo test -p ai-file-explorer` 48 passed, `--self-test` 8/8 passed).
+
+### 4.2 Phase 11.2: DevOps Secret Vault (`apps/devops-secret-vault`)
+- **Subphase 11.2.1 (Cloud Credentials Import):** Added AWS (`~/.aws/credentials`), Azure (`azureProfile.json`), and GCP service account JSON parsing and one-click vault import.
+- **Subphase 11.2.2 (Shamir Secret Sharing Modal):** Implemented $\text{GF}(2^8)$ Shamir threshold splitting (e.g. 3-of-5) and emergency key reconstruction modal.
+- **Subphase 11.2.3 (SHA-256 Tamper-Evident Audit Chain):** Added real-time hash chain integrity verification in `HealthDashboard.svelte` with cryptographic break indicator.
+- **Subphase 11.2.4 (Encrypted Backup Export/Import):** Added conflict resolution options ("Skip on Conflict" vs "Overwrite on Conflict"), default timestamped archive names, and passphrase confirmation warning in `BackupModal.svelte`.
+- **Status:** Verified (`cargo test -p devops-secret-vault` 38 passed, `--self-test` 8/8 passed).
+
+### 4.3 Phase 11.3: Universal Log Viewer (`apps/universal-log-viewer`)
+- **Subphase 11.3.1 (Timeline Drag-Selection & Timerange Filtering):** Implemented horizontal drag-selection on `TimelineHistogram.svelte`, keyboard navigation, and IPC slice via `get_lines_by_indices`.
+- **Subphase 11.3.2 (AI Insights Drawer Anomaly Window):** Added re-run analysis spinner, template filter routing, and "Focus Anomaly Window" navigation.
+- **Subphase 11.3.3 (PII/PCI Stream Redaction Export Modal):** Added `RedactExportModal.svelte` with configurable rules (PANs, IPs, Emails, Tokens) and Business tier gating.
+- **Status:** Verified (`cargo test -p universal-log-viewer` 31 passed, `--self-test` 11/11 passed).
+
+### 4.4 Phase 11.4: Universal Live Translator (`apps/universal-live-translator`)
+- **Subphase 11.4.1 (Camera Translation AR Canvas Overlay):** Added HTML5 `<canvas>` AR overlay displaying translated bounding boxes, confidence scores, and hover highlights directly over words.
+- **Subphase 11.4.2 (Phrasebook Glossary Management & Overrides):** Added custom domain creation, term deletion, live override verification console, and "Use in Translator" routing.
+- **Subphase 11.4.3 (Subtitle & Document Structural Translation):** Upgraded `CameraDocumentView.svelte` to support `.srt`, `.vtt`, `.md`, and `.txt` with drag & drop file loading, Millisecond-accurate timestamp preservation, code fence masking, copy/download actions, and a visual timestamped cue breakdown table.
+- **Status:** Verified (`cargo test -p universal-live-translator` 33 passed, `--self-test` 8/8 passed).
+
+### 4.5 Phase 11.5: Professional Audio & Video Editor (`apps/pro-av-editor`)
+- **Subphase 11.5.1 (Program Monitor Canvas Rendering Loop):** Implemented `requestAnimationFrame` video render loop, J-K-L shuttle controls ($1\times, 2\times, 4\times, 8\times, -1\times$), Action/Title safe guides (90%/80%), center crosshair, zoom modes, and two-way timeline scrubbing synchronization via `timeupdate`.
+- **Subphase 11.5.2 (Real-Time Broadcast Video Scopes & LUT Presets):** Implemented canvas-rendered 256-bin RGB overlay histogram, green phosphor luma waveform with IRE 0–100 graticules, and polar vectorscope with 75%/100% SMPTE boxes and chroma scatter traces; added 5 creative LUT presets.
+- **Subphase 11.5.3 (CMX 3600 EDL Export, FCPXML & Master WAV Triggers):** Added direct file download and clipboard copy triggers for CMX 3600 EDL and FCPXML interchange in `AiToolsModal.svelte`, broadcast WAV master rendering, and top header navigation integration.
+- **Status:** Verified (`cargo test -p pro-av-editor` 25 passed, `--self-test` 10/10 passed).
+
+---
+
+## 5. Final Windows Packaging & Release Artifacts Matrix
+
+Generated via `scripts/package-windows.ps1` with 100% offline compilation and verified `--self-test` execution:
+
+| Application | Release Executable Size | Portable ZIP Bundle | SHA-256 Checksum | `--self-test` IPC Result |
+| :--- | :--- | :--- | :--- | :--- |
+| **DevOps Secret Vault** | `9,248,768` bytes (9.25 MB) | `devops-secret-vault_0.1.0_x86_64-pc-windows-gnu_portable.zip` (3.94 MB) | `1995e6ef069d10e7c16adfcef206fd359f721925fe14e11392180b8a9e6af332` | **PASSED** (8/8 checks) |
+| **AI File Explorer** | `7,126,016` bytes (7.13 MB) | `ai-file-explorer_0.1.0_x86_64-pc-windows-gnu_portable.zip` (2.85 MB) | `cf5b5c15e36c6f3edad1f54778f4013d4d1fff1be8d70d8cd9263acf4a6d2099` | **PASSED** (8/8 checks) |
+| **Universal Log Viewer** | `5,106,688` bytes (5.11 MB) | `universal-log-viewer_0.1.0_x86_64-pc-windows-gnu_portable.zip` (2.38 MB) | `0a46328c77bcd64ca31d21e4273a4acf187f29d81953c32a7d838dbf50b35c24` | **PASSED** (11/11 checks) |
+| **Universal Live Translator** | `3,085,824` bytes (3.09 MB) | `universal-live-translator_0.1.0_x86_64-pc-windows-gnu_portable.zip` (1.56 MB) | `8ff63b9e30561229d3a7669ca9472cd179c38cac5e402f8d78505e12f7174c1b` | **PASSED** (8/8 checks) |
+| **Pro Audio & Video Editor** | `1,368,576` bytes (1.37 MB) | `pro-av-editor_0.1.0_x86_64-pc-windows-gnu_portable.zip` (0.59 MB) | `e080f56d441c8743df2f06aeedbd0188021c6b398c6ea0fa2d68c506ba593bd8` | **PASSED** (10/10 checks) |
+
