@@ -13,6 +13,14 @@ echo "=========================================================="
 APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor")
 mkdir -p "${OUTPUT_DIR}"
 
+# 0. Build Embedded Svelte 5 Desktop UI Bundles
+echo "[0/4] Building Svelte 5 desktop UI bundles for all 5 apps..."
+for app in "${APPS[@]}"; do
+    if [ -f "apps/${app}/ui/package.json" ]; then
+        npm --prefix "apps/${app}/ui" run build
+    fi
+done
+
 # 1. Compile Targets (Apple Silicon & Intel)
 echo "[1/4] Building release binaries for Apple Silicon and Intel..."
 cargo build --workspace --release --target aarch64-apple-darwin || true

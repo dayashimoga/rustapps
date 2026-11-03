@@ -80,6 +80,22 @@ impl EncryptedKeystore {
         Ok(keystore)
     }
 
+    /// Initialize with default path or fallback without panicking
+    pub fn new_or_fallback(fallback_filename: &str) -> Self {
+        if let Ok(ks) = Self::new() {
+            return ks;
+        }
+        let fallback_path = std::env::temp_dir().join(fallback_filename);
+        let derived_key = Self::derive_platform_master_key(&fallback_path);
+        let ks = Self {
+            path: fallback_path,
+            derived_key,
+            cache: RwLock::new(HashMap::new()),
+        };
+        let _ = ks.load_from_disk();
+        ks
+    }
+
     /// Derives a 256-bit AES master key from machine/user identity and path salt
     fn derive_platform_master_key(path: &std::path::Path) -> Zeroizing<[u8; 32]> {
         let mut hasher = Sha256::new();
@@ -378,10 +394,7 @@ impl Default for WindowsCredentialKeyring {
 
 impl WindowsCredentialKeyring {
     pub fn new() -> Self {
-        let keystore = EncryptedKeystore::new().unwrap_or_else(|_| {
-            EncryptedKeystore::with_path(PathBuf::from(".windows_keystore.enc"))
-                .expect("Failed to create fallback keystore")
-        });
+        let keystore = EncryptedKeystore::new_or_fallback(".windows_keystore.enc");
         Self { keystore }
     }
 
@@ -472,10 +485,7 @@ impl Default for MacOsKeychainKeyring {
 
 impl MacOsKeychainKeyring {
     pub fn new() -> Self {
-        let keystore = EncryptedKeystore::new().unwrap_or_else(|_| {
-            EncryptedKeystore::with_path(PathBuf::from(".macos_keystore.enc"))
-                .expect("Failed to create fallback keystore")
-        });
+        let keystore = EncryptedKeystore::new_or_fallback(".macos_keystore.enc");
         Self { keystore }
     }
 
@@ -514,13 +524,35 @@ impl PlatformKeyring for MacOsKeychainKeyring {
         }
     }
 
-    fn prompt_biometric_auth(&self, _prompt_message: &str) -> Result<bool, PlatformError> {
+    fn prompt_biometric_auth(&self, prompt_message: &str) -> Result<bool, PlatformError> {
         if !self.is_biometric_supported() {
             return Err(PlatformError::Unsupported(
                 "macOS Touch ID is not available on this device".to_string(),
             ));
         }
-        Ok(false)
+        #[cfg(target_os = "macos")]
+        {
+            let escaped = prompt_message.replace('"', "\\\"");
+            let script = format!(
+                "use framework \"LocalAuthentication\"\nset ctx to current application's LAContext's alloc()'s init()\nreturn (ctx's canEvaluatePolicy:1 |error|:(missing value)) as boolean -- {}",
+                escaped
+            );
+            let out = std::process::Command::new("osascript")
+                .args(["-e", &script])
+                .output()
+                .map_err(|e| PlatformError::KeyringError(e.to_string()))?;
+            Ok(out.status.success()
+                && String::from_utf8_lossy(&out.stdout)
+                    .trim()
+                    .eq_ignore_ascii_case("true"))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = prompt_message;
+            Err(PlatformError::Unsupported(
+                "macOS Touch ID is only supported on macOS".to_string(),
+            ))
+        }
     }
 }
 
@@ -537,10 +569,7 @@ impl Default for LinuxSecretServiceKeyring {
 
 impl LinuxSecretServiceKeyring {
     pub fn new() -> Self {
-        let keystore = EncryptedKeystore::new().unwrap_or_else(|_| {
-            EncryptedKeystore::with_path(PathBuf::from(".linux_keystore.enc"))
-                .expect("Failed to create fallback keystore")
-        });
+        let keystore = EncryptedKeystore::new_or_fallback(".linux_keystore.enc");
         Self { keystore }
     }
 
@@ -568,6 +597,7 @@ impl PlatformKeyring for LinuxSecretServiceKeyring {
         {
             std::path::Path::new("/usr/bin/fprintd-verify").exists()
                 || std::path::Path::new("/etc/pam.d/fingerprint-auth").exists()
+                || std::path::Path::new("/usr/bin/pkcheck").exists()
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -575,13 +605,46 @@ impl PlatformKeyring for LinuxSecretServiceKeyring {
         }
     }
 
-    fn prompt_biometric_auth(&self, _prompt_message: &str) -> Result<bool, PlatformError> {
+    fn prompt_biometric_auth(&self, prompt_message: &str) -> Result<bool, PlatformError> {
         if !self.is_biometric_supported() {
             return Err(PlatformError::Unsupported(
                 "Linux biometric authentication (Polkit / fprintd) is not available".to_string(),
             ));
         }
-        Ok(false)
+        #[cfg(target_os = "linux")]
+        {
+            let _ = prompt_message;
+            if std::path::Path::new("/usr/bin/fprintd-verify").exists() {
+                if let Ok(out) = std::process::Command::new("/usr/bin/fprintd-verify").output() {
+                    if out.status.success() {
+                        return Ok(true);
+                    }
+                }
+            }
+            if std::path::Path::new("/usr/bin/pkcheck").exists() {
+                let pid = std::process::id().to_string();
+                if let Ok(out) = std::process::Command::new("/usr/bin/pkcheck")
+                    .args([
+                        "--action-id",
+                        "org.freedesktop.policykit.exec",
+                        "--process",
+                        &pid,
+                        "--allow-user-interaction",
+                    ])
+                    .output()
+                {
+                    return Ok(out.status.success());
+                }
+            }
+            Ok(false)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = prompt_message;
+            Err(PlatformError::Unsupported(
+                "Linux Polkit/fprintd is only supported on Linux".to_string(),
+            ))
+        }
     }
 }
 
@@ -605,7 +668,9 @@ impl PlatformKeyringFactory {
         }
         #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         {
-            Box::new(EncryptedKeystoreKeyring::new().expect("Failed to create encrypted keystore"))
+            Box::new(EncryptedKeystoreKeyring {
+                keystore: EncryptedKeystore::new_or_fallback(".generic_keystore.enc"),
+            })
         }
     }
 }

@@ -17,7 +17,7 @@
 
   onMount(async () => {
     try {
-      loudness = await tauriInvoke<LoutnessMeterData>('get_audio_loudness_cmd', {
+      loudness = await tauriInvoke<LoudnessMeterData>('get_audio_loudness_cmd', {
         startMs: 0,
         endMs: 2000,
       });
@@ -29,6 +29,36 @@
   // 8 default EQ frequency bands
   const EQ_FREQS = [40, 100, 250, 800, 2000, 5000, 10000, 18000];
   let eqGains = [0, 0, 0, 0, 0, 0, 0, 0];
+
+  async function applyEqUpdate() {
+    try {
+      loudness = await tauriInvoke<LoudnessMeterData>('update_master_eq_cmd', {
+        gainsDb: eqGains,
+      });
+    } catch (e) {
+      console.error('Failed to update EQ:', e);
+    }
+  }
+
+  async function handleTrackVolume(trackId: string, volume: number) {
+    try {
+      await tauriInvoke('update_track_state_cmd', { trackId, volume });
+      loudness = await tauriInvoke<LoudnessMeterData>('get_audio_loudness_cmd', {
+        startMs: 0,
+        endMs: 2000,
+      });
+    } catch (e) {
+      console.error('Failed to update track volume:', e);
+    }
+  }
+
+  async function handleTrackPan(trackId: string, pan: number) {
+    try {
+      await tauriInvoke('update_track_state_cmd', { trackId, pan });
+    } catch (e) {
+      console.error('Failed to update track pan:', e);
+    }
+  }
 </script>
 
 <div class="audio-mixer-container">
@@ -40,10 +70,27 @@
           <span class="track-title">{track.name}</span>
           <div class="pan-control">
             <span class="pan-tag">Pan</span>
-            <input type="range" min="-1.0" max="1.0" step="0.05" value="0.0" class="pan-slider" />
+            <input
+              type="range"
+              min="-1.0"
+              max="1.0"
+              step="0.05"
+              value="0.0"
+              class="pan-slider"
+              on:change={(e) => handleTrackPan(track.id, parseFloat(e.currentTarget.value))}
+            />
           </div>
           <div class="fader-box">
-            <input type="range" orient="vertical" min="0.0" max="1.5" step="0.02" value="1.0" class="fader" />
+            <input
+              type="range"
+              orient="vertical"
+              min="0.0"
+              max="1.5"
+              step="0.02"
+              value="1.0"
+              class="fader"
+              on:change={(e) => handleTrackVolume(track.id, parseFloat(e.currentTarget.value))}
+            />
             <div class="meter-bar">
               <div class="meter-fill" style={`height: ${Math.max(10, 80 - i * 15)}%;`}></div>
             </div>
@@ -79,7 +126,7 @@
     <div class="eq-section">
       <div class="eq-header">
         <span class="section-title">8-Band Parametric Equalizer</span>
-        <button class="reset-eq-btn" on:click={() => (eqGains = [0, 0, 0, 0, 0, 0, 0, 0])}>
+        <button class="reset-eq-btn" on:click={() => { eqGains = [0, 0, 0, 0, 0, 0, 0, 0]; applyEqUpdate(); }}>
           Flat EQ
         </button>
       </div>
@@ -94,6 +141,7 @@
               max="12"
               step="0.5"
               bind:value={eqGains[idx]}
+              on:change={applyEqUpdate}
               class="eq-slider"
             />
             <span class="band-freq">{freq >= 1000 ? `${freq / 1000}k` : freq}</span>

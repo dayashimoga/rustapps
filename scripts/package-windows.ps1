@@ -16,16 +16,30 @@ $Apps = @("devops-secret-vault", "ai-file-explorer", "universal-log-viewer", "un
 # Ensure output directory exists
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
+# 0. Build Embedded Svelte 5 Desktop UI Bundles
+Write-Host "[0/4] Building Svelte 5 desktop UI bundles for all 5 apps..." -ForegroundColor Yellow
+foreach ($app in $Apps) {
+    $uiDir = "apps/$app/ui"
+    if (Test-Path "$uiDir/package.json") {
+        npm --prefix $uiDir run build
+    }
+}
+
 # 1. Compile Release Binaries
 Write-Host "[1/4] Building release binaries for target: $Target..." -ForegroundColor Yellow
 cargo build --workspace --release --target $Target
 
-# 2. Package Portable ZIP Archives
-Write-Host "[2/4] Assembling portable ZIP archives..." -ForegroundColor Yellow
+# 2. Verify Embedded UI & IPC Self-Test and Package Portable ZIP Archives
+Write-Host "[2/4] Verifying --self-test and assembling portable ZIP archives..." -ForegroundColor Yellow
 foreach ($app in $Apps) {
     $binName = "$app.exe"
     $srcPath = "target/$Target/release/$binName"
     if (Test-Path $srcPath) {
+        Write-Host "  -> Running live GUI & IPC self-test: $srcPath --self-test" -ForegroundColor Cyan
+        & $srcPath --self-test
+        if ($LASTEXITCODE -ne 0) {
+            throw "Self-test failed for $srcPath"
+        }
         $stageDir = "$OutputDir/stage/$app"
         New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
         Copy-Item $srcPath -Destination "$stageDir/$binName"

@@ -5,16 +5,17 @@
 
 use crate::audio_engine::LoudnessMeterData;
 use crate::color::VideoScopeData;
-use crate::models::{Clip, TimelineProject};
+use crate::models::{Clip, ColorGradingSettings, TimelineProject};
 use crate::service::EditorService;
 use crate::templates::{ExportPreset, ProjectTemplate};
+use serde_json::{json, Value};
 use std::sync::{Arc, Mutex, OnceLock};
 
 static SERVICE: OnceLock<Arc<Mutex<EditorService>>> = OnceLock::new();
 
 pub fn get_service() -> Arc<Mutex<EditorService>> {
     SERVICE
-        .get_or_init(|| Arc::new(Mutex::new(EditorService::new())))
+        .get_or_init(|| Arc::new(Mutex::new(EditorService::with_studio_starter())))
         .clone()
 }
 
@@ -213,6 +214,397 @@ pub fn get_templates_cmd() -> Result<Vec<ProjectTemplate>, String> {
 /// Retrieve all available export presets
 pub fn get_export_presets_cmd() -> Result<Vec<ExportPreset>, String> {
     Ok(ExportPreset::all_standard_presets())
+}
+
+/// Update clip color grading parameters
+pub fn update_clip_color_grading_cmd(
+    clip_id: Option<String>,
+    grading: ColorGradingSettings,
+) -> Result<TimelineProject, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.update_clip_color_grading(clip_id.as_deref(), grading)
+        .map_err(|e| e.to_string())?;
+    svc.get_project().map_err(|e| e.to_string())
+}
+
+/// Update track mute/solo/lock or mixer volume/pan
+pub fn update_track_state_cmd(
+    track_id: String,
+    muted: Option<bool>,
+    solo: Option<bool>,
+    locked: Option<bool>,
+    volume: Option<f32>,
+    pan: Option<f32>,
+) -> Result<TimelineProject, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.update_track_state(&track_id, muted, solo, locked, volume, pan)
+        .map_err(|e| e.to_string())?;
+    svc.get_project().map_err(|e| e.to_string())
+}
+
+/// Update 8-band master EQ and return updated EBU R128 loudness readings
+pub fn update_master_eq_cmd(gains_db: Vec<f32>) -> Result<LoudnessMeterData, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.update_master_eq(&gains_db).map_err(|e| e.to_string())
+}
+
+/// AI Silence Ripple-Cutter returning removed (start_ms, end_ms) intervals
+pub fn ai_ripple_cut_silence_cmd(
+    threshold_db: f32,
+    min_duration_ms: u64,
+    pad_ms: u64,
+) -> Result<Vec<(u64, u64)>, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    let config = crate::ai_editor::SilenceCutConfig {
+        threshold_dbfs: threshold_db,
+        min_silence_duration_ms: min_duration_ms,
+        pre_pad_ms: pad_ms,
+        post_pad_ms: pad_ms,
+    };
+    let intervals = svc
+        .auto_cut_silence_intervals(&config)
+        .map_err(|e| e.to_string())?;
+    Ok(intervals
+        .into_iter()
+        .map(|iv| (iv.start_ms, iv.end_ms))
+        .collect())
+}
+
+/// AI Beat Detector returning detected beat timestamps in ms
+pub fn ai_detect_beats_cmd(threshold: f32) -> Result<Vec<u64>, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.detect_beats_list(threshold).map_err(|e| e.to_string())
+}
+
+/// AI Scene Cut Detector returning detected scene boundary timestamps in ms
+pub fn ai_detect_scene_cuts_cmd(threshold: f32) -> Result<Vec<u64>, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.detect_scene_cuts(threshold).map_err(|e| e.to_string())
+}
+
+/// AI Auto-Captions Generator returning (start_ms, end_ms, text) cues
+pub fn ai_generate_auto_captions_cmd() -> Result<Vec<(u64, u64, String)>, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.generate_auto_captions().map_err(|e| e.to_string())
+}
+
+/// Render broadcast audio master WAV file and return summary string
+pub fn render_audio_master_cmd(output_path: Option<String>) -> Result<String, String> {
+    let path = match output_path {
+        Some(p) if !p.trim().is_empty() => {
+            let pb = std::path::PathBuf::from(&p);
+            if pb.is_relative() {
+                if let Ok(app_paths) = platform_common::AppPaths::from_app_name("pro-av-editor") {
+                    app_paths.data_dir.join(pb)
+                } else {
+                    std::env::temp_dir().join(pb)
+                }
+            } else {
+                pb
+            }
+        }
+        _ => {
+            if let Ok(app_paths) = platform_common::AppPaths::from_app_name("pro-av-editor") {
+                app_paths
+                    .data_dir
+                    .join("exports")
+                    .join("master_mixdown.wav")
+            } else {
+                std::env::temp_dir().join("master_mixdown.wav")
+            }
+        }
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let path_str = path.to_string_lossy().to_string();
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    let bytes = svc
+        .export_audio_master(&path_str)
+        .map_err(|e| e.to_string())?;
+    Ok(format!("{} ({} bytes PCM WAV)", path_str, bytes))
+}
+
+/// Dispatch desktop IPC commands from the Svelte 5 studio frontend
+pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
+    match cmd {
+        "get_project_state_cmd" => {
+            let res = get_project_state_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "create_project_cmd" => {
+            let name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Untitled Studio Project")
+                .to_string();
+            let template_id = args
+                .get("templateId")
+                .or_else(|| args.get("template_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let res = create_project_cmd(name, template_id)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "save_project_cmd" => {
+            let default_path = platform_common::AppPaths::from_app_name("pro-av-editor")
+                .map(|p| p.data_dir.join("studio_project.avedproj"))
+                .unwrap_or_else(|_| std::env::temp_dir().join("studio_project.avedproj"));
+            if let Some(parent) = default_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| default_path.to_string_lossy().to_string());
+            save_project_cmd(path.clone())?;
+            Ok(json!(path))
+        }
+        "load_project_cmd" => {
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing path".to_string())?
+                .to_string();
+            let res = load_project_cmd(path)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "add_clip_cmd" => {
+            let clip_val = args.get("clip").cloned().unwrap_or(args);
+            let clip: Clip = serde_json::from_value(clip_val).map_err(|e| e.to_string())?;
+            add_clip_cmd(clip)?;
+            let res = get_project_state_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "remove_clip_cmd" => {
+            let clip_id = args
+                .get("clipId")
+                .or_else(|| args.get("clip_id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing clipId".to_string())?
+                .to_string();
+            remove_clip_cmd(clip_id)?;
+            let res = get_project_state_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "split_clip_cmd" => {
+            let clip_id = args
+                .get("clipId")
+                .or_else(|| args.get("clip_id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing clipId".to_string())?
+                .to_string();
+            let timestamp_ms = args
+                .get("timestampMs")
+                .or_else(|| args.get("timestamp_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1000);
+            split_clip_cmd(clip_id, timestamp_ms)?;
+            let res = get_project_state_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "trim_clip_cmd" => {
+            let clip_id = args
+                .get("clipId")
+                .or_else(|| args.get("clip_id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing clipId".to_string())?
+                .to_string();
+            let new_in_ms = args
+                .get("newInMs")
+                .or_else(|| args.get("new_in_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let new_out_ms = args
+                .get("newOutMs")
+                .or_else(|| args.get("new_out_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1000);
+            trim_clip_cmd(clip_id, new_in_ms, new_out_ms)?;
+            let res = get_project_state_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "ripple_delete_cmd" => {
+            let clip_id = args
+                .get("clipId")
+                .or_else(|| args.get("clip_id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing clipId".to_string())?
+                .to_string();
+            ripple_delete_cmd(clip_id)?;
+            let res = get_project_state_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "undo_cmd" => {
+            let _ = undo_cmd()?;
+            let res = get_project_state_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "redo_cmd" => {
+            let _ = redo_cmd()?;
+            let res = get_project_state_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "render_preview_frame_cmd" => {
+            let timestamp_ms = args
+                .get("timestampMs")
+                .or_else(|| args.get("timestamp_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(640) as u32;
+            let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(360) as u32;
+            let b64 = render_preview_frame_cmd(timestamp_ms, width, height)?;
+            Ok(json!(b64))
+        }
+        "get_video_scopes_cmd" => {
+            let timestamp_ms = args
+                .get("timestampMs")
+                .or_else(|| args.get("timestamp_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(160) as u32;
+            let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(90) as u32;
+            let res = get_video_scopes_cmd(timestamp_ms, width, height)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "get_audio_loudness_cmd" => {
+            let start_ms = args
+                .get("startMs")
+                .or_else(|| args.get("start_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let end_ms = args
+                .get("endMs")
+                .or_else(|| args.get("end_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(2000);
+            let res = get_audio_loudness_cmd(start_ms, end_ms)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "update_clip_color_grading_cmd" => {
+            let clip_id = args
+                .get("clipId")
+                .or_else(|| args.get("clip_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let grading_val = args
+                .get("grading")
+                .cloned()
+                .ok_or_else(|| "Missing grading payload".to_string())?;
+            let grading: ColorGradingSettings =
+                serde_json::from_value(grading_val).map_err(|e| e.to_string())?;
+            let res = update_clip_color_grading_cmd(clip_id, grading)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "update_track_state_cmd" => {
+            let track_id = args
+                .get("trackId")
+                .or_else(|| args.get("track_id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing trackId".to_string())?
+                .to_string();
+            let muted = args.get("muted").and_then(|v| v.as_bool());
+            let solo = args.get("solo").and_then(|v| v.as_bool());
+            let locked = args.get("locked").and_then(|v| v.as_bool());
+            let volume = args
+                .get("volume")
+                .and_then(|v| v.as_f64())
+                .map(|f| f as f32);
+            let pan = args.get("pan").and_then(|v| v.as_f64()).map(|f| f as f32);
+            let res = update_track_state_cmd(track_id, muted, solo, locked, volume, pan)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "update_master_eq_cmd" => {
+            let gains: Vec<f32> = args
+                .get("gainsDb")
+                .or_else(|| args.get("gains_db"))
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .map(|x| x.as_f64().unwrap_or(0.0) as f32)
+                        .collect()
+                })
+                .unwrap_or_else(|| vec![0.0; 8]);
+            let res = update_master_eq_cmd(gains)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "auto_cut_silence_cmd" | "ai_ripple_cut_silence_cmd" => {
+            let threshold_db = args
+                .get("thresholdDb")
+                .or_else(|| args.get("threshold_dbfs"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(-38.0) as f32;
+            let min_duration_ms = args
+                .get("minDurationMs")
+                .or_else(|| args.get("min_silence_duration_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(400);
+            let pad_ms = args
+                .get("padMs")
+                .or_else(|| args.get("pre_pad_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(60);
+            let res = ai_ripple_cut_silence_cmd(threshold_db, min_duration_ms, pad_ms)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "detect_beats_cmd" | "ai_detect_beats_cmd" => {
+            let threshold = args
+                .get("threshold")
+                .or_else(|| args.get("sensitivity"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.25) as f32;
+            let res = ai_detect_beats_cmd(threshold)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "ai_detect_scene_cuts_cmd" => {
+            let threshold = args
+                .get("threshold")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(25.0) as f32;
+            let res = ai_detect_scene_cuts_cmd(threshold)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "ai_generate_auto_captions_cmd" => {
+            let res = ai_generate_auto_captions_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "render_audio_master_cmd" => {
+            let output_path = args
+                .get("outputPath")
+                .or_else(|| args.get("output_path"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let res = render_audio_master_cmd(output_path)?;
+            Ok(json!(res))
+        }
+        "export_edl_cmd" => {
+            let res = export_edl_cmd()?;
+            Ok(json!(res))
+        }
+        "export_fcpxml_cmd" => {
+            let res = export_fcpxml_cmd()?;
+            Ok(json!(res))
+        }
+        "get_templates_cmd" => {
+            let res = get_templates_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "get_export_presets_cmd" => {
+            let res = get_export_presets_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        _ => Err(format!("Unknown Pro AV Editor IPC command: {}", cmd)),
+    }
 }
 
 // ---------------------------------------------------------------------------

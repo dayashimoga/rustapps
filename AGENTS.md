@@ -17,6 +17,10 @@
    - All core runtime features (search, cryptography, OCR, ASR, NMT translation, TTS, audio/video DSP, AI auto-editing) MUST operate 100% offline.
    - Model downloading (for `universal-live-translator`, `ai-file-explorer`, `pro-av-editor`) MUST be isolated in a dedicated, user-initiated, cryptographically verified download manager (`shared/model-hub`) verifying SHA-256 + Ed25519 signatures before mounting models.
    - Zero telemetry, analytics, or crash reports may ever be transmitted over the network.
+4. **Mandatory Embedded Desktop GUI & Self-Test Verification:**
+   - Every desktop application binary (`apps/*/src/main.rs`) MUST embed its compiled Svelte 5 frontend bundle (`../ui/dist/index.html`, `../ui/dist/assets/app.js`, `../ui/dist/assets/app.css`), start the `platform_common::run_desktop_app` loopback GUI host, and route all UI commands through `commands::dispatch_ipc_command`.
+   - Console CLI stubs that print a banner and exit without launching a GUI window are strictly prohibited as default entrypoints (CLI diagnostic modes must be gated behind `--cli`).
+   - Every built desktop binary MUST support and pass `<binary> --self-test`, verifying embedded asset sizes and executing live IPC commands against the Rust backend before any release artifact is packaged.
 
 ---
 
@@ -68,5 +72,5 @@ Every stage, phase, and subphase MUST provide verifiable evidence before complet
 2. **Frontend & Mobile Tests:** `npm run typecheck`, `npm run test:unit` (Vitest), `npm run test:e2e` (Playwright), and `flutter test` for mobile targets.
 3. **Security & Supply Chain:** `cargo deny check` (licenses, bans, advisories, sources) and `cargo audit` with 0 vulnerabilities.
 4. **Performance Benchmarks:** `cargo bench` via Criterion; any $>5\%$ regression ($p < 0.05$) blocks completion.
-5. **Artifact Verification:** Every application must build into a real GUI executable / mobile bundle with Ed25519 signature + SHA-256 checksum + CycloneDX SBOM.
+5. **Artifact & Self-Test Verification:** Every application must build its Svelte 5 UI (`npm run build`) before `cargo build --release`, pass `<binary> --self-test` with 100% IPC check pass rate, and package into a complete GUI executable + portable `.zip` / installer / mobile bundle with SHA-256 checksum + CycloneDX SBOM.
 

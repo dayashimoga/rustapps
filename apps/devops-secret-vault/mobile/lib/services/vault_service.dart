@@ -46,10 +46,7 @@ class VaultService {
         calloc.free(pathPtr);
       }
     } catch (e) {
-      // Fallback to mock mode if native binary cannot be loaded
-      _mockMode = true;
-      _mockInitialized = false;
-      _mockLocked = true;
+      throw StateError('Failed to initialize native DevOps Secret Vault FFI library: $e');
     }
   }
 

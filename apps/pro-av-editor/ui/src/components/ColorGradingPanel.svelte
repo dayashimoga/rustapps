@@ -1,8 +1,13 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { createEventDispatcher, onMount } from 'svelte';
   import { tauriInvoke, type ColorGradingSettings, type VideoScopeData } from '../types';
 
   export let playheadMs: number = 0;
+  export let selectedClipId: string | null = null;
+
+  const dispatch = createEventDispatcher<{
+    gradeUpdated: void;
+  }>();
 
   let exposure: number = 0.0;
   let contrast: number = 1.0;
@@ -40,7 +45,31 @@
     }
   }
 
-  function resetGrading() {
+  async function applyGrading() {
+    const grading: ColorGradingSettings = {
+      lift: { r: liftR, g: liftG, b: liftB, luma: 0.0 },
+      gamma: { r: gammaR, g: gammaG, b: gammaB, luma: 0.0 },
+      gain: { r: gainR, g: gainG, b: gainB, luma: 0.0 },
+      exposure,
+      contrast,
+      saturation,
+      temperature,
+      tint,
+      lut_file_path: null,
+    };
+    try {
+      await tauriInvoke('update_clip_color_grading_cmd', {
+        clipId: selectedClipId,
+        grading,
+      });
+      await loadScopes();
+      dispatch('gradeUpdated');
+    } catch (e) {
+      console.error('Failed to update color grading:', e);
+    }
+  }
+
+  async function resetGrading() {
     exposure = 0.0;
     contrast = 1.0;
     saturation = 1.0;
@@ -49,6 +78,7 @@
     liftR = 0; liftG = 0; liftB = 0;
     gammaR = 0; gammaG = 0; gammaB = 0;
     gainR = 0; gainG = 0; gainB = 0;
+    await applyGrading();
   }
 </script>
 
@@ -64,9 +94,9 @@
           <div class="wheel-reticle" style={`left: ${50 + liftR * 40}%; top: ${50 - liftB * 40}%;`}></div>
         </div>
         <div class="rgb-sliders">
-          <label>R <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={liftR} /></label>
-          <label>G <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={liftG} /></label>
-          <label>B <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={liftB} /></label>
+          <label>R <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={liftR} on:change={applyGrading} /></label>
+          <label>G <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={liftG} on:change={applyGrading} /></label>
+          <label>B <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={liftB} on:change={applyGrading} /></label>
         </div>
       </div>
 
@@ -77,9 +107,9 @@
           <div class="wheel-reticle" style={`left: ${50 + gammaR * 40}%; top: ${50 - gammaB * 40}%;`}></div>
         </div>
         <div class="rgb-sliders">
-          <label>R <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={gammaR} /></label>
-          <label>G <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={gammaG} /></label>
-          <label>B <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={gammaB} /></label>
+          <label>R <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={gammaR} on:change={applyGrading} /></label>
+          <label>G <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={gammaG} on:change={applyGrading} /></label>
+          <label>B <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={gammaB} on:change={applyGrading} /></label>
         </div>
       </div>
 
@@ -90,9 +120,9 @@
           <div class="wheel-reticle" style={`left: ${50 + gainR * 40}%; top: ${50 - gainB * 40}%;`}></div>
         </div>
         <div class="rgb-sliders">
-          <label>R <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={gainR} /></label>
-          <label>G <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={gainG} /></label>
-          <label>B <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={gainB} /></label>
+          <label>R <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={gainR} on:change={applyGrading} /></label>
+          <label>G <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={gainG} on:change={applyGrading} /></label>
+          <label>B <input type="range" min="-0.5" max="0.5" step="0.01" bind:value={gainB} on:change={applyGrading} /></label>
         </div>
       </div>
     </div>
@@ -104,7 +134,7 @@
           <span>Exposure</span>
           <span class="slider-val">{exposure > 0 ? `+${exposure.toFixed(1)}` : exposure.toFixed(1)} EV</span>
         </div>
-        <input type="range" min="-3.0" max="3.0" step="0.1" bind:value={exposure} />
+        <input type="range" min="-3.0" max="3.0" step="0.1" bind:value={exposure} on:change={applyGrading} />
       </div>
 
       <div class="slider-item">
@@ -112,7 +142,7 @@
           <span>Contrast</span>
           <span class="slider-val">{contrast.toFixed(2)}</span>
         </div>
-        <input type="range" min="0.5" max="1.8" step="0.02" bind:value={contrast} />
+        <input type="range" min="0.5" max="1.8" step="0.02" bind:value={contrast} on:change={applyGrading} />
       </div>
 
       <div class="slider-item">
@@ -120,7 +150,7 @@
           <span>Saturation</span>
           <span class="slider-val">{saturation.toFixed(2)}</span>
         </div>
-        <input type="range" min="0.0" max="2.0" step="0.05" bind:value={saturation} />
+        <input type="range" min="0.0" max="2.0" step="0.05" bind:value={saturation} on:change={applyGrading} />
       </div>
 
       <div class="slider-item">
@@ -128,7 +158,7 @@
           <span>Temperature</span>
           <span class="slider-val">{temperature.toFixed(0)}</span>
         </div>
-        <input type="range" min="-50" max="50" step="1" bind:value={temperature} />
+        <input type="range" min="-50" max="50" step="1" bind:value={temperature} on:change={applyGrading} />
       </div>
 
       <div class="slider-item">
@@ -136,7 +166,7 @@
           <span>Tint</span>
           <span class="slider-val">{tint.toFixed(0)}</span>
         </div>
-        <input type="range" min="-50" max="50" step="1" bind:value={tint} />
+        <input type="range" min="-50" max="50" step="1" bind:value={tint} on:change={applyGrading} />
       </div>
 
       <button class="reset-btn" on:click={resetGrading}>Reset Grade</button>
@@ -173,11 +203,19 @@
       <div class="scope-mini-grid">
         <div class="waveform-box">
           <span class="scope-label">IRE 100</span>
-          <div class="wf-visual"></div>
+          {#if scopes && scopes.histogram_luma}
+            <div class="hist-group">
+              {#each scopes.histogram_luma.slice(0, 32) as v}
+                <div class="g-bar" style={`height: ${Math.max(2, Math.min(v * 2, 36))}px;`}></div>
+              {/each}
+            </div>
+          {:else}
+            <div class="wf-visual"></div>
+          {/if}
           <span class="scope-label">IRE 0</span>
         </div>
         <div class="vectorscope-box">
-          <div class="polar-crosshair"></div>
+          <div class="polar-crosshair" style={`transform: translate(${temperature * 0.25}px, ${-tint * 0.25}px);`}></div>
           <span class="cb-cr-label">Cb / Cr</span>
         </div>
       </div>

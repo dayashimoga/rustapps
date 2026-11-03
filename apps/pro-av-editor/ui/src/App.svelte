@@ -18,8 +18,8 @@
   let durationMs: number = 6000;
   let selectedClipId: string | null = null;
   let showAiModal: boolean = false;
-  let canUndo: boolean = false;
-  let canRedo: boolean = false;
+  let canUndo: boolean = true;
+  let canRedo: boolean = true;
 
   let monitorRef: ProgramMonitor;
 
@@ -40,6 +40,9 @@
           }
         }
         durationMs = Math.max(maxOut + 1000, 6000);
+      }
+      if (monitorRef && monitorRef.updateFrame) {
+        await monitorRef.updateFrame();
       }
     } catch (e) {
       console.error('Failed to load project state:', e);
@@ -135,7 +138,11 @@
 
       {#if activePanel === 'color'}
         <div class="side-panel-wrapper">
-          <ColorGradingPanel {playheadMs} />
+          <ColorGradingPanel
+            {playheadMs}
+            {selectedClipId}
+            on:gradeUpdated={refreshProject}
+          />
         </div>
       {:else if activePanel === 'audio'}
         <div class="side-panel-wrapper">

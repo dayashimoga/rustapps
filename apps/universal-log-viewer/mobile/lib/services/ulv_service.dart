@@ -61,17 +61,7 @@ class UlvService {
         calloc.free(pathPtr);
       }
     } catch (e) {
-      // Fallback to mock mode for headless preview/testing
-      _mockMode = true;
-      _mockPath = filePath;
-      if (_mockLines.isEmpty) {
-        _generateMockLogs(1000);
-      }
-      return OpenedFileInfo(
-        path: filePath,
-        totalLines: _mockLines.length,
-        fileSizeBytes: _mockLines.length * 85,
-      );
+      throw StateError('Failed to initialize native Universal Log Viewer FFI library: $e');
     }
   }
 

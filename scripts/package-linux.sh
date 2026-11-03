@@ -14,6 +14,14 @@ echo "=========================================================="
 APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor")
 mkdir -p "${OUTPUT_DIR}"
 
+# 0. Build Embedded Svelte 5 Desktop UI Bundles
+echo "[0/5] Building Svelte 5 desktop UI bundles for all 5 apps..."
+for app in "${APPS[@]}"; do
+    if [ -f "apps/${app}/ui/package.json" ]; then
+        npm --prefix "apps/${app}/ui" run build
+    fi
+done
+
 # 1. Compile Release Binaries
 echo "[1/5] Building release binaries for target: ${TARGET}..."
 if [ "${TARGET}" = "aarch64-unknown-linux-gnu" ] && command -v cross &>/dev/null; then
@@ -23,10 +31,14 @@ else
 fi
 
 # 2. Package Standalone Tarball Bundles
-echo "[2/5] Creating tar.gz standalone distribution archives..."
+echo "[2/5] Verifying --self-test and creating tar.gz standalone distribution archives..."
 for app in "${APPS[@]}"; do
     src_bin="target/${TARGET}/release/${app}"
     if [ -f "${src_bin}" ]; then
+        if [ "${TARGET}" = "x86_64-unknown-linux-gnu" ]; then
+            echo "  -> Running live GUI & IPC self-test: ${src_bin} --self-test"
+            "${src_bin}" --self-test
+        fi
         stage_dir="${OUTPUT_DIR}/stage/${app}"
         mkdir -p "${stage_dir}"
         cp "${src_bin}" "${stage_dir}/${app}"

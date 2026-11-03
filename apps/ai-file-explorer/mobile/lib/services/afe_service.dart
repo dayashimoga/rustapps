@@ -46,10 +46,8 @@ class AfeService {
           calloc.free(dirPtr);
         }
       }
-    } catch (_) {
-      // Fallback to mock mode if native binary cannot be loaded
-      _mockMode = true;
-      _initMockData();
+    } catch (e) {
+      throw StateError('Failed to initialize native AI File Explorer FFI library: $e');
     }
   }
 

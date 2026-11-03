@@ -282,3 +282,229 @@ pub async fn unlock_with_shamir_shares(
         .await
         .map_err(|e| e.to_string())
 }
+
+static DEFAULT_VAULT_SERVICE: std::sync::OnceLock<Arc<VaultService>> = std::sync::OnceLock::new();
+
+pub fn get_default_vault_service() -> Result<Arc<VaultService>, String> {
+    if let Some(svc) = DEFAULT_VAULT_SERVICE.get() {
+        return Ok(Arc::clone(svc));
+    }
+    let db_path = if let Ok(env_path) = std::env::var("VAULT_DB_PATH") {
+        std::path::PathBuf::from(env_path)
+    } else if let Ok(paths) = platform_common::AppPaths::from_app_name("devops-secret-vault") {
+        paths.data_dir.join("devops_vault.db")
+    } else {
+        std::path::PathBuf::from("devops_vault.db")
+    };
+    let storage = crate::storage::VaultStorage::open(&db_path).map_err(|e| e.to_string())?;
+    let svc = Arc::new(VaultService::new(storage, None));
+    let _ = DEFAULT_VAULT_SERVICE.set(Arc::clone(&svc));
+    Ok(svc)
+}
+
+/// Dispatch desktop IPC commands from the Svelte 5 DevOps Secret Vault UI
+pub fn dispatch_ipc_command(
+    cmd: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let svc = get_default_vault_service()?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    rt.block_on(async move {
+        match cmd {
+            "get_vault_status" => {
+                let status = get_vault_status(&svc).await?;
+                serde_json::to_value(status).map_err(|e| e.to_string())
+            }
+            "initialize_vault" => {
+                let pw = args
+                    .get("masterPassword")
+                    .or_else(|| args.get("master_password"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                initialize_vault(&svc, pw).await?;
+                Ok(serde_json::json!(true))
+            }
+            "unlock_vault" => {
+                let pw = args
+                    .get("masterPassword")
+                    .or_else(|| args.get("master_password"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                unlock_vault(&svc, pw).await?;
+                Ok(serde_json::json!(true))
+            }
+            "lock_vault" => {
+                lock_vault(&svc).await?;
+                Ok(serde_json::json!(true))
+            }
+            "list_secrets" => {
+                let list = list_secrets(&svc).await?;
+                serde_json::to_value(list).map_err(|e| e.to_string())
+            }
+            "get_secret" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let sec = get_secret(&svc, id).await?;
+                serde_json::to_value(sec).map_err(|e| e.to_string())
+            }
+            "create_secret" => {
+                let input_val = args.get("input").cloned().unwrap_or(args);
+                let input: CreateSecretInput =
+                    serde_json::from_value(input_val).map_err(|e| e.to_string())?;
+                let meta = create_secret(&svc, input).await?;
+                serde_json::to_value(meta).map_err(|e| e.to_string())
+            }
+            "update_secret" => {
+                let id = args
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let input_val = args
+                    .get("input")
+                    .cloned()
+                    .ok_or_else(|| "Missing input".to_string())?;
+                let input: UpdateSecretInput =
+                    serde_json::from_value(input_val).map_err(|e| e.to_string())?;
+                let meta = update_secret(&svc, &id, input).await?;
+                serde_json::to_value(meta).map_err(|e| e.to_string())
+            }
+            "delete_secret" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                delete_secret(&svc, id).await?;
+                Ok(serde_json::json!(true))
+            }
+            "search_secrets" => {
+                let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+                let hits = search_secrets(&svc, query, limit).await?;
+                serde_json::to_value(hits).map_err(|e| e.to_string())
+            }
+            "copy_to_clipboard" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let ttl = args
+                    .get("ttlSecs")
+                    .or_else(|| args.get("ttl_secs"))
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u32);
+                let rem = copy_to_clipboard(&svc, id, ttl).await?;
+                Ok(serde_json::json!(rem))
+            }
+            "get_clipboard_remaining_seconds" => {
+                let rem = get_clipboard_remaining_seconds(&svc).await;
+                Ok(serde_json::json!(rem))
+            }
+            "clear_clipboard" => {
+                clear_clipboard(&svc).await?;
+                Ok(serde_json::json!(true))
+            }
+            "check_password_strength" => {
+                let pw = args.get("password").and_then(|v| v.as_str()).unwrap_or("");
+                let strength = check_password_strength(pw);
+                serde_json::to_value(strength).map_err(|e| e.to_string())
+            }
+            "get_audit_logs" => {
+                let secret_id = args
+                    .get("secretId")
+                    .or_else(|| args.get("secret_id"))
+                    .and_then(|v| v.as_str());
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+                let logs = get_audit_logs(&svc, secret_id, limit).await?;
+                serde_json::to_value(logs).map_err(|e| e.to_string())
+            }
+            "get_health_report" => {
+                let report = get_health_report(&svc).await?;
+                serde_json::to_value(report).map_err(|e| e.to_string())
+            }
+            "generate_totp_code" => {
+                let secret_id = args
+                    .get("secretId")
+                    .or_else(|| args.get("secret_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let code = generate_totp_code(&svc, secret_id).await?;
+                serde_json::to_value(code).map_err(|e| e.to_string())
+            }
+            "inspect_certificate" => {
+                let secret_id = args
+                    .get("secretId")
+                    .or_else(|| args.get("secret_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let cert = inspect_certificate(&svc, secret_id).await?;
+                serde_json::to_value(cert).map_err(|e| e.to_string())
+            }
+            "export_backup" => {
+                let passphrase = args
+                    .get("passphrase")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let output_path = args
+                    .get("outputPath")
+                    .or_else(|| args.get("output_path"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("vault.vaultbackup");
+                let res = export_backup(&svc, passphrase, output_path).await?;
+                serde_json::to_value(res).map_err(|e| e.to_string())
+            }
+            "import_backup" => {
+                let passphrase = args
+                    .get("passphrase")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let input_path = args
+                    .get("inputPath")
+                    .or_else(|| args.get("input_path"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("vault.vaultbackup");
+                let overwrite = args
+                    .get("overwrite")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let res = import_backup(&svc, passphrase, input_path, overwrite).await?;
+                serde_json::to_value(res).map_err(|e| e.to_string())
+            }
+            "verify_audit_chain" => {
+                let ok = verify_audit_chain(&svc).await?;
+                Ok(serde_json::json!(ok))
+            }
+            "is_biometric_available" => Ok(serde_json::json!(is_biometric_available(&svc))),
+            "enable_biometric_unlock" => {
+                enable_biometric_unlock(&svc).await?;
+                Ok(serde_json::json!(true))
+            }
+            "disable_biometric_unlock" => {
+                disable_biometric_unlock(&svc)?;
+                Ok(serde_json::json!(true))
+            }
+            "unlock_with_biometrics" => {
+                unlock_with_biometrics(&svc).await?;
+                Ok(serde_json::json!(true))
+            }
+            "split_master_key" => {
+                let threshold = args.get("threshold").and_then(|v| v.as_u64()).unwrap_or(2) as u8;
+                let total_shares = args
+                    .get("totalShares")
+                    .or_else(|| args.get("total_shares"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(3) as u8;
+                let shares = split_master_key(&svc, threshold, total_shares).await?;
+                serde_json::to_value(shares).map_err(|e| e.to_string())
+            }
+            "unlock_with_shamir_shares" => {
+                let shares_val = args
+                    .get("shares")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+                let shares: Vec<crate::shamir::ShamirShare> =
+                    serde_json::from_value(shares_val).map_err(|e| e.to_string())?;
+                unlock_with_shamir_shares(&svc, shares).await?;
+                Ok(serde_json::json!(true))
+            }
+            _ => Err(format!("Unknown DevOps Secret Vault IPC command: {}", cmd)),
+        }
+    })
+}

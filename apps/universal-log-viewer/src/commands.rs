@@ -562,6 +562,279 @@ impl LogViewerService {
     }
 }
 
+static DEFAULT_LOG_SERVICE: std::sync::OnceLock<(Arc<LogViewerService>, PathBuf)> =
+    std::sync::OnceLock::new();
+
+fn ensure_sample_log_file(dir: &Path) -> PathBuf {
+    let sample_path = dir.join("production_cluster_sample.log");
+    if !sample_path.exists() {
+        let services = [
+            "auth-service",
+            "payment-gateway",
+            "ingress-controller",
+            "database-pool",
+            "worker-queue",
+        ];
+        let levels = ["INFO", "INFO", "INFO", "WARN", "ERROR", "DEBUG"];
+        let messages = [
+            "Connection established from 192.168.1.104:443",
+            "Transaction committed successfully in 14.2ms",
+            "High heap memory threshold reached (84.2%)",
+            "Connection pool timeout acquiring PostgreSQL handle",
+            "JWT token validation failed for user_id=98421",
+            "Cache miss for key: session_token_88ab",
+            "Worker job processed successfully: job_id=89231",
+        ];
+        let mut buf = String::with_capacity(2000 * 96);
+        for i in 0..2000usize {
+            let sec = i % 60;
+            let min = (i / 60) % 60;
+            let lvl = if (500..540).contains(&i) {
+                "ERROR"
+            } else {
+                levels[i % levels.len()]
+            };
+            let svc = services[i % services.len()];
+            let msg = messages[i % messages.len()];
+            buf.push_str(&format!(
+                "2026-10-19T10:{:02}:{:02}Z [{}] [{}] #{}: {}\n",
+                min,
+                sec,
+                lvl,
+                svc,
+                i + 1,
+                msg
+            ));
+        }
+        let _ = std::fs::write(&sample_path, buf.as_bytes());
+    }
+    sample_path
+}
+
+pub fn get_default_log_service() -> Result<(Arc<LogViewerService>, PathBuf), String> {
+    if let Some((svc, sample_path)) = DEFAULT_LOG_SERVICE.get() {
+        return Ok((Arc::clone(svc), sample_path.clone()));
+    }
+    let (ws_store, sample_path) =
+        if let Ok(paths) = platform_common::AppPaths::from_app_name("universal-log-viewer") {
+            let _ = paths.ensure_directories();
+            let db_path = paths.data_dir.join("workspaces.db");
+            let ws = WorkspaceStore::open(&db_path)
+                .or_else(|_| WorkspaceStore::open_in_memory())
+                .map_err(|e| e.to_string())?;
+            let sp = ensure_sample_log_file(&paths.cache_dir);
+            (Arc::new(ws), sp)
+        } else {
+            let ws = WorkspaceStore::open_in_memory().map_err(|e| e.to_string())?;
+            let sp = ensure_sample_log_file(&std::env::temp_dir());
+            (Arc::new(ws), sp)
+        };
+
+    let svc = Arc::new(LogViewerService::new(ws_store, LocalTelemetry::new(true)));
+    if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        let _ = rt.block_on(svc.open_file(&sample_path));
+    }
+    let _ = DEFAULT_LOG_SERVICE.set((Arc::clone(&svc), sample_path.clone()));
+    Ok((svc, sample_path))
+}
+
+/// Dispatch desktop IPC commands from the Svelte 5 Universal Log Viewer frontend
+pub fn dispatch_ipc_command(
+    cmd: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let (svc, sample_path) = get_default_log_service()?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    rt.block_on(async move {
+        match cmd {
+            "open_file" => {
+                let raw_path = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default");
+                let target_path = if raw_path.is_empty()
+                    || raw_path == "default"
+                    || !Path::new(raw_path).exists()
+                {
+                    sample_path
+                } else {
+                    PathBuf::from(raw_path)
+                };
+                let info = svc
+                    .open_file(&target_path)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(info).map_err(|e| e.to_string())
+            }
+            "get_detected_format" => {
+                let fmt = svc.get_detected_format().await.map_err(|e| e.to_string())?;
+                serde_json::to_value(fmt).map_err(|e| e.to_string())
+            }
+            "get_lines_slice" => {
+                let start_line = args
+                    .get("startLine")
+                    .or_else(|| args.get("start_line"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as usize;
+                let count = args.get("count").and_then(|v| v.as_u64()).unwrap_or(60) as usize;
+                let slice = svc
+                    .get_lines_slice(start_line, count)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(slice).map_err(|e| e.to_string())
+            }
+            "parse_records" => {
+                let max_records = args
+                    .get("maxRecords")
+                    .or_else(|| args.get("max_records"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1000) as usize;
+                let recs = svc
+                    .parse_records(max_records)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(recs).map_err(|e| e.to_string())
+            }
+            "get_timeline_histogram" => {
+                let target_buckets = args
+                    .get("targetBuckets")
+                    .or_else(|| args.get("target_buckets"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(60) as usize;
+                let hist = svc
+                    .get_timeline_histogram(target_buckets)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(hist).map_err(|e| e.to_string())
+            }
+            "filter_by_timerange" => {
+                let start_ms = args
+                    .get("startMs")
+                    .or_else(|| args.get("start_ms"))
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                let end_ms = args
+                    .get("endMs")
+                    .or_else(|| args.get("end_ms"))
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(i64::MAX);
+                let lines = svc
+                    .filter_by_timerange(start_ms, end_ms)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(lines).map_err(|e| e.to_string())
+            }
+            "mine_templates" => {
+                let max_records = args
+                    .get("maxRecords")
+                    .or_else(|| args.get("max_records"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(50000) as usize;
+                let clusters = svc
+                    .mine_templates(max_records)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(clusters).map_err(|e| e.to_string())
+            }
+            "detect_anomalies" => {
+                let target_buckets = args
+                    .get("targetBuckets")
+                    .or_else(|| args.get("target_buckets"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(60) as usize;
+                let z_threshold = args
+                    .get("zThreshold")
+                    .or_else(|| args.get("z_threshold"))
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(2.0);
+                let spikes = svc
+                    .detect_anomalies(target_buckets, z_threshold)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(spikes).map_err(|e| e.to_string())
+            }
+            "cluster_errors" => {
+                let max_records = args
+                    .get("maxRecords")
+                    .or_else(|| args.get("max_records"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(50000) as usize;
+                let clusters = svc
+                    .cluster_errors(max_records)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(clusters).map_err(|e| e.to_string())
+            }
+            "correlate_failures" => {
+                let window_ms = args
+                    .get("windowMs")
+                    .or_else(|| args.get("window_ms"))
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(5000);
+                let chains = svc
+                    .correlate_failures(window_ms)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(chains).map_err(|e| e.to_string())
+            }
+            "search" => {
+                let q_val = args.get("query").cloned().unwrap_or(args);
+                let query: LogQuery = serde_json::from_value(q_val).map_err(|e| e.to_string())?;
+                let report = svc.search(query).await.map_err(|e| e.to_string())?;
+                serde_json::to_value(report).map_err(|e| e.to_string())
+            }
+            "toggle_tail_mode" => {
+                let enable = args
+                    .get("enable")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let active = svc
+                    .toggle_tail_mode(enable)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(active))
+            }
+            "add_bookmark" => {
+                let line_number = args
+                    .get("lineNumber")
+                    .or_else(|| args.get("line_number"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as usize;
+                let note = args
+                    .get("note")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Bookmark")
+                    .to_string();
+                let bm = svc
+                    .add_bookmark(line_number, note)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(bm).map_err(|e| e.to_string())
+            }
+            "list_bookmarks" => {
+                let list = svc.list_bookmarks().await.map_err(|e| e.to_string())?;
+                serde_json::to_value(list).map_err(|e| e.to_string())
+            }
+            "list_plugins" => {
+                let list = svc.list_plugins();
+                serde_json::to_value(list).map_err(|e| e.to_string())
+            }
+            "get_system_metrics" => {
+                let metrics = svc.get_system_metrics();
+                serde_json::to_value(metrics).map_err(|e| e.to_string())
+            }
+            _ => Err(format!("Unknown Universal Log Viewer IPC command: {}", cmd)),
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -30,15 +30,25 @@
 
     isSearching = true;
     try {
-      if ((window as any).__TAURI_INTERNALS__) {
-        const { invoke } = (window as any).__TAURI_INTERNALS__;
-        const queryPayload: ContentSearchQuery = {
-          query: searchQuery,
-          mode: selectedMode,
-          limit: 25,
-          extension_filter: selectedExtension,
-        };
-        results = await invoke('search_content_cmd', { query: queryPayload });
+      const queryPayload: ContentSearchQuery = {
+        query: searchQuery,
+        mode: selectedMode,
+        limit: 25,
+        extension_filter: selectedExtension,
+      };
+      if ((window as any).__TAURI__?.invoke) {
+        results = await (window as any).__TAURI__.invoke('search_content_cmd', { query: queryPayload });
+      } else if ((window as any).__TAURI_INTERNALS__?.invoke) {
+        results = await (window as any).__TAURI_INTERNALS__.invoke('search_content_cmd', { query: queryPayload });
+      } else if (typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
+        const res = await fetch('/__ipc/search_content_cmd', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: queryPayload }),
+        });
+        if (res.ok) {
+          results = await res.json();
+        }
       } else {
         // Mock offline demo results
         await new Promise((r) => setTimeout(r, 45));

@@ -79,6 +79,16 @@ jobs:
         if: "!matrix.use_cross"
         run: cargo build --release --target ${{ matrix.target }} -p ${{ inputs.app_name }}
 
+      - name: Verify Desktop Binary Self-Test & Embedded UI
+        if: "!matrix.use_cross"
+        shell: bash
+        run: |
+          bin_name="${{ inputs.app_name }}"
+          [ "${{ runner.os }}" = "Windows" ] && bin_name="${bin_name}.exe"
+          src_bin="target/${{ matrix.target }}/release/${bin_name}"
+          echo "Running live GUI & IPC self-test on ${src_bin}..."
+          "./${src_bin}" --self-test
+
       - name: Install cross-rs
         if: matrix.use_cross
         run: cargo install cross --git https://github.com/cross-rs/cross
@@ -90,15 +100,37 @@ jobs:
       - name: Package Desktop Artifacts
         shell: bash
         run: |
-          mkdir -p dist/${{ matrix.artifact_suffix }}
+          mkdir -p "dist/${{ matrix.artifact_suffix }}/stage/ui"
           bin_name="${{ inputs.app_name }}"
           [ "${{ runner.os }}" = "Windows" ] && bin_name="${bin_name}.exe"
           
           src_bin="target/${{ matrix.target }}/release/${bin_name}"
           if [ -f "${src_bin}" ]; then
             cp "${src_bin}" "dist/${{ matrix.artifact_suffix }}/"
+            cp "${src_bin}" "dist/${{ matrix.artifact_suffix }}/stage/"
+            if [ -d "apps/${{ inputs.app_name }}/ui/dist" ]; then
+              cp -r "apps/${{ inputs.app_name }}/ui/dist/"* "dist/${{ matrix.artifact_suffix }}/stage/ui/" || true
+            fi
+            cat <<EOF > "dist/${{ matrix.artifact_suffix }}/stage/README-PORTABLE.txt"
+          ${{ inputs.app_display_name }} v${{ inputs.version }} (${{ matrix.artifact_suffix }})
+          ========================================================================
+          - Launch Desktop GUI: Double-click ${bin_name} (or run ./${bin_name})
+          - Run Self-Test Gate: ./${bin_name} --self-test
+          - Headless IPC Mode:  ./${bin_name} --headless-server
+          - CLI Diagnostics:    ./${bin_name} --cli
+          EOF
             cd "dist/${{ matrix.artifact_suffix }}"
             sha256sum "${bin_name}" > "${bin_name}.sha256"
+            zip_name="${{ inputs.app_name }}-v${{ inputs.version }}-${{ matrix.artifact_suffix }}-portable.zip"
+            if command -v zip >/dev/null 2>&1; then
+              (cd stage && zip -r "../${zip_name}" .)
+            elif command -v 7z >/dev/null 2>&1; then
+              (cd stage && 7z a -tzip "../${zip_name}" .)
+            fi
+            if [ -f "${zip_name}" ]; then
+              sha256sum "${zip_name}" > "${zip_name}.sha256"
+            fi
+            rm -rf stage
           fi
 
       - name: Upload Packaged Artifacts

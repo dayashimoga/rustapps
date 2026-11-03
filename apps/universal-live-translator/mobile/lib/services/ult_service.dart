@@ -14,10 +14,23 @@ class UltService extends ChangeNotifier {
   Pointer<UltHandleOpaque>? _handle;
   bool _isInitialized = false;
 
+  bool _mockMode = false;
+
+  UltService({bool mockMode = false}) : _mockMode = mockMode;
+
   bool get isInitialized => _isInitialized;
+  bool get isMockMode => _mockMode;
 
   /// Initialize service with optional data directory
-  Future<void> initialize({String? dataDir, String? dylibPath}) async {
+  Future<void> initialize({String? dataDir, String? dylibPath, bool? mockMode}) async {
+    if (mockMode != null) {
+      _mockMode = mockMode;
+    }
+    if (_mockMode) {
+      _isInitialized = true;
+      notifyListeners();
+      return;
+    }
     try {
       _bindings = UltNativeBindings.instance(dylibPath);
       final dirPtr = dataDir != null ? dataDir.toNativeUtf8() : nullptr;
@@ -27,10 +40,12 @@ class UltService extends ChangeNotifier {
       if (_handle != null && _handle != nullptr) {
         _isInitialized = true;
         notifyListeners();
+      } else {
+        throw StateError('ult_create_handle returned null pointer');
       }
     } catch (e) {
-      debugPrint('UltService initialization note (e.g. mock/test mode): $e');
       _isInitialized = false;
+      throw StateError('Failed to initialize native Universal Live Translator FFI library: $e');
     }
   }
 

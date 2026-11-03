@@ -9,11 +9,15 @@ use std::sync::Mutex;
 use std::time::Instant;
 use thiserror::Error;
 
+pub mod desktop_host;
 pub mod keyring;
 pub mod packaging;
 pub mod power;
 pub mod theme;
 
+pub use desktop_host::{
+    run_desktop_app, DesktopIpcHandler, EmbeddedUiBundle, SelfTestCheck, SelfTestReport,
+};
 pub use keyring::{
     InMemoryKeyring, KeyringItem, LinuxSecretServiceKeyring, MacOsKeychainKeyring, PlatformKeyring,
     PlatformKeyringFactory, WindowsCredentialKeyring,

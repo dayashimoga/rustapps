@@ -56,9 +56,34 @@
 
   // Tauri IPC Bridge
   async function invokeTauri<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
-    const tauri = (window as unknown as { __TAURI__?: { core?: { invoke: (cmd: string, args: Record<string, unknown>) => Promise<T> } } }).__TAURI__;
+    const tauri = (window as unknown as {
+      __TAURI__?: {
+        invoke?: (cmd: string, args: Record<string, unknown>) => Promise<T>;
+        core?: { invoke: (cmd: string, args: Record<string, unknown>) => Promise<T> };
+      };
+    }).__TAURI__;
     if (tauri?.core?.invoke) {
       return await tauri.core.invoke(cmd, args);
+    }
+    if (tauri?.invoke) {
+      return await tauri.invoke(cmd, args);
+    }
+    if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
+      try {
+        const response = await fetch('/__ipc/' + encodeURIComponent(cmd), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(args || {}),
+        });
+        if (response.ok) {
+          const payload = await response.json();
+          if (payload && '__ipc_data' in payload) {
+            return payload.__ipc_data as T;
+          }
+        }
+      } catch {
+        // Fallback for headless unit test environments
+      }
     }
 
     // Comprehensive in-browser development mock fallback
@@ -268,9 +293,12 @@
     currentPath = path;
     try {
       listing = await invokeTauri<DirectoryListing>('list_directory_cmd', { path });
+      if (listing && listing.current_path) {
+        currentPath = listing.current_path;
+      }
       selectedPaths = [];
-      await loadStorageStats(path);
-      await loadTreemap(path);
+      await loadStorageStats(currentPath);
+      await loadTreemap(currentPath);
     } catch (err) {
       console.error('Failed to list directory:', err);
     }

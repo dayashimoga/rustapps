@@ -4,9 +4,10 @@
 use crate::models::{
     BatchRenameResult, BatchRenameRule, ContentSearchQuery, ContentSearchResult,
     DeduplicationSummary, DirectoryListing, ExtractedDocument, FileItem, FolderStats, OcrResult,
-    RenamePreview, ScreenshotFingerprint, ScreenshotSearchResult, TreemapNode,
+    RenamePreview, ScreenshotFingerprint, ScreenshotSearchResult, SearchMode, TreemapNode,
 };
 use crate::service::FileExplorerService;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -169,6 +170,178 @@ pub fn scan_compliance_cmd(
     let gate = shared_licensing::TierGate::enterprise();
     svc.scan_directory_compliance(&path, &gate)
         .map_err(|e| e.to_string())
+}
+
+fn resolve_valid_path(raw: Option<&str>) -> String {
+    if let Some(s) = raw {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() && std::path::Path::new(trimmed).exists() {
+            return trimmed.to_string();
+        }
+    }
+    std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| ".".to_string())
+}
+
+/// Dispatch desktop IPC commands from the Svelte 5 AI File Explorer frontend
+pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
+    match cmd {
+        "list_directory_cmd" => {
+            let path = resolve_valid_path(args.get("path").and_then(|v| v.as_str()));
+            let listing = list_directory_cmd(path)?;
+            serde_json::to_value(listing).map_err(|e| e.to_string())
+        }
+        "search_files_cmd" => {
+            let query = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+            let res = search_files_cmd(query, limit)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "index_directory_cmd" => {
+            let path = resolve_valid_path(args.get("path").and_then(|v| v.as_str()));
+            let count = index_directory_cmd(path)?;
+            Ok(json!(count))
+        }
+        "scan_duplicates_cmd" => {
+            let roots: Vec<String> = args
+                .get("search_roots")
+                .or_else(|| args.get("searchRoots"))
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str())
+                        .map(|s| resolve_valid_path(Some(s)))
+                        .collect()
+                })
+                .unwrap_or_else(|| vec![resolve_valid_path(None)]);
+            let min_size = args
+                .get("min_size_bytes")
+                .or_else(|| args.get("minSizeBytes"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1024);
+            let res = scan_duplicates_cmd(roots, min_size)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "analyze_storage_cmd" => {
+            let path = resolve_valid_path(args.get("path").and_then(|v| v.as_str()));
+            let top_limit = args
+                .get("top_limit")
+                .or_else(|| args.get("topLimit"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(10) as usize;
+            let res = analyze_storage_cmd(path, top_limit)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "get_treemap_cmd" => {
+            let path = resolve_valid_path(args.get("path").and_then(|v| v.as_str()));
+            let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(1024.0);
+            let height = args.get("height").and_then(|v| v.as_f64()).unwrap_or(768.0);
+            let max_depth = args
+                .get("max_depth")
+                .or_else(|| args.get("maxDepth"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(2) as usize;
+            let res = get_treemap_cmd(path, width, height, max_depth)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "preview_batch_rename_cmd" => {
+            let paths: Vec<String> = args
+                .get("paths")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let rule_val = args
+                .get("rule")
+                .cloned()
+                .ok_or_else(|| "Missing rule".to_string())?;
+            let rule: BatchRenameRule =
+                serde_json::from_value(rule_val).map_err(|e| e.to_string())?;
+            let res = preview_batch_rename_cmd(paths, rule)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "execute_batch_rename_cmd" => {
+            let previews_val = args
+                .get("previews")
+                .cloned()
+                .unwrap_or_else(|| Value::Array(Vec::new()));
+            let previews: Vec<RenamePreview> =
+                serde_json::from_value(previews_val).map_err(|e| e.to_string())?;
+            let res = execute_batch_rename_cmd(previews)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "extract_document_cmd" => {
+            let path = resolve_valid_path(args.get("path").and_then(|v| v.as_str()));
+            let res = extract_document_cmd(path)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "index_document_cmd" => {
+            let path = resolve_valid_path(args.get("path").and_then(|v| v.as_str()));
+            let res = index_document_cmd(path)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "search_content_cmd" => {
+            let q_val = args.get("query").cloned().unwrap_or(args);
+            let query: ContentSearchQuery =
+                serde_json::from_value(q_val).unwrap_or(ContentSearchQuery {
+                    query: String::new(),
+                    mode: SearchMode::Combined,
+                    limit: 25,
+                    extension_filter: None,
+                });
+            let res = search_content_cmd(query)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "ocr_image_cmd" => {
+            let path = resolve_valid_path(args.get("path").and_then(|v| v.as_str()));
+            let res = ocr_image_cmd(path)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "index_screenshot_cmd" => {
+            let path = resolve_valid_path(args.get("path").and_then(|v| v.as_str()));
+            let res = index_screenshot_cmd(path)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "search_screenshots_by_hash_cmd" => {
+            let target_hash = args
+                .get("target_hash")
+                .or_else(|| args.get("targetHash"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let max_distance = args
+                .get("max_distance")
+                .or_else(|| args.get("maxDistance"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(12) as u32;
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+            let res = search_screenshots_by_hash_cmd(target_hash, max_distance, limit)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "search_screenshots_by_text_cmd" => {
+            let query = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+            let res = search_screenshots_by_text_cmd(query, limit)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "scan_compliance_cmd" => {
+            let path = resolve_valid_path(args.get("path").and_then(|v| v.as_str()));
+            let res = scan_compliance_cmd(path)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        _ => Err(format!("Unknown AI File Explorer IPC command: {}", cmd)),
+    }
 }
 
 #[cfg(test)]

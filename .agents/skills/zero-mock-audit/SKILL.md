@@ -24,9 +24,9 @@ Get-ChildItem -Path platform, shared, apps -Include *.rs -Recurse |
 Get-ChildItem -Path platform, shared, apps -Include *.rs -Recurse |
   Select-String -Pattern "64 \* 1024 \* 1024|cpu_percentage = 0\.5"
 
-# 3. Verify Tauri runtime binding in all desktop app entrypoints
+# 3. Verify embedded desktop GUI host & IPC dispatch in all desktop app entrypoints
 Get-ChildItem -Path apps/*/src/main.rs |
-  Select-String -Pattern "tauri::Builder|generate_handler"
+  Select-String -Pattern "run_desktop_app|EmbeddedUiBundle|dispatch_ipc_command"
 ```
 
 ## Step 2: Subsystem Authenticity Verification Checklist
@@ -44,8 +44,10 @@ Verify each subsystem against these concrete requirements:
 4. **Image Decoding & OCR (`apps/ai-file-explorer/src/ocr.rs`):**
    - Decodes PNG (IHDR + IDAT zlib + row filters), JPEG (DCT + Huffman), WebP, and BMP into true luminance pixels before running `compute_dhash` or OCR inference.
    - Uses real ONNX / pure-Rust neural or template recognition models rather than synthetic character loops.
-5. **Tauri v2 & Flutter FFI Wiring:**
-   - Every UI action invokes a real `#[tauri::command]` or `extern "C"` FFI symbol in production mode; browser/Flutter mock fallbacks are disabled unless `DEV_MOCK_PREVIEW=1` is explicitly set.
+5. **Desktop Loopback IPC & Flutter FFI Wiring:**
+   - Every desktop binary `apps/*/src/main.rs` embeds `../ui/dist/{index.html,assets/app.js,assets/app.css}` via `platform_common::run_desktop_app` and routes `/__ipc/<cmd>` to `commands::dispatch_ipc_command`.
+   - Every UI action invokes a real IPC command or `extern "C"` FFI symbol in production mode; Flutter services must throw `StateError` if native library loading fails when `mockMode == false`.
+   - Every desktop binary must pass `<binary> --self-test` with `"status": "PASSED"`.
 
 ## Step 3: Runtime Verification Gate
 

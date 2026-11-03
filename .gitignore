@@ -2,7 +2,7 @@ target/
 node_modules/
 .pnp
 .pnp.js
-dist/
+/dist/
 coverage/
 .DS_Store
 Thumbs.db

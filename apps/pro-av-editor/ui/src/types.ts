@@ -217,6 +217,23 @@ export async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>
   if (typeof window !== 'undefined' && window.__TAURI__ && window.__TAURI__.invoke) {
     return window.__TAURI__.invoke<T>(cmd, args);
   }
+  if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
+    try {
+      const response = await fetch('/__ipc/' + encodeURIComponent(cmd), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(args || {}),
+      });
+      if (response.ok) {
+        const payload = await response.json();
+        if (payload && '__ipc_data' in payload) {
+          return payload.__ipc_data as T;
+        }
+      }
+    } catch {
+      // Fallback for headless unit test environments
+    }
+  }
   return mockClientFallback<T>(cmd, args);
 }
 

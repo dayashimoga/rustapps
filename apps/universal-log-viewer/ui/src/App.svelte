@@ -534,8 +534,13 @@
   onMount(() => {
     window.addEventListener('keydown', handleKeyDown);
 
-    // Auto-load sample logs on initial preview
-    generateSampleLogs(50000);
+    if (isTauri) {
+      openRealFile('default');
+      updateMetrics();
+    } else {
+      // Auto-load sample logs on initial browser preview
+      generateSampleLogs(50000);
+    }
 
     metricsInterval = window.setInterval(updateMetrics, 2500);
 
