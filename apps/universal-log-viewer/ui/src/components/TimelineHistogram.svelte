@@ -100,17 +100,30 @@
       {@const errorPct = (bucket.error_count / (bucket.total_count || 1)) * 100}
       {@const warnPct = (bucket.warn_count / (bucket.total_count || 1)) * 100}
       {@const infoPct = (bucket.info_count / (bucket.total_count || 1)) * 100}
+      {@const isDraggingOver =
+        isDragging &&
+        dragStartIndex !== null &&
+        dragEndIndex !== null &&
+        i >= Math.min(dragStartIndex, dragEndIndex) &&
+        i <= Math.max(dragStartIndex, dragEndIndex)}
       {@const isSelected =
-        selectedRange &&
+        isDraggingOver ||
+        (selectedRange !== null &&
         bucket.start_epoch_ms >= selectedRange[0] &&
-        bucket.end_epoch_ms <= selectedRange[1]}
+        bucket.end_epoch_ms <= selectedRange[1])}
 
       <div
         class="bar-column"
         class:selected={isSelected}
+        class:dragging={isDraggingOver}
         on:mousedown={() => handleMouseDown(i)}
         on:mouseenter={() => handleMouseEnter(i)}
         on:mouseleave={() => (hoveredBucket = null)}
+        on:keydown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            dispatch('rangeSelected', { startMs: bucket.start_epoch_ms, endMs: bucket.end_epoch_ms });
+          }
+        }}
         role="button"
         tabindex="0"
       >
@@ -241,6 +254,11 @@
 
   .bar-column.selected {
     background: hsla(217, 91%, 60%, 0.25);
+  }
+
+  .bar-column.dragging {
+    background: hsla(217, 91%, 60%, 0.35);
+    outline: 1px dashed var(--accent-blue);
   }
 
   .bar-fill {

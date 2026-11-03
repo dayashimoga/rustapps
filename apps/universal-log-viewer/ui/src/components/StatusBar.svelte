@@ -1,6 +1,7 @@
 <script lang="ts">
   export let filePath: string = '';
   export let totalLines: number = 0;
+  export let originalTotalLines: number = 0;
   export let visibleStart: number = 0;
   export let visibleCount: number = 0;
   export let fileSizeBytes: number = 0;
@@ -33,7 +34,11 @@
   <div class="status-group">
     {#if totalLines > 0}
       <span class="stat-item">
-        Lines: <strong>{totalLines.toLocaleString()}</strong>
+        {#if originalTotalLines > 0 && originalTotalLines !== totalLines}
+          Filtered: <strong>{totalLines.toLocaleString()}</strong> of {originalTotalLines.toLocaleString()}
+        {:else}
+          Lines: <strong>{totalLines.toLocaleString()}</strong>
+        {/if}
       </span>
       <span class="divider">|</span>
       <span class="stat-item">

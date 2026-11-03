@@ -167,6 +167,34 @@ impl LogViewerService {
         Ok(lines)
     }
 
+    /// Retrieve specific lines by line index list (e.g. for timerange filtering or search hits)
+    pub async fn get_lines_by_indices(
+        &self,
+        line_numbers: &[usize],
+    ) -> anyhow::Result<Vec<LogLineRecord>> {
+        let active_lock = self.active_file.read().await;
+        let state = active_lock
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No active log file opened"))?;
+
+        let bytes = state.engine.as_bytes();
+        let mut lines = Vec::with_capacity(line_numbers.len());
+
+        for &line_idx in line_numbers {
+            if let Some((start, end)) = state.index.get_line_byte_range(line_idx, bytes) {
+                let text = state.engine.read_text_range(start, end)?;
+                lines.push(LogLineRecord {
+                    line_number: line_idx,
+                    byte_start: start,
+                    byte_end: end,
+                    text,
+                });
+            }
+        }
+
+        Ok(lines)
+    }
+
     /// Parse normalized records from the active file
     pub async fn parse_records(
         &self,
@@ -690,6 +718,23 @@ pub fn dispatch_ipc_command(
                     .map_err(|e| e.to_string())?;
                 serde_json::to_value(slice).map_err(|e| e.to_string())
             }
+            "get_lines_by_indices" => {
+                let line_numbers = args
+                    .get("lineNumbers")
+                    .or_else(|| args.get("line_numbers"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|val| val.as_u64().map(|n| n as usize))
+                            .collect::<Vec<usize>>()
+                    })
+                    .unwrap_or_default();
+                let lines = svc
+                    .get_lines_by_indices(&line_numbers)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(lines).map_err(|e| e.to_string())
+            }
             "parse_records" => {
                 let max_records = args
                     .get("maxRecords")
@@ -859,6 +904,13 @@ mod tests {
         let slice = service.get_lines_slice(0, 2).await.unwrap();
         assert_eq!(slice.len(), 2);
         assert_eq!(slice[0].text, "2026-10-19T10:00:00Z [INFO] Init");
+
+        // Get lines by indices [0, 2]
+        let by_indices = service.get_lines_by_indices(&[0, 2]).await.unwrap();
+        assert_eq!(by_indices.len(), 2);
+        assert_eq!(by_indices[0].line_number, 0);
+        assert_eq!(by_indices[1].line_number, 2);
+        assert_eq!(by_indices[1].text, "2026-10-19T10:00:02Z [ERROR] Crash");
 
         // Parse records
         let records = service.parse_records(10).await.unwrap();

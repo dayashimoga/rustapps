@@ -21,7 +21,9 @@
 
   let filePath = '';
   let fileSizeBytes = 0;
+  let originalTotalLines = 0;
   let totalLines = 0;
+  let filteredLineIndices: number[] | null = null;
   let lines: LogLineRecord[] = [];
   let visibleStart = 0;
   let visibleCount = 50;
@@ -78,7 +80,10 @@
         const info = await tauriInvoke<OpenedFileInfo>('open_file', { path });
         if (info) {
           filePath = info.path;
+          originalTotalLines = info.total_lines;
           totalLines = info.total_lines;
+          filteredLineIndices = null;
+          selectedRange = null;
           fileSizeBytes = info.file_size_bytes;
           await fetchSlice(0, 60);
           await loadAiInsights();
@@ -161,7 +166,10 @@
 
     mockFileLines = generated;
     filePath = 'sample_production_500k.log';
+    originalTotalLines = generated.length;
     totalLines = generated.length;
+    filteredLineIndices = null;
+    selectedRange = null;
     fileSizeBytes = generated.reduce((acc, l) => acc + l.length + 1, 0);
 
     // Generate timeline buckets (60 buckets)
@@ -275,6 +283,36 @@
   async function fetchSlice(start: number, count: number) {
     visibleStart = start;
     visibleCount = count;
+
+    if (filteredLineIndices !== null) {
+      const sliceIndices = filteredLineIndices.slice(start, start + count);
+      if (sliceIndices.length === 0) {
+        lines = [];
+        return;
+      }
+      if (isTauri && filePath) {
+        try {
+          const slice = await tauriInvoke<LogLineRecord[]>('get_lines_by_indices', {
+            lineNumbers: sliceIndices,
+          });
+          if (slice && slice.length > 0) {
+            lines = slice;
+            return;
+          }
+        } catch (err) {
+          console.warn('Backend slice error for filtered indices:', err);
+        }
+      }
+      if (mockFileLines.length > 0) {
+        lines = sliceIndices.map((origIdx) => ({
+          line_number: origIdx,
+          byte_start: origIdx * 80,
+          byte_end: origIdx * 80 + (mockFileLines[origIdx]?.length || 0),
+          text: mockFileLines[origIdx] || '',
+        }));
+        return;
+      }
+    }
 
     if (isTauri && filePath) {
       try {
@@ -471,9 +509,14 @@
           startMs: event.detail.startMs,
           endMs: event.detail.endMs,
         });
-        if (matchedLines && matchedLines.length > 0 && viewportComponent) {
-          viewportComponent.scrollToLine(matchedLines[0]);
-          activeLine = matchedLines[0];
+        if (matchedLines) {
+          filteredLineIndices = matchedLines;
+          totalLines = matchedLines.length;
+          await fetchSlice(0, 60);
+          if (viewportComponent) {
+            viewportComponent.scrollToLine(0);
+            activeLine = matchedLines[0] ?? 0;
+          }
           return;
         }
       } catch (e) {
@@ -481,19 +524,31 @@
       }
     }
 
-    // Find approximate first line corresponding to startMs
+    // Mock file lines timerange filtering
     if (mockFileLines.length > 0 && maxEpochMs > minEpochMs) {
-      const frac = Math.max(0, Math.min(1, (event.detail.startMs - minEpochMs) / (maxEpochMs - minEpochMs)));
-      const targetLine = Math.floor(frac * mockFileLines.length);
+      const startFrac = Math.max(0, Math.min(1, (event.detail.startMs - minEpochMs) / (maxEpochMs - minEpochMs)));
+      const endFrac = Math.max(0, Math.min(1, (event.detail.endMs - minEpochMs) / (maxEpochMs - minEpochMs)));
+      const startIdx = Math.floor(startFrac * mockFileLines.length);
+      const endIdx = Math.min(mockFileLines.length, Math.ceil(endFrac * mockFileLines.length) + 1);
+      const indices: number[] = [];
+      for (let i = startIdx; i < endIdx; i++) {
+        indices.push(i);
+      }
+      filteredLineIndices = indices;
+      totalLines = indices.length;
+      await fetchSlice(0, 60);
       if (viewportComponent) {
-        viewportComponent.scrollToLine(targetLine);
-        activeLine = targetLine;
+        viewportComponent.scrollToLine(0);
+        activeLine = indices[0] ?? 0;
       }
     }
   }
 
   function handleClearRange() {
     selectedRange = null;
+    filteredLineIndices = null;
+    totalLines = originalTotalLines;
+    fetchSlice(0, 60);
   }
 
   // Global Keyboard Shortcuts
@@ -650,6 +705,7 @@
   <StatusBar
     {filePath}
     {totalLines}
+    {originalTotalLines}
     {visibleStart}
     {visibleCount}
     {fileSizeBytes}

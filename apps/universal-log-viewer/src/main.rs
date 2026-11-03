@@ -40,8 +40,16 @@ impl DesktopIpcHandler for LogViewerDesktopHandler {
                 payload: json!({ "startLine": 0, "count": 25 }),
             },
             SelfTestCheck {
+                command: "get_lines_by_indices",
+                payload: json!({ "lineNumbers": [0, 1, 2] }),
+            },
+            SelfTestCheck {
                 command: "get_timeline_histogram",
                 payload: json!({ "targetBuckets": 30 }),
+            },
+            SelfTestCheck {
+                command: "filter_by_timerange",
+                payload: json!({ "startMs": 0, "endMs": 9999999999999i64 }),
             },
             SelfTestCheck {
                 command: "mine_templates",
