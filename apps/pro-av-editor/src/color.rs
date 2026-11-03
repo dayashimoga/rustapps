@@ -159,6 +159,11 @@ impl ColorGradingEngine {
             ));
         }
 
+        // Fast path: if no LUT and all color grading parameters are identity, no-op
+        if lut.is_none() && settings.is_identity() {
+            return Ok(());
+        }
+
         // Precompute color grading constants
         let exposure_factor = 2.0f32.powf(settings.exposure);
         let temp_r_mult = 1.0 + (settings.temperature / 100.0) * 0.2;

@@ -307,6 +307,12 @@ impl Default for ColorWheel {
     }
 }
 
+impl ColorWheel {
+    pub fn is_zero(&self) -> bool {
+        self.r.abs() < 1e-4 && self.g.abs() < 1e-4 && self.b.abs() < 1e-4 && self.luma.abs() < 1e-4
+    }
+}
+
 /// Primary color grading node parameters
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ColorGradingSettings {
@@ -334,6 +340,20 @@ impl Default for ColorGradingSettings {
             tint: 0.0,
             lut_file_path: None,
         }
+    }
+}
+
+impl ColorGradingSettings {
+    pub fn is_identity(&self) -> bool {
+        self.exposure.abs() < 1e-4
+            && (self.contrast - 1.0).abs() < 1e-4
+            && (self.saturation - 1.0).abs() < 1e-4
+            && self.temperature.abs() < 1e-4
+            && self.tint.abs() < 1e-4
+            && self.lift.is_zero()
+            && self.gamma.is_zero()
+            && self.gain.is_zero()
+            && self.lut_file_path.is_none()
     }
 }
 
