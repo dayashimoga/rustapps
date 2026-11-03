@@ -1,6 +1,6 @@
 # Monorepo Developer & Contributor Guide
 
-**Document Version:** 1.0.0  
+**Document Version:** 2.0.0  
 **Status:** Approved  
 **Classification:** Internal Engineering Standard  
 
@@ -8,7 +8,7 @@
 
 ## 1. Development Prerequisites & Environment Setup
 
-To build, test, and contribute to the monorepo, configure the following tools on your workstation:
+To build, test, and contribute to the monorepo across all 5 flagship applications, configure the following tools on your workstation:
 
 ### Required Toolchains
 - **Rust Toolchain:** Rust Stable ($\ge 1.80.0$). Install via [rustup](https://rustup.rs/):
@@ -21,9 +21,10 @@ To build, test, and contribute to the monorepo, configure the following tools on
   node --version
   npm --version
   ```
+- **Flutter SDK (for Mobile Clients):** Flutter ($\ge 3.24.x$) with Dart SDK.
 - **Platform Native Build Tools:**
-  - **Windows:** Visual Studio 2022 C++ Build Tools (MSVC), Windows 10/11 SDK.
-  - **Linux:** `build-essential`, `libssl-dev`, `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`.
+  - **Windows:** Visual Studio 2022 C++ Build Tools (MSVC), Windows 10/11 SDK, WiX Toolset v3/v4.
+  - **Linux:** `build-essential`, `libssl-dev`, `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `libasound2-dev`.
   - **macOS:** Xcode Command Line Tools.
 
 ---
@@ -38,15 +39,21 @@ cd offline-apps-monorepo
 # Install root JavaScript/TypeScript dependencies
 npm install
 
-# Build all shared crates and platform libraries
+# Build all 19 shared crates and application libraries
 cargo build --workspace
 
-# Run all unit and integration tests
+# Run all unit and integration tests across the workspace
 cargo test --workspace --all-targets
+
+# Run all frontend Vitest unit tests
+npm run test:unit
+
+# Typecheck all TypeScript codebases
+npm run typecheck
 
 # Check code formatting and linter diagnostics
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
 ---
@@ -54,55 +61,68 @@ cargo clippy --workspace --all-targets -- -D warnings
 ## 3. Standard Development Workflows
 
 ### 3.1 Cargo Commands
-- **Check Compilation:** `cargo check --workspace`
-- **Run Fast Tests:** `cargo test --workspace`
-- **Run Targeted Benchmark:** `cargo bench -p shared-search`
+- **Check Compilation:** `cargo check --workspace --all-targets`
+- **Run Fast Workspace Tests:** `cargo test --workspace`
+- **Run Targeted Benchmark:** `cargo bench -p benchmarks`
 - **Security & License Audit:**
   ```bash
   cargo audit
   cargo deny check
   ```
 
-### 3.2 Frontend & E2E Commands
-- **Run Unit Tests (Vitest):** `npm run test:unit`
-- **Run Desktop E2E Tests (Playwright):** `npm run test:e2e`
-- **Typecheck Frontend:** `npm run typecheck`
+### 3.2 Frontend & Mobile Commands
+- **Run Vitest Unit Tests:** `npm run test:unit`
+- **Typecheck Frontend (Strict TypeScript):** `npm run typecheck`
+- **Build All Desktop UI Bundles:** `npm run build`
 
-### 3.3 Running Applications Locally
+### 3.3 Running Desktop Applications Locally
 ```bash
-# Run Universal Log Viewer in desktop dev mode
+# Universal Log Viewer
 npm run dev --workspace=apps/universal-log-viewer
 
-# Run DevOps Secret Vault in desktop dev mode
+# DevOps Secret Vault
 npm run dev --workspace=apps/devops-secret-vault
 
-# Run AI File Explorer in desktop dev mode
+# AI File Explorer
 npm run dev --workspace=apps/ai-file-explorer
+
+# Universal Live Translator
+npm run dev --workspace=apps/universal-live-translator
+
+# Professional Audio & Video Editor
+npm run dev --workspace=apps/pro-av-editor
 ```
 
-### 3.4 Multi-Platform Cross-Target Compilation
-Install required target toolchains via `rustup`:
+### 3.4 Packaging Applications Independently
+Each application builds, packages, and releases independently via dedicated scripts:
 ```bash
-# Windows ARM64
-rustup target add aarch64-pc-windows-msvc
+# Windows portable ZIP and WiX MSI installers
+.\scripts\package-windows.ps1 -AppName "universal-log-viewer"
+.\scripts\package-windows.ps1 -AppName "devops-secret-vault"
+.\scripts\package-windows.ps1 -AppName "ai-file-explorer"
+.\scripts\package-windows.ps1 -AppName "universal-live-translator"
+.\scripts\package-windows.ps1 -AppName "pro-av-editor"
 
-# Linux x64 and ARM64
-rustup target add x86_64-unknown-linux-gnu
-rustup target add aarch64-unknown-linux-gnu
+# Linux tarball and AppImage packages
+./scripts/package-linux.sh universal-log-viewer
+./scripts/package-linux.sh devops-secret-vault
+./scripts/package-linux.sh ai-file-explorer
+./scripts/package-linux.sh universal-live-translator
+./scripts/package-linux.sh pro-av-editor
 
-# macOS Apple Silicon and Intel
-rustup target add aarch64-apple-darwin
-rustup target add x86_64-apple-darwin
-```
+# macOS universal binary and DMG bundles
+./scripts/package-macos.sh universal-log-viewer
+./scripts/package-macos.sh devops-secret-vault
+./scripts/package-macos.sh ai-file-explorer
+./scripts/package-macos.sh universal-live-translator
+./scripts/package-macos.sh pro-av-editor
 
-Compile for a specific target architecture:
-```bash
-# Local host or toolchain build
-cargo build --workspace --release --target <target-triple>
-
-# Containerized cross-compilation for Linux targets
-cargo install cross --git https://github.com/cross-rs/cross
-cross build --workspace --release --target aarch64-unknown-linux-gnu
+# Mobile Android APK/AAB and iOS XCFrameworks
+./scripts/package-mobile.sh universal-log-viewer
+./scripts/package-mobile.sh devops-secret-vault
+./scripts/package-mobile.sh ai-file-explorer
+./scripts/package-mobile.sh universal-live-translator
+./scripts/package-mobile.sh pro-av-editor
 ```
 
 ---
@@ -111,53 +131,37 @@ cross build --workspace --release --target aarch64-unknown-linux-gnu
 
 1. **Safety First:**
    - Every crate must specify `#![forbid(unsafe_code)]` at its root.
-   - Any low-level memory mapping or FFI integration that requires `unsafe` must be isolated in a dedicated module accompanied by an approved Architecture Decision Record (ADR) justifying its safety invariants.
+   - Any low-level memory mapping or FFI integration that requires `unsafe` must be isolated in a dedicated module accompanied by an approved Architecture Decision Record (ADR) and explicit `// SAFETY:` justifications.
 2. **Error Handling Architecture:**
    - **Shared Libraries & Domain Cores:** Exclusively utilize `thiserror` to define strongly typed, exhaustive error enums.
-   - **Application & IPC Boundaries:** Use `anyhow` for top-level command boundaries, error translation, and logging.
+   - **Application & IPC Boundaries:** Use typed `ServiceError` or `anyhow` for top-level command boundaries, error translation, and logging.
 3. **Zero Leaks & Zero Egress:**
-   - Never import networking client libraries (`reqwest`, `hyper`, `curl`) into desktop application builds.
+   - Never import networking client libraries (`reqwest`, `hyper`, `curl`, `ureq`) into application runtime builds.
    - All secret material must be held in `Zeroizing` byte buffers or strings.
+4. **Zero Mocks in Production:**
+   - Never return fake or simulated metrics (e.g., hardcoded RSS/CPU, mock keyrings in production).
+   - Test adapters must be strictly isolated behind `#[cfg(test)]`.
 
 ---
 
-## 5. Mandatory Contribution & PR Lifecycle
+## 5. Mobile Client Development Workflow
 
-Every task must execute through the mandated three-step cycle:
-1. **Before Coding:**
-   - Review and update `TechnicalRequirements.md` and `TechnicalArchitecture.md`.
-   - Append to `ImplementationPlan.md` and `Todo.md`.
-   - Record architectural choices in `ADR.md`.
-2. **During Coding:**
-   - Follow Test-Driven Development across all 8 tiers and 6 test case types.
-   - Maintain rustdoc comments for all public APIs.
-   - Maintain Criterion benchmark harnesses.
-3. **After Coding:**
-   - Append changes to `Changelog.md` (Keep a Changelog format).
-   - Update all 8 sections of `CodeUnderstanding.md`.
-   - Update `SecurityArchitecture.md`, `TestingStrategy.md`, `DeploymentGuide.md`, `DeveloperGuide.md`, `UserGuide.md`, `RiskRegister.md`, `PerformanceStrategy.md`.
-   - Move completed tasks intact to the Completed section in `Todo.md`.
-   - Verify 100% passing tests, zero benchmark regressions, and $\ge 90\%$ test coverage.
+All 5 applications feature production Flutter mobile clients residing in `apps/<app>/mobile/`:
 
----
+| Application | Mobile Directory | FFI Bridge File | Test Suite |
+| :--- | :--- | :--- | :--- |
+| **Universal Log Viewer** | `apps/universal-log-viewer/mobile/` | `lib/bindings/ulv_ffi.dart` | `test/ulv_mobile_test.dart` |
+| **DevOps Secret Vault** | `apps/devops-secret-vault/mobile/` | `lib/bindings/vault_ffi.dart` | `test/vault_mobile_test.dart` |
+| **AI File Explorer** | `apps/ai-file-explorer/mobile/` | `lib/bindings/afe_ffi.dart` | `test/afe_mobile_test.dart` |
+| **Universal Live Translator** | `apps/universal-live-translator/mobile/` | `lib/bindings/ult_ffi.dart` | `test/ult_mobile_test.dart` |
+| **Pro Audio & Video Editor** | `apps/pro-av-editor/mobile/` | `lib/bindings/ave_ffi.dart` | `test/ave_mobile_test.dart` |
 
-## 6. Mobile Client Development Workflow
-
-The DevOps Secret Vault mobile client lives in `apps/devops-secret-vault/mobile/`.
-
-### 6.1 Architecture Overview
-- `lib/bindings/vault_ffi.dart`: Low-level C-ABI FFI wrapper using `dart:ffi`.
-- `lib/services/vault_service.dart`: High-level async API with memory safety and mock mode fallback.
-- `lib/services/biometric_service.dart`: Android BiometricPrompt & iOS LocalAuthentication.
-- `lib/models/secret.dart`: Strongly-typed domain models matching `vault_core`.
-- `lib/screens/`: Glassmorphic dark UI for authentication, search, credentials, TOTP, health, and backups.
-
-### 6.2 Development & Mock Mode
-During development or in environments without native Android/iOS compilation tools, `VaultService` automatically falls back to Mock Mode if native dynamic libraries cannot be loaded. Mock mode simulates master key initialization, Argon2id derivation, secret creation, real-time TOTP generation, 5-dimensional security scoring, and encrypted backup export/import in memory.
-
-### 6.3 Running Mobile Tests
+### Running Mobile Unit & Widget Tests
 ```bash
-cd apps/devops-secret-vault/mobile
-flutter test test/vault_mobile_test.dart
+# Run tests for a specific mobile client
+cd apps/universal-log-viewer/mobile && flutter test
+cd apps/devops-secret-vault/mobile && flutter test
+cd apps/ai-file-explorer/mobile && flutter test
+cd apps/universal-live-translator/mobile && flutter test
+cd apps/pro-av-editor/mobile && flutter test
 ```
-
