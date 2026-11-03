@@ -64,6 +64,10 @@ impl DesktopIpcHandler for ProAvDesktopHandler {
                 command: "export_fcpxml_cmd",
                 payload: json!({}),
             },
+            SelfTestCheck {
+                command: "get_export_presets_cmd",
+                payload: json!({}),
+            },
         ]
     }
 }

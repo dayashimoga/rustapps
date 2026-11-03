@@ -15,7 +15,7 @@
   }>();
 
   type ActiveTab = 'silence' | 'beats' | 'scenecut' | 'captions' | 'export';
-  let activeTab: ActiveTab = 'silence';
+  export let activeTab: ActiveTab = 'silence';
 
   // Silence Cutter state
   let silenceThresholdDb: number = -35.0;
@@ -45,6 +45,35 @@
   let exportOutputText: string = '';
   let exportRunning: boolean = false;
   let exportStatus: string | null = null;
+  let copyInterchangeSuccess: boolean = false;
+
+  function downloadInterchangeFile() {
+    if (!exportOutputText) return;
+    const ext = exportInterchangeType === 'edl' ? 'edl' : 'fcpxml';
+    const mime =
+      exportInterchangeType === 'edl'
+        ? 'text/plain;charset=utf-8'
+        : 'application/xml;charset=utf-8';
+    const blob = new Blob([exportOutputText], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const projName = (project?.name || 'studio_project').replace(/[^a-zA-Z0-9_-]/g, '_');
+    a.href = url;
+    a.download = `${projName}.${ext}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function copyInterchangeText() {
+    if (!exportOutputText) return;
+    try {
+      await navigator.clipboard.writeText(exportOutputText);
+      copyInterchangeSuccess = true;
+      setTimeout(() => (copyInterchangeSuccess = false), 2000);
+    } catch (e) {
+      console.error('Failed to copy interchange:', e);
+    }
+  }
 
   onMount(async () => {
     try {
@@ -437,6 +466,20 @@
                 </button>
                 {#if exportOutputText}
                   <div class="code-preview-box">
+                    <div class="preview-actions-bar">
+                      <span class="preview-tag">
+                        {exportInterchangeType === 'edl' ? 'CMX 3600 (Non-Drop Frame)' : 'FCPXML v1.9 (Apple)'} •
+                        {exportOutputText.split('\n').filter(Boolean).length} lines
+                      </span>
+                      <div class="preview-btns">
+                        <button type="button" class="preview-btn" on:click={copyInterchangeText}>
+                          {copyInterchangeSuccess ? '✓ Copied' : '📋 Copy'}
+                        </button>
+                        <button type="button" class="preview-btn download-action" on:click={downloadInterchangeFile}>
+                          ⬇ Download .{exportInterchangeType.toUpperCase()}
+                        </button>
+                      </div>
+                    </div>
                     <pre><code>{exportOutputText}</code></pre>
                   </div>
                 {/if}
@@ -746,12 +789,60 @@
   }
 
   .code-preview-box {
-    max-height: 180px;
+    max-height: 220px;
     overflow-y: auto;
     background: #0a0d14;
     border: 1px solid #1e293b;
     border-radius: 6px;
     padding: 10px;
+  }
+
+  .preview-actions-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #1e293b;
+  }
+
+  .preview-tag {
+    font-size: 0.72rem;
+    color: #94a3b8;
+    font-family: monospace;
+  }
+
+  .preview-btns {
+    display: flex;
+    gap: 6px;
+  }
+
+  .preview-btn {
+    background: #1e293b;
+    border: 1px solid #334155;
+    color: #e2e8f0;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .preview-btn:hover {
+    border-color: #38bdf8;
+    color: #ffffff;
+  }
+
+  .download-action {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: rgba(16, 185, 129, 0.4);
+    color: #34d399;
+  }
+
+  .download-action:hover {
+    background: rgba(16, 185, 129, 0.25);
+    border-color: #6ee7b7;
   }
 
   .code-preview-box pre {

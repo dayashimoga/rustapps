@@ -18,6 +18,7 @@
   let durationMs: number = 6000;
   let selectedClipId: string | null = null;
   let showAiModal: boolean = false;
+  let activeAiModalTab: 'silence' | 'beats' | 'scenecut' | 'captions' | 'export' = 'silence';
   let canUndo: boolean = true;
   let canRedo: boolean = true;
 
@@ -120,7 +121,8 @@
     on:saveProject={handleSaveProject}
     on:undo={handleUndo}
     on:redo={handleRedo}
-    on:openAiTools={() => (showAiModal = true)}
+    on:openAiTools={() => { activeAiModalTab = 'silence'; showAiModal = true; }}
+    on:openExport={() => { activeAiModalTab = 'export'; showAiModal = true; }}
     on:switchPanel={(e) => (activePanel = e.detail)}
   />
 
@@ -169,6 +171,7 @@
   <!-- AI Tools & Interchange Modal -->
   <AiToolsModal
     show={showAiModal}
+    activeTab={activeAiModalTab}
     {project}
     on:close={() => (showAiModal = false)}
     on:refreshProject={refreshProject}

@@ -13,6 +13,7 @@
     undo: void;
     redo: void;
     openAiTools: void;
+    openExport: void;
     switchPanel: 'edit' | 'color' | 'audio';
   }>();
 </script>
@@ -84,11 +85,15 @@
       </button>
     </div>
 
-    <button class="ai-btn" on:click={() => dispatch('openAiTools')}>
-      ✨ AI Tools &amp; Export
+    <button type="button" class="ai-btn" on:click={() => dispatch('openAiTools')}>
+      ✨ AI Studio
     </button>
 
-    <button class="btn btn-primary" on:click={() => dispatch('saveProject')}>
+    <button type="button" class="export-btn" on:click={() => dispatch('openExport')}>
+      📦 Export Master / EDL
+    </button>
+
+    <button type="button" class="btn btn-primary" on:click={() => dispatch('saveProject')}>
       💾 Save Project
     </button>
   </div>
@@ -225,6 +230,30 @@
     border-radius: var(--radius-sm);
     font-size: 0.8rem;
     font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .ai-btn:hover {
+    background: rgba(168, 85, 247, 0.3);
+    border-color: #d8b4fe;
+  }
+
+  .export-btn {
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    color: #34d399;
+    padding: 0.4rem 0.85rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .export-btn:hover {
+    background: rgba(16, 185, 129, 0.25);
+    border-color: #6ee7b7;
   }
 
   .btn {
