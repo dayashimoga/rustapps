@@ -504,6 +504,35 @@ pub fn dispatch_ipc_command(
                 unlock_with_shamir_shares(&svc, shares).await?;
                 Ok(serde_json::json!(true))
             }
+            "parse_aws_ini" => {
+                let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                let target_profile = args
+                    .get("targetProfile")
+                    .or_else(|| args.get("target_profile"))
+                    .and_then(|v| v.as_str());
+                let creds = parse_aws_ini(content, target_profile)?;
+                serde_json::to_value(creds).map_err(|e| e.to_string())
+            }
+            "parse_azure_json" => {
+                let json_str = args
+                    .get("jsonStr")
+                    .or_else(|| args.get("json_str"))
+                    .or_else(|| args.get("content"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let subscription_id = args
+                    .get("subscriptionId")
+                    .or_else(|| args.get("subscription_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("00000000-0000-0000-0000-000000000000");
+                let cred = parse_azure_json(json_str, subscription_id)?;
+                serde_json::to_value(cred).map_err(|e| e.to_string())
+            }
+            "parse_terraform_vars" => {
+                let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                let vars = parse_terraform_vars(content);
+                serde_json::to_value(vars).map_err(|e| e.to_string())
+            }
             _ => Err(format!("Unknown DevOps Secret Vault IPC command: {}", cmd)),
         }
     })

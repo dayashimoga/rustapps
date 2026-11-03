@@ -46,6 +46,25 @@ impl DesktopIpcHandler for VaultDesktopHandler {
                 command: "get_clipboard_remaining_seconds",
                 payload: json!({}),
             },
+            SelfTestCheck {
+                command: "parse_aws_ini",
+                payload: json!({
+                    "content": "[default]\naws_access_key_id=AKIAIOSFODNN7EXAMPLE\naws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\nregion=us-east-1"
+                }),
+            },
+            SelfTestCheck {
+                command: "parse_azure_json",
+                payload: json!({
+                    "json_str": "{\"appId\":\"00000000-0000-0000-0000-000000000001\",\"password\":\"SecretPassword123!\",\"tenant\":\"00000000-0000-0000-0000-000000000002\"}",
+                    "subscription_id": "00000000-0000-0000-0000-000000000003"
+                }),
+            },
+            SelfTestCheck {
+                command: "parse_terraform_vars",
+                payload: json!({
+                    "content": "db_password = \"SuperSecret123\"\ncluster_size = 3"
+                }),
+            },
         ]
     }
 }

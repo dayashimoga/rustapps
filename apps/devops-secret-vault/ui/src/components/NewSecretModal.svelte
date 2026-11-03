@@ -60,6 +60,157 @@
   let tfToken = '';
   let tfBackend = '';
 
+  // Quick import state for cloud credentials
+  let showAwsIniPaste = false;
+  let awsIniInput = '';
+  let awsParseError = '';
+
+  let showAzJsonPaste = false;
+  let azJsonInput = '';
+  let azParseError = '';
+
+  let showTfvarsParser = false;
+  let tfvarsParseResult: Record<string, string> | null = null;
+  let parsedTfvarsCount = 0;
+
+  async function invokeIpc<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
+    const tauri = (window as unknown as { __TAURI__?: { invoke?: (c: string, a: Record<string, unknown>) => Promise<T> } }).__TAURI__;
+    if (tauri?.invoke) {
+      return await tauri.invoke(cmd, args);
+    }
+    if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
+      const res = await fetch('/__ipc/' + encodeURIComponent(cmd), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(args || {}),
+      });
+      if (res.ok) {
+        const payload = await res.json();
+        if (payload && '__ipc_data' in payload) return payload.__ipc_data as T;
+        return payload as T;
+      }
+    }
+    throw new Error('IPC bridge not available');
+  }
+
+  async function handleParseAwsIni() {
+    awsParseError = '';
+    if (!awsIniInput.trim()) return;
+    try {
+      let creds: Array<{
+        access_key_id: string;
+        secret_access_key: string;
+        session_token?: string | null;
+        region?: string | null;
+        profile_name?: string | null;
+      }>;
+
+      try {
+        creds = await invokeIpc('parse_aws_ini', { content: awsIniInput });
+      } catch {
+        const lines = awsIniInput.split('\n');
+        let ak = '';
+        let sk = '';
+        let reg = 'us-east-1';
+        let prof = 'default';
+        for (const line of lines) {
+          const t = line.trim();
+          if (t.startsWith('[') && t.endsWith(']')) {
+            prof = t.slice(1, -1).replace(/^profile\s+/, '').trim();
+          } else if (t.includes('=')) {
+            const [k, v] = t.split('=').map((s) => s.trim().replace(/['"]/g, ''));
+            if (/aws_access_key_id/i.test(k) || /access_key_id/i.test(k)) ak = v;
+            if (/aws_secret_access_key/i.test(k) || /secret_access_key/i.test(k)) sk = v;
+            if (/region/i.test(k)) reg = v;
+          }
+        }
+        if (!ak || !sk) throw new Error('No AWS credentials found in INI text');
+        creds = [{ access_key_id: ak, secret_access_key: sk, region: reg, profile_name: prof }];
+      }
+
+      if (creds && creds.length > 0) {
+        const first = creds[0];
+        awsAccessKey = first.access_key_id;
+        awsSecretKey = first.secret_access_key;
+        if (first.session_token) awsSessionToken = first.session_token;
+        if (first.region) awsRegion = first.region;
+        if (first.profile_name) awsProfile = first.profile_name;
+        if (!title.trim()) title = `AWS Credentials (${first.profile_name || 'default'})`;
+        showAwsIniPaste = false;
+      }
+    } catch (e: unknown) {
+      const err = e as { message?: string };
+      awsParseError = err.message || String(e);
+    }
+  }
+
+  async function handleParseAzureJson() {
+    azParseError = '';
+    if (!azJsonInput.trim()) return;
+    try {
+      let cred: {
+        subscription_id: string;
+        tenant_id: string;
+        client_id: string;
+        client_secret: string;
+      };
+
+      try {
+        cred = await invokeIpc('parse_azure_json', {
+          jsonStr: azJsonInput,
+          subscriptionId: azSubId.trim() || '00000000-0000-0000-0000-000000000000',
+        });
+      } catch {
+        const obj = JSON.parse(azJsonInput);
+        cred = {
+          subscription_id: azSubId.trim() || '00000000-0000-0000-0000-000000000000',
+          tenant_id: obj.tenant || obj.tenantId || '',
+          client_id: obj.appId || obj.clientId || '',
+          client_secret: obj.password || obj.clientSecret || '',
+        };
+      }
+
+      if (cred.client_id) azClientId = cred.client_id;
+      if (cred.client_secret) azClientSecret = cred.client_secret;
+      if (cred.tenant_id) azTenantId = cred.tenant_id;
+      if (cred.subscription_id && cred.subscription_id !== '00000000-0000-0000-0000-000000000000') {
+        azSubId = cred.subscription_id;
+      }
+      if (!title.trim()) title = `Azure Service Principal (${cred.client_id.slice(0, 8)})`;
+      showAzJsonPaste = false;
+    } catch (e: unknown) {
+      const err = e as { message?: string };
+      azParseError = err.message || String(e);
+    }
+  }
+
+  async function handleParseTfvars() {
+    if (!tfVars.trim()) {
+      tfvarsParseResult = null;
+      parsedTfvarsCount = 0;
+      return;
+    }
+    try {
+      let vars: Record<string, string>;
+      try {
+        vars = await invokeIpc('parse_terraform_vars', { content: tfVars });
+      } catch {
+        vars = {};
+        for (const line of tfVars.split('\n')) {
+          const t = line.trim();
+          if (t && !t.startsWith('#') && !t.startsWith('//') && t.includes('=')) {
+            const [k, v] = t.split('=').map((s) => s.trim().replace(/^['"]|['"]$/g, ''));
+            vars[k] = v;
+          }
+        }
+      }
+      tfvarsParseResult = vars;
+      parsedTfvarsCount = Object.keys(vars).length;
+    } catch (e: unknown) {
+      console.error('TFvars parsing error:', e);
+    }
+  }
+
   let totpSecretBase32 = '';
   let totpIssuer = '';
   let totpAccount = '';
@@ -527,6 +678,35 @@
 
         {:else if secretType === 'aws_credential'}
           <div class="payload-section">
+            <div class="quick-import-panel">
+              <div class="quick-import-header">
+                <span class="quick-import-title">Import from ~/.aws/credentials (INI)</span>
+                <button
+                  type="button"
+                  class="quick-toggle-btn"
+                  on:click={() => (showAwsIniPaste = !showAwsIniPaste)}
+                >
+                  {showAwsIniPaste ? 'Hide Paste Box' : '📋 Paste INI'}
+                </button>
+              </div>
+              {#if showAwsIniPaste}
+                <textarea
+                  class="quick-import-area mono"
+                  placeholder="[default]&#10;aws_access_key_id = AKIA...&#10;aws_secret_access_key = wJalr...&#10;region = us-east-1"
+                  bind:value={awsIniInput}
+                  rows="3"
+                ></textarea>
+                <div class="import-actions-row">
+                  <button type="button" class="btn-import" on:click={handleParseAwsIni}>
+                    Parse & Populate AWS Fields
+                  </button>
+                  {#if awsParseError}
+                    <span class="parse-err">{awsParseError}</span>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+
             <div class="grid-2">
               <div class="input-field">
                 <label for="aws-key">Access Key ID *</label>
@@ -555,6 +735,35 @@
 
         {:else if secretType === 'azure_credential'}
           <div class="payload-section">
+            <div class="quick-import-panel">
+              <div class="quick-import-header">
+                <span class="quick-import-title">Import from az ad sp create-for-rbac (JSON)</span>
+                <button
+                  type="button"
+                  class="quick-toggle-btn"
+                  on:click={() => (showAzJsonPaste = !showAzJsonPaste)}
+                >
+                  {showAzJsonPaste ? 'Hide Paste Box' : '📋 Paste JSON'}
+                </button>
+              </div>
+              {#if showAzJsonPaste}
+                <textarea
+                  class="quick-import-area mono"
+                  placeholder="&#123;&#10;  &quot;appId&quot;: &quot;00000000-0000-0000-0000-000000000000&quot;,&#10;  &quot;password&quot;: &quot;secret...&quot;,&#10;  &quot;tenant&quot;: &quot;00000000-0000-0000-0000-000000000000&quot;&#10;&#125;"
+                  bind:value={azJsonInput}
+                  rows="3"
+                ></textarea>
+                <div class="import-actions-row">
+                  <button type="button" class="btn-import" on:click={handleParseAzureJson}>
+                    Parse & Populate Azure Fields
+                  </button>
+                  {#if azParseError}
+                    <span class="parse-err">{azParseError}</span>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+
             <div class="grid-2">
               <div class="input-field">
                 <label for="az-sub">Subscription ID (UUID) *</label>
@@ -588,8 +797,28 @@
               <input id="tf-token" type="password" placeholder="tfp_xxxxxxxxxxxxxxxx" bind:value={tfToken} class="mono" />
             </div>
             <div class="input-field">
-              <label for="tf-vars">Terraform Variables (.tfvars)</label>
-              <textarea id="tf-vars" rows="3" placeholder="db_password = &quot;...&quot;" bind:value={tfVars} class="mono"></textarea>
+              <div class="field-label-row">
+                <label for="tf-vars">Terraform Variables (.tfvars)</label>
+                <button type="button" class="gen-link" on:click={handleParseTfvars}>
+                  Validate & Parse (.tfvars)
+                </button>
+              </div>
+              <textarea
+                id="tf-vars"
+                rows="3"
+                placeholder="db_password = &quot;...&quot;&#10;cluster_size = 3"
+                bind:value={tfVars}
+                class="mono"
+                on:blur={handleParseTfvars}
+              ></textarea>
+              {#if tfvarsParseResult}
+                <div class="parsed-chips">
+                  <span class="parsed-count">{parsedTfvarsCount} variable(s) parsed:</span>
+                  {#each Object.entries(tfvarsParseResult) as [k, v]}
+                    <span class="var-chip"><code>{k}</code> = <code>{v.length > 18 ? v.slice(0, 15) + '...' : v}</code></span>
+                  {/each}
+                </div>
+              {/if}
             </div>
             <div class="input-field">
               <label for="tf-state">State Encryption Key</label>
@@ -805,6 +1034,104 @@
 
   .mono {
     font-family: var(--font-mono);
+  }
+
+  .quick-import-panel {
+    background: rgba(0, 229, 255, 0.04);
+    border: 1px dashed rgba(0, 229, 255, 0.25);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .quick-import-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .quick-import-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent-cyan, #00e5ff);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .quick-toggle-btn {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    color: #cbd5e1;
+    font-size: 11px;
+    padding: 2px 8px;
+    cursor: pointer;
+  }
+
+  .quick-toggle-btn:hover {
+    color: white;
+    border-color: var(--accent-cyan, #00e5ff);
+  }
+
+  .quick-import-area {
+    font-size: 11px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #f1f5f9;
+    padding: 6px 8px;
+    resize: vertical;
+  }
+
+  .import-actions-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .btn-import {
+    background: rgba(0, 229, 255, 0.15);
+    border: 1px solid rgba(0, 229, 255, 0.4);
+    color: var(--accent-cyan, #00e5ff);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    align-self: flex-start;
+  }
+
+  .btn-import:hover {
+    background: rgba(0, 229, 255, 0.25);
+  }
+
+  .parse-err {
+    font-size: 11px;
+    color: #ef4444;
+  }
+
+  .parsed-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+  }
+
+  .parsed-count {
+    font-size: 11px;
+    color: #94a3b8;
+  }
+
+  .var-chip {
+    font-size: 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    padding: 2px 6px;
+    color: #38bdf8;
   }
 
   .modal-footer {
