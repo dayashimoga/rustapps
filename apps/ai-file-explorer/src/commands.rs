@@ -98,6 +98,14 @@ pub fn execute_batch_rename_cmd(previews: Vec<RenamePreview>) -> Result<BatchRen
         .map_err(|e| e.to_string())
 }
 
+/// Delete redundant or duplicate files permanently
+pub fn delete_files_cmd(paths: Vec<String>) -> Result<crate::models::DeleteFilesResult, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    let path_bufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    svc.delete_files(&path_bufs).map_err(|e| e.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Phase 6 Command Endpoints
 // ---------------------------------------------------------------------------
@@ -278,6 +286,19 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let res = execute_batch_rename_cmd(previews)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "delete_files_cmd" => {
+            let paths: Vec<String> = args
+                .get("paths")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let res = delete_files_cmd(paths)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
         "extract_document_cmd" => {
             let path = resolve_valid_path(args.get("path").and_then(|v| v.as_str()));
             let res = extract_document_cmd(path)?;
@@ -388,5 +409,19 @@ mod tests {
         let res = search_content_cmd(q).unwrap();
         assert_eq!(res.total_matches, 1);
         assert_eq!(res.items[0].file_name, "readme.md");
+    }
+
+    #[test]
+    fn test_commands_delete_files() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("dup_test.txt");
+        std::fs::write(&file_path, b"duplicate content test").unwrap();
+        let path_str = file_path.to_string_lossy().to_string();
+
+        assert!(file_path.exists());
+        let res = delete_files_cmd(vec![path_str.clone()]).unwrap();
+        assert_eq!(res.deleted_count, 1);
+        assert_eq!(res.reclaimed_bytes, 22);
+        assert!(!file_path.exists());
     }
 }

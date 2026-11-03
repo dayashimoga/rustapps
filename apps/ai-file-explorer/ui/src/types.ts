@@ -42,6 +42,12 @@ export interface DeduplicationSummary {
   elapsed_millis: number;
 }
 
+export interface DeleteFilesResult {
+  deleted_count: number;
+  reclaimed_bytes: number;
+  failed_paths: string[];
+}
+
 export interface TreemapRect {
   x: number;
   y: number;

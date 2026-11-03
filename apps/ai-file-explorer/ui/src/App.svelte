@@ -16,6 +16,7 @@
     BatchRenameRule,
     ComplianceScanSummary,
     DeduplicationSummary,
+    DeleteFilesResult,
     DirectoryListing,
     ExtractedDocument,
     FileItem,
@@ -234,6 +235,15 @@
       } as unknown as T;
     }
 
+    if (cmd === 'delete_files_cmd') {
+      const paths = (args.paths as string[]) || [];
+      return {
+        deleted_count: paths.length,
+        reclaimed_bytes: paths.length * 1048576,
+        failed_paths: [],
+      } as unknown as T;
+    }
+
     if (cmd === 'extract_document_cmd') {
       const docPath = args.path as string;
       const fileName = docPath.split('/').pop() || 'document.md';
@@ -363,6 +373,33 @@
     }
   }
 
+  async function handleDeleteDuplicates(paths: string[]) {
+    try {
+      const res = await invokeTauri<DeleteFilesResult>('delete_files_cmd', { paths });
+      if (res && dedupSummary) {
+        const deletedSet = new Set(paths);
+        const updatedGroups = dedupSummary.duplicate_groups
+          .map(g => ({
+            ...g,
+            file_paths: g.file_paths.filter(p => !deletedSet.has(p)),
+          }))
+          .filter(g => g.file_paths.length > 1);
+
+        dedupSummary = {
+          ...dedupSummary,
+          duplicate_groups: updatedGroups,
+          total_duplicate_files: updatedGroups.reduce((acc, g) => acc + g.file_paths.length, 0),
+          potential_reclaimed_bytes: Math.max(0, dedupSummary.potential_reclaimed_bytes - res.reclaimed_bytes),
+        };
+        await loadDirectory(currentPath);
+        await loadStorageStats(currentPath);
+        await loadTreemap(currentPath);
+      }
+    } catch (err) {
+      console.error('Delete duplicates error:', err);
+    }
+  }
+
   async function handlePreviewBatchRename(rule: BatchRenameRule) {
     try {
       renamePreviews = await invokeTauri<RenamePreview[]>('preview_batch_rename_cmd', {
@@ -472,6 +509,7 @@
         summary={dedupSummary}
         isScanning={isScanningDuplicates}
         onStartScan={handleStartScanDuplicates}
+        onDeleteDuplicates={handleDeleteDuplicates}
       />
     {:else if activeTab === 'treemap'}
       <TreemapView

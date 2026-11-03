@@ -5,9 +5,11 @@
   export let summary: DeduplicationSummary | null;
   export let isScanning: boolean;
   export let onStartScan: (root: string, minSize: number) => void;
+  export let onDeleteDuplicates: (paths: string[]) => Promise<void> = async () => {};
 
   let minSizeFilter = 1024; // 1KB default
   let selectedDuplicateFiles: string[] = [];
+  let isDeleting = false;
 
   function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B';
@@ -45,6 +47,21 @@
 
   function clearDuplicateSelection() {
     selectedDuplicateFiles = [];
+  }
+
+  async function handleDeleteDuplicates() {
+    if (selectedDuplicateFiles.length === 0) return;
+    const count = selectedDuplicateFiles.length;
+    if (!confirm(`Are you sure you want to permanently delete ${count} redundant duplicate file(s)? This action cannot be undone.`)) {
+      return;
+    }
+    isDeleting = true;
+    try {
+      await onDeleteDuplicates(selectedDuplicateFiles);
+      selectedDuplicateFiles = [];
+    } finally {
+      isDeleting = false;
+    }
   }
 </script>
 
@@ -130,6 +147,21 @@
           {#if selectedDuplicateFiles.length > 0}
             <button class="btn btn-secondary" on:click={clearDuplicateSelection}>
               Clear Selection ({selectedDuplicateFiles.length})
+            </button>
+            <button
+              class="btn btn-danger delete-btn"
+              on:click={handleDeleteDuplicates}
+              disabled={isDeleting}
+            >
+              {#if isDeleting}
+                <span class="spinner"></span> Deleting...
+              {:else}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+                Delete Selected ({selectedDuplicateFiles.length})
+              {/if}
             </button>
           {/if}
         </div>
@@ -300,6 +332,20 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .btn-danger {
+    background: rgba(244, 63, 94, 0.2);
+    border: 1px solid rgba(244, 63, 94, 0.4);
+    color: #fda4af;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn-danger:hover:not(:disabled) {
+    background: rgba(244, 63, 94, 0.35);
+    border-color: #f43f5e;
+    color: #ffffff;
   }
 
   .reclaim-hint {

@@ -200,6 +200,16 @@ impl FileSearchIndexer {
         Ok(())
     }
 
+    /// Remove a file path from the Tantivy index
+    pub fn delete_file(&self, path: &Path) -> Result<(), IndexerError> {
+        let mut writer = self.writer.lock().map_err(|_| IndexerError::LockError)?;
+        let term = Term::from_field_text(self.field_path, &path.to_string_lossy());
+        writer.delete_term(term);
+        writer.commit()?;
+        self.reader.reload()?;
+        Ok(())
+    }
+
     /// Indexes OCR tokens for an image file
     pub fn index_ocr_tokens(&self, path: &Path, tokens: &str) -> Result<(), IndexerError> {
         let mut writer = self.writer.lock().map_err(|_| IndexerError::LockError)?;

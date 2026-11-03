@@ -15,8 +15,9 @@ use crate::embeddings::VectorIndex;
 use crate::indexer::FileSearchIndexer;
 use crate::models::{
     BatchRenameResult, BatchRenameRule, ContentSearchQuery, ContentSearchResult,
-    DeduplicationSummary, DirectoryListing, ExtractedDocument, FileItem, FolderStats, OcrResult,
-    RenamePreview, ScreenshotFingerprint, ScreenshotSearchResult, SearchMode, TreemapNode,
+    DeduplicationSummary, DeleteFilesResult, DirectoryListing, ExtractedDocument, FileItem,
+    FolderStats, OcrResult, RenamePreview, ScreenshotFingerprint, ScreenshotSearchResult,
+    SearchMode, TreemapNode,
 };
 use crate::ocr::OfflineOcrEngine;
 use crate::screenshot::ScreenshotCatalog;
@@ -172,6 +173,44 @@ impl FileExplorerService {
         previews: &[RenamePreview],
     ) -> Result<BatchRenameResult, ServiceError> {
         Ok(BatchRenamer::execute_batch_rename(previews)?)
+    }
+
+    /// Delete specified files permanently from disk and unindex them
+    pub fn delete_files<P: AsRef<Path>>(
+        &self,
+        paths: &[P],
+    ) -> Result<DeleteFilesResult, ServiceError> {
+        let mut deleted_count = 0;
+        let mut reclaimed_bytes = 0;
+        let mut failed_paths = Vec::new();
+
+        for p in paths {
+            let path = p.as_ref();
+            if path.is_file() {
+                let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+                match std::fs::remove_file(path) {
+                    Ok(()) => {
+                        deleted_count += 1;
+                        reclaimed_bytes += size;
+                        let _ = self.indexer.delete_file(path);
+                    }
+                    Err(e) => {
+                        failed_paths.push(format!("{}: {}", path.display(), e));
+                    }
+                }
+            } else {
+                failed_paths.push(format!(
+                    "{}: File does not exist or is a directory",
+                    path.display()
+                ));
+            }
+        }
+
+        Ok(DeleteFilesResult {
+            deleted_count,
+            reclaimed_bytes,
+            failed_paths,
+        })
     }
 
     /// Start real-time filesystem watching

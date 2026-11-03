@@ -86,6 +86,14 @@ pub struct DeduplicationSummary {
     pub elapsed_millis: u64,
 }
 
+/// Result of deleting redundant or duplicate files
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeleteFilesResult {
+    pub deleted_count: usize,
+    pub reclaimed_bytes: u64,
+    pub failed_paths: Vec<String>,
+}
+
 /// Bounding rectangle for treemap rendering
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TreemapRect {
