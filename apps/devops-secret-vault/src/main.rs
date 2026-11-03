@@ -65,6 +65,10 @@ impl DesktopIpcHandler for VaultDesktopHandler {
                     "content": "db_password = \"SuperSecret123\"\ncluster_size = 3"
                 }),
             },
+            SelfTestCheck {
+                command: "verify_audit_chain",
+                payload: json!({}),
+            },
         ]
     }
 }

@@ -5,18 +5,62 @@
   export let onFetchHealth: () => Promise<VaultHealthReport>;
   export let onSelectSecret: (secretId: string) => void;
   export let onClose: () => void;
+  export let onVerifyAuditChain: (() => Promise<boolean>) | undefined = undefined;
 
   let report: VaultHealthReport | null = null;
   let loading = true;
   let errorMsg = '';
+
+  let auditStatus: 'unverified' | 'verifying' | 'valid' | 'tampered' = 'unverified';
+  let isVerifyingAudit = false;
+
+  async function invokeIpc<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
+    const tauri = (window as unknown as { __TAURI__?: { invoke?: (c: string, a: Record<string, unknown>) => Promise<T> } }).__TAURI__;
+    if (tauri?.invoke) {
+      return await tauri.invoke(cmd, args);
+    }
+    if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
+      const res = await fetch('/__ipc/' + encodeURIComponent(cmd), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(args || {}),
+      });
+      if (res.ok) {
+        const payload = await res.json();
+        if (payload && '__ipc_data' in payload) return payload.__ipc_data as T;
+        return payload as T;
+      }
+    }
+    throw new Error('IPC not available');
+  }
+
+  async function verifyAuditChain() {
+    isVerifyingAudit = true;
+    auditStatus = 'verifying';
+    try {
+      let ok: boolean;
+      if (onVerifyAuditChain) {
+        ok = await onVerifyAuditChain();
+      } else {
+        ok = await invokeIpc<boolean>('verify_audit_chain', {});
+      }
+      auditStatus = ok ? 'valid' : 'tampered';
+    } catch {
+      auditStatus = 'tampered';
+    } finally {
+      isVerifyingAudit = false;
+    }
+  }
 
   async function loadHealth() {
     loading = true;
     errorMsg = '';
     try {
       report = await onFetchHealth();
-    } catch (err: any) {
-      errorMsg = err?.message || String(err);
+      await verifyAuditChain();
+    } catch (err: unknown) {
+      const e = err as { message?: string };
+      errorMsg = e?.message || String(err);
     } finally {
       loading = false;
     }
@@ -120,6 +164,51 @@
                 Critical security vulnerabilities detected. Rotate compromised or reused credentials immediately.
               {/if}
             </p>
+          </div>
+        </div>
+
+        <!-- Cryptographic Audit Chain Verification Card -->
+        <div class="audit-chain-card {auditStatus}">
+          <div class="audit-left">
+            <div class="chain-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="22" height="22">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+              </svg>
+            </div>
+            <div class="audit-info">
+              <h4>Tamper-Evident Audit Hash Chain (SHA-256)</h4>
+              <p class="audit-desc">
+                {#if auditStatus === 'valid'}
+                  Cryptographic linear hash chain verified intact from genesis block. Zero records tampered or altered.
+                {:else if auditStatus === 'tampered'}
+                  ⚠️ Cryptographic hash mismatch detected! An audit record was modified, reordered, or deleted in SQLite.
+                {:else if auditStatus === 'verifying'}
+                  Verifying SHA-256 sequential entry hashes across all historical audit records...
+                {:else}
+                  Verifies unbroken linear cryptographic hashes against unauthorized SQLite record manipulation.
+                {/if}
+              </p>
+            </div>
+          </div>
+
+          <div class="audit-right">
+            {#if auditStatus === 'valid'}
+              <span class="status-pill valid">✓ Chain Intact</span>
+            {:else if auditStatus === 'tampered'}
+              <span class="status-pill tampered">⚠️ Hash Mismatch</span>
+            {/if}
+            <button
+              type="button"
+              class="verify-chain-btn"
+              on:click={verifyAuditChain}
+              disabled={isVerifyingAudit}
+            >
+              {#if isVerifyingAudit}
+                <span class="spinner-sm"></span> Verifying...
+              {:else}
+                Verify Audit Chain
+              {/if}
+            </button>
           </div>
         </div>
 
@@ -375,6 +464,131 @@
     font-size: 13px;
     color: #94a3b8;
     line-height: 1.5;
+  }
+
+  .audit-chain-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 18px;
+    border-radius: 10px;
+    background: rgba(30, 41, 59, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    gap: 16px;
+  }
+
+  .audit-chain-card.valid {
+    border-color: rgba(16, 185, 129, 0.35);
+    background: rgba(16, 185, 129, 0.05);
+  }
+
+  .audit-chain-card.tampered {
+    border-color: rgba(239, 68, 68, 0.45);
+    background: rgba(239, 68, 68, 0.08);
+  }
+
+  .audit-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .chain-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: rgba(56, 189, 248, 0.15);
+    color: #38bdf8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .audit-chain-card.valid .chain-icon {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+  }
+
+  .audit-chain-card.tampered .chain-icon {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+  }
+
+  .audit-info h4 {
+    margin: 0 0 3px 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: #f8fafc;
+  }
+
+  .audit-desc {
+    margin: 0;
+    font-size: 12px;
+    color: #94a3b8;
+    line-height: 1.4;
+  }
+
+  .audit-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+
+  .status-pill {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+
+  .status-pill.valid {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+  }
+
+  .status-pill.tampered {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+
+  .verify-chain-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #e2e8f0;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .verify-chain-btn:hover:not(:disabled) {
+    background: rgba(56, 189, 248, 0.15);
+    border-color: rgba(56, 189, 248, 0.4);
+    color: #38bdf8;
+  }
+
+  .verify-chain-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .spinner-sm {
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-top-color: #38bdf8;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
   }
 
   .metrics-grid {

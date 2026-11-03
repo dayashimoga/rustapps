@@ -415,6 +415,13 @@
     };
   }
 
+  async function handleVerifyAuditChain(): Promise<boolean> {
+    if (isTauri) {
+      return await (window as any).__TAURI__.invoke('verify_audit_chain');
+    }
+    return true;
+  }
+
   async function handleGenerateTotp(secretId: string): Promise<TotpCodeResponse> {
     if (isTauri) {
       return await (window as any).__TAURI__.invoke('generate_totp_code', { secretId });
@@ -546,6 +553,7 @@
   {#if isHealthDashboardOpen}
     <HealthDashboard
       onFetchHealth={handleFetchHealthReport}
+      onVerifyAuditChain={handleVerifyAuditChain}
       onSelectSecret={(id) => {
         selectSecret(id);
         isHealthDashboardOpen = false;
