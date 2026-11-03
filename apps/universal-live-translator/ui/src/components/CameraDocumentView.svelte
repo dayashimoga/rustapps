@@ -24,9 +24,12 @@
 
   // Subtitle state
   let subtitleContent: string = `1\n00:00:01,000 --> 00:00:04,000\nHello and welcome to the presentation.\n\n2\n00:00:04,500 --> 00:00:08,000\nToday we demonstrate 100% offline machine translation.`;
-  let subtitleFormat: 'srt' | 'vtt' = 'srt';
+  let subtitleFormat: 'srt' | 'vtt' | 'md' | 'txt' = 'srt';
   let translatedSubtitles: string = '';
   let isTranslatingSubs: boolean = false;
+  let copySubSuccess: boolean = false;
+  let isDocDragOver: boolean = false;
+  let parsedCuesPreview: Array<{ index: number; time: string; original: string; translated: string }> = [];
 
   function handleFileDrop(e: DragEvent) {
     e.preventDefault();
@@ -208,30 +211,144 @@
     }, 'image/png');
   }
 
+  function loadSampleSubtitle(type: 'movie_srt' | 'web_vtt' | 'tech_md') {
+    if (type === 'movie_srt') {
+      subtitleFormat = 'srt';
+      subtitleContent = `1\n00:00:01,200 --> 00:00:03,800\nWelcome to the international symposium.\n\n2\n00:00:04,100 --> 00:00:07,500\nToday we present private offline language translation.\n\n3\n00:00:08,000 --> 00:00:11,200\nAll neural inference occurs locally without cloud telemetry.`;
+    } else if (type === 'web_vtt') {
+      subtitleFormat = 'vtt';
+      subtitleContent = `WEBVTT - Autonomous Navigation Subtitles\n\n00:00:01.500 --> 00:00:04.200\nObstacle detected 20 meters ahead.\n\n00:00:04.800 --> 00:00:08.500\nRerouting through secondary navigation corridor.`;
+    } else if (type === 'tech_md') {
+      subtitleFormat = 'md';
+      subtitleContent = `# Architecture Specification\n\nThe translation engine operates in a sandboxed, zero-egress runtime environment.\n\n## Core Security Invariants\n- No telemetry or network egress\n- Offline neural weights verified by cryptographic digest\n\n\`\`\`rust\nfn verify_model_integrity(hash: &[u8]) -> bool {\n    // Guaranteed tamper-evident signature\n    true\n}\n\`\`\`\n\nPlease consult operational guidelines for additional details.`;
+    }
+    translatedSubtitles = '';
+    parsedCuesPreview = [];
+  }
+
+  function handleDocFileDrop(e: DragEvent) {
+    e.preventDefault();
+    isDocDragOver = false;
+    if (e.dataTransfer && e.dataTransfer.files.length > 0) {
+      loadDocFile(e.dataTransfer.files[0]);
+    }
+  }
+
+  function handleDocFileInput(e: Event) {
+    const input = e.target as HTMLInputElement;
+    if (input.files && input.files.length > 0) {
+      loadDocFile(input.files[0]);
+    }
+  }
+
+  function loadDocFile(file: File) {
+    const name = file.name.toLowerCase();
+    if (name.endsWith('.srt')) {
+      subtitleFormat = 'srt';
+    } else if (name.endsWith('.vtt')) {
+      subtitleFormat = 'vtt';
+    } else if (name.endsWith('.md') || name.endsWith('.markdown')) {
+      subtitleFormat = 'md';
+    } else if (name.endsWith('.txt')) {
+      subtitleFormat = 'txt';
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      subtitleContent = (reader.result as string) || '';
+      translatedSubtitles = '';
+      parsedCuesPreview = [];
+    };
+    reader.readAsText(file);
+  }
+
   async function translateSubtitles() {
     if (!subtitleContent.trim()) return;
     isTranslatingSubs = true;
     try {
-      const res = await tauriInvoke<string>('translate_subtitles_cmd', {
-        content: subtitleContent,
-        formatStr: subtitleFormat,
-        sourceLangStr: null,
-        targetLangStr: targetLang,
-      });
-      translatedSubtitles = res;
+      if (subtitleFormat === 'srt' || subtitleFormat === 'vtt') {
+        const res = await tauriInvoke<string>('translate_subtitles_cmd', {
+          content: subtitleContent,
+          formatStr: subtitleFormat,
+          sourceLangStr: null,
+          targetLangStr: targetLang,
+        });
+        translatedSubtitles = res;
+        updateCuesPreview(subtitleContent, res);
+      } else {
+        const res = await tauriInvoke<string>('translate_document_cmd', {
+          content: subtitleContent,
+          format: subtitleFormat,
+          sourceLangStr: null,
+          targetLangStr: targetLang,
+        });
+        translatedSubtitles = res;
+        parsedCuesPreview = [];
+      }
     } catch (e) {
-      console.error('Subtitle translation error:', e);
+      console.error('Subtitle/document translation error:', e);
     } finally {
       isTranslatingSubs = false;
     }
   }
 
+  function updateCuesPreview(src: string, tgt: string) {
+    if (subtitleFormat !== 'srt' && subtitleFormat !== 'vtt') {
+      parsedCuesPreview = [];
+      return;
+    }
+    const srcBlocks = src.trim().split(/\n\s*\n/);
+    const tgtBlocks = tgt.trim().split(/\n\s*\n/);
+    const previews: Array<{ index: number; time: string; original: string; translated: string }> = [];
+
+    for (let i = 0; i < srcBlocks.length; i++) {
+      const sLines = srcBlocks[i].trim().split('\n');
+      const tLines = (tgtBlocks[i] || '').trim().split('\n');
+      if (sLines.length >= 2) {
+        let time = '';
+        let orig = '';
+        let trans = '';
+        if (sLines[1] && sLines[1].includes('-->')) {
+          time = sLines[1].trim();
+          orig = sLines.slice(2).join(' ');
+          trans = tLines.length >= 2 && tLines[1].includes('-->') ? tLines.slice(2).join(' ') : tLines.join(' ');
+        } else if (sLines[0] && sLines[0].includes('-->')) {
+          time = sLines[0].trim();
+          orig = sLines.slice(1).join(' ');
+          trans = tLines.length >= 1 && tLines[0].includes('-->') ? tLines.slice(1).join(' ') : tLines.join(' ');
+        }
+        if (time) {
+          previews.push({
+            index: i + 1,
+            time,
+            original: orig,
+            translated: trans,
+          });
+        }
+      }
+    }
+    parsedCuesPreview = previews;
+  }
+
+  async function copySubtitles() {
+    if (!translatedSubtitles) return;
+    try {
+      await navigator.clipboard.writeText(translatedSubtitles);
+      copySubSuccess = true;
+      setTimeout(() => (copySubSuccess = false), 2000);
+    } catch (e) {
+      console.error('Failed to copy to clipboard:', e);
+    }
+  }
+
   function downloadSubtitles() {
-    const blob = new Blob([translatedSubtitles], { type: 'text/plain;charset=utf-8' });
+    const ext = subtitleFormat;
+    const mime = ext === 'md' ? 'text/markdown;charset=utf-8' : 'text/plain;charset=utf-8';
+    const blob = new Blob([translatedSubtitles], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `translated_${targetLang}.${subtitleFormat}`;
+    a.download = `translated_${targetLang}.${ext}`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -423,51 +540,148 @@
   {#if subMode === 'subtitles'}
     <div class="subtitles-view">
       <div class="subs-toolbar">
-        <div class="format-toggle">
-          <label class="radio-label">
-            <input type="radio" bind:group={subtitleFormat} value="srt" />
-            <span>.SRT Subtitles</span>
-          </label>
-          <label class="radio-label">
-            <input type="radio" bind:group={subtitleFormat} value="vtt" />
-            <span>.VTT Subtitles</span>
-          </label>
+        <div class="toolbar-left">
+          <span class="toolbar-label">Format:</span>
+          <div class="format-toggle">
+            <label class="radio-label" class:selected={subtitleFormat === 'srt'}>
+              <input type="radio" bind:group={subtitleFormat} value="srt" />
+              <span>.SRT</span>
+            </label>
+            <label class="radio-label" class:selected={subtitleFormat === 'vtt'}>
+              <input type="radio" bind:group={subtitleFormat} value="vtt" />
+              <span>.VTT</span>
+            </label>
+            <label class="radio-label" class:selected={subtitleFormat === 'md'}>
+              <input type="radio" bind:group={subtitleFormat} value="md" />
+              <span>.MD</span>
+            </label>
+            <label class="radio-label" class:selected={subtitleFormat === 'txt'}>
+              <input type="radio" bind:group={subtitleFormat} value="txt" />
+              <span>.TXT</span>
+            </label>
+          </div>
         </div>
+
+        <div class="toolbar-center">
+          <span class="toolbar-label">Templates:</span>
+          <div class="sample-btn-group">
+            <button type="button" class="sample-btn" on:click={() => loadSampleSubtitle('movie_srt')}>
+              🎬 Movie (SRT)
+            </button>
+            <button type="button" class="sample-btn" on:click={() => loadSampleSubtitle('web_vtt')}>
+              🌐 Web (VTT)
+            </button>
+            <button type="button" class="sample-btn" on:click={() => loadSampleSubtitle('tech_md')}>
+              📝 Spec (MD)
+            </button>
+          </div>
+        </div>
+
         <button
           type="button"
           class="translate-sub-btn"
           disabled={isTranslatingSubs || !subtitleContent.trim()}
           on:click={translateSubtitles}
         >
-          {isTranslatingSubs ? 'Translating...' : 'Translate Subtitles'}
+          {#if isTranslatingSubs}
+            <span class="spinner-sm"></span> Translating...
+          {:else}
+            ⚡ Translate {subtitleFormat.toUpperCase()}
+          {/if}
         </button>
       </div>
 
       <div class="subs-panes">
-        <div class="sub-pane">
-          <span class="pane-tag">Input Subtitle Cues</span>
+        <!-- Input Pane -->
+        <div
+          class="sub-pane"
+          role="region"
+          aria-label="Subtitle or document source drop zone"
+          class:drag-over={isDocDragOver}
+          on:dragover|preventDefault={() => (isDocDragOver = true)}
+          on:dragleave={() => (isDocDragOver = false)}
+          on:drop={handleDocFileDrop}
+        >
+          <div class="pane-tag-row">
+            <span class="pane-tag">
+              Input {subtitleFormat.toUpperCase()} Source
+              {#if subtitleContent.trim()}
+                <span class="stat-badge">
+                  {subtitleContent.split('\n').filter(Boolean).length} lines • {subtitleContent.length} chars
+                </span>
+              {/if}
+            </span>
+            <label class="file-load-btn">
+              📂 Load File
+              <input
+                type="file"
+                accept=".srt,.vtt,.md,.markdown,.txt"
+                on:change={handleDocFileInput}
+                style="display: none;"
+              />
+            </label>
+          </div>
           <textarea
             bind:value={subtitleContent}
-            placeholder="Paste .srt or .vtt cues here..."
+            placeholder={`Paste or drop .${subtitleFormat} content here...`}
             class="subs-area"
           ></textarea>
         </div>
 
+        <!-- Output Pane -->
         <div class="sub-pane">
           <div class="pane-tag-row">
-            <span class="pane-tag">Translated Output</span>
-            {#if translatedSubtitles}
-              <button type="button" class="download-btn" on:click={downloadSubtitles}>⬇ Download</button>
-            {/if}
+            <span class="pane-tag">
+              Translated Output ({targetLang.toUpperCase()})
+              {#if translatedSubtitles.trim()}
+                <span class="stat-badge">
+                  {translatedSubtitles.split('\n').filter(Boolean).length} lines • {translatedSubtitles.length} chars
+                </span>
+              {/if}
+            </span>
+            <div class="pane-actions">
+              {#if translatedSubtitles}
+                <button type="button" class="action-btn copy-btn" on:click={copySubtitles}>
+                  {copySubSuccess ? '✓ Copied' : '📋 Copy'}
+                </button>
+                <button type="button" class="action-btn download-btn" on:click={downloadSubtitles}>
+                  ⬇ Download .{subtitleFormat}
+                </button>
+              {/if}
+            </div>
           </div>
           <textarea
             bind:value={translatedSubtitles}
             readonly
-            placeholder="Preserved timestamps with translated text will appear here..."
+            placeholder="Preserved structural tags, timestamps, or code blocks will appear here..."
             class="subs-area output-sub-area"
           ></textarea>
         </div>
       </div>
+
+      <!-- Cue Breakdown for Subtitles -->
+      {#if parsedCuesPreview.length > 0}
+        <div class="cues-preview-panel">
+          <div class="panel-header-row">
+            <h4 class="ocr-title">Timestamped Cues Breakdown ({parsedCuesPreview.length} Cues)</h4>
+            <span class="latency-pill">Milliseconds Preserved</span>
+          </div>
+          <div class="cues-list">
+            {#each parsedCuesPreview as cue}
+              <div class="cue-card">
+                <div class="cue-meta">
+                  <span class="cue-idx">#{cue.index}</span>
+                  <span class="cue-time">{cue.time}</span>
+                </div>
+                <div class="cue-texts">
+                  <p class="cue-orig">{cue.original}</p>
+                  <p class="cue-trans">{cue.translated}</p>
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
     </div>
   {/if}
 </div>
@@ -791,7 +1005,7 @@
   .ocr-tgt { color: var(--text-main); font-weight: 500; }
   .ocr-conf { color: var(--accent-emerald); font-size: 0.7rem; }
 
-  /* Subtitles View */
+  /* Subtitles & Document View */
   .subtitles-view {
     flex: 1;
     display: flex;
@@ -807,35 +1021,67 @@
     padding: 0.5rem 1rem;
     border-radius: var(--radius-md);
     border: 1px solid var(--border-subtle);
+    gap: 1rem;
+  }
+
+  .toolbar-left, .toolbar-center {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
   }
 
   .format-toggle {
     display: flex;
-    gap: 1rem;
+    gap: 0.35rem;
+    background: var(--bg-tertiary);
+    padding: 2px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
   }
 
   .radio-label {
     display: flex;
     align-items: center;
-    gap: 0.35rem;
-    font-size: 0.8rem;
+    gap: 0.25rem;
+    font-size: 0.75rem;
     color: var(--text-muted);
     cursor: pointer;
+    padding: 2px 8px;
+    border-radius: 3px;
+    transition: all 0.15s ease;
+  }
+
+  .radio-label input {
+    display: none;
+  }
+
+  .radio-label.selected {
+    background: rgba(56, 189, 248, 0.18);
+    color: var(--accent-cyan);
+    font-weight: 600;
   }
 
   .translate-sub-btn {
     background: var(--accent-primary);
     border: none;
     color: white;
-    padding: 0.4rem 0.85rem;
+    padding: 0.45rem 1rem;
     border-radius: var(--radius-sm);
     font-size: 0.8rem;
-    font-weight: 500;
+    font-weight: 600;
     cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.15s ease;
+  }
+
+  .translate-sub-btn:hover:not(:disabled) {
+    background: #0284c7;
   }
 
   .translate-sub-btn:disabled {
-    opacity: 0.4;
+    opacity: 0.45;
     cursor: not-allowed;
   }
 
@@ -855,6 +1101,12 @@
     border-radius: var(--radius-md);
     padding: 0.75rem 1rem;
     gap: 0.5rem;
+    transition: border-color 0.2s ease;
+  }
+
+  .sub-pane.drag-over {
+    border-color: var(--accent-cyan);
+    background: rgba(56, 189, 248, 0.05);
   }
 
   .pane-tag {
@@ -862,6 +1114,19 @@
     font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .stat-badge {
+    font-size: 0.7rem;
+    font-weight: 400;
+    color: var(--text-faint);
+    background: rgba(255, 255, 255, 0.04);
+    padding: 1px 6px;
+    border-radius: 4px;
+    text-transform: none;
   }
 
   .pane-tag-row {
@@ -870,14 +1135,54 @@
     justify-content: space-between;
   }
 
-  .download-btn {
+  .pane-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .file-load-btn {
     background: var(--bg-tertiary);
     border: 1px solid var(--border-subtle);
-    color: var(--accent-emerald);
-    padding: 0.2rem 0.5rem;
+    color: var(--text-main);
+    padding: 0.25rem 0.6rem;
     border-radius: var(--radius-sm);
-    font-size: 0.7rem;
+    font-size: 0.75rem;
+    font-weight: 500;
     cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .file-load-btn:hover {
+    border-color: rgba(255, 255, 255, 0.25);
+  }
+
+  .action-btn {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    padding: 0.25rem 0.6rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .copy-btn {
+    color: var(--text-main);
+  }
+
+  .copy-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .download-btn {
+    color: var(--accent-emerald);
+    border-color: rgba(16, 185, 129, 0.3);
+  }
+
+  .download-btn:hover {
+    background: rgba(16, 185, 129, 0.1);
   }
 
   .subs-area {
@@ -890,10 +1195,79 @@
     line-height: 1.5;
     resize: none;
     outline: none;
+    min-height: 280px;
   }
 
   .output-sub-area {
     color: #e2e8f0;
+  }
+
+  /* Cues Preview Panel */
+  .cues-preview-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 0.75rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .cues-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 260px;
+    overflow-y: auto;
+  }
+
+  .cue-card {
+    display: flex;
+    gap: 1rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    align-items: flex-start;
+  }
+
+  .cue-meta {
+    display: flex;
+    flex-direction: column;
+    min-width: 140px;
+    gap: 2px;
+  }
+
+  .cue-idx {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--accent-cyan);
+  }
+
+  .cue-time {
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    color: var(--text-faint);
+  }
+
+  .cue-texts {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .cue-orig {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin: 0;
+  }
+
+  .cue-trans {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-main);
+    margin: 0;
   }
 
   .spinner-sm {

@@ -64,6 +64,24 @@ impl DesktopIpcHandler for TranslatorDesktopHandler {
                 command: "start_conversation_session_cmd",
                 payload: json!({ "partyALangStr": "en", "partyBLangStr": "es" }),
             },
+            SelfTestCheck {
+                command: "translate_subtitles_cmd",
+                payload: json!({
+                    "content": "1\n00:00:01,000 --> 00:00:03,000\nHello world\n",
+                    "formatStr": "srt",
+                    "sourceLangStr": "en",
+                    "targetLangStr": "es"
+                }),
+            },
+            SelfTestCheck {
+                command: "translate_document_cmd",
+                payload: json!({
+                    "content": "# Document Title\nHello world",
+                    "format": "md",
+                    "sourceLangStr": "en",
+                    "targetLangStr": "es"
+                }),
+            },
         ]
     }
 }
