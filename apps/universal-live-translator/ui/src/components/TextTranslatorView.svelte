@@ -12,12 +12,16 @@
     type TranslationHistoryRecord,
   } from '../types';
 
-  let sourceLang: 'auto' | LanguageCode = 'auto';
-  let targetLang: LanguageCode = 'es';
+  export let initialText: string = '';
+  export let initialSourceLang: 'auto' | LanguageCode = 'auto';
+  export let initialTargetLang: LanguageCode = 'es';
+
+  let sourceLang: 'auto' | LanguageCode = initialSourceLang;
+  let targetLang: LanguageCode = initialTargetLang;
   let domainGlossary: string = '';
   let preserveFormatting: boolean = false;
 
-  let inputText: string = '';
+  let inputText: string = initialText;
   let outputText: string = '';
   let detectedLid: LidResult | null = null;
   let lastResponse: TranslationResponse | null = null;
@@ -30,6 +34,12 @@
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   onMount(async () => {
+    if (initialText) {
+      inputText = initialText;
+      sourceLang = initialSourceLang;
+      targetLang = initialTargetLang;
+      await triggerTranslation();
+    }
     await loadHistory();
   });
 

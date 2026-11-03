@@ -177,6 +177,13 @@ pub fn get_glossary_terms_cmd(domain: String) -> Result<Vec<GlossaryTerm>, Strin
     svc.get_glossary_terms(&domain).map_err(|e| e.to_string())
 }
 
+/// Delete a domain glossary term
+pub fn delete_glossary_term_cmd(domain: String, source_term: String) -> Result<bool, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.delete_glossary_term(&domain, &source_term).map_err(|e| e.to_string())
+}
+
 /// Start a new split-screen conversation session
 pub fn start_conversation_session_cmd(
     party_a_lang: String,
@@ -224,12 +231,17 @@ pub fn translate_camera_image_cmd(
 
 /// List all glossary domains
 pub fn list_glossary_domains_cmd() -> Result<Vec<String>, String> {
-    Ok(vec![
-        "medical".to_string(),
-        "software".to_string(),
-        "legal".to_string(),
-        "aviation".to_string(),
-    ])
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    let mut domains = svc.list_glossary_domains().unwrap_or_default();
+    for default_dom in &["medical", "software", "legal", "aviation"] {
+        let s = default_dom.to_string();
+        if !domains.contains(&s) {
+            domains.push(s);
+        }
+    }
+    domains.sort();
+    Ok(domains)
 }
 
 fn base64_encode(bytes: &[u8]) -> String {
@@ -677,6 +689,21 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             )?;
             Ok(json!(true))
         }
+        "delete_glossary_term_cmd" => {
+            let domain = args
+                .get("domain")
+                .and_then(|v| v.as_str())
+                .unwrap_or("medical")
+                .to_string();
+            let source_term = args
+                .get("sourceTerm")
+                .or_else(|| args.get("source_term"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let ok = delete_glossary_term_cmd(domain, source_term)?;
+            Ok(json!(ok))
+        }
         "start_conversation_session_cmd" => {
             let party_a_lang = args
                 .get("partyALangStr")
@@ -773,5 +800,22 @@ mod tests {
         let turn =
             add_conversation_turn_cmd(conv.id, "party_a".to_string(), "Hello".to_string()).unwrap();
         assert_eq!(turn.translated_text.to_lowercase(), "hola");
+
+        // Glossary command workflow
+        add_glossary_term_cmd(
+            "medical".to_string(),
+            GlossaryTerm {
+                source_term: "arrhythmia".to_string(),
+                target_term: "arritmia cardíaca".to_string(),
+                case_sensitive: false,
+            },
+        )
+        .unwrap();
+        let terms = get_glossary_terms_cmd("medical".to_string()).unwrap();
+        assert!(terms.iter().any(|t| t.source_term == "arrhythmia"));
+
+        let deleted =
+            delete_glossary_term_cmd("medical".to_string(), "arrhythmia".to_string()).unwrap();
+        assert!(deleted);
     }
 }

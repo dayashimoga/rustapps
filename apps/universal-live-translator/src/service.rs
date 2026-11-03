@@ -291,6 +291,18 @@ impl TranslatorService {
         Ok(self.phrasebook.get_glossary_terms(domain)?)
     }
 
+    pub fn delete_glossary_term(&self, domain: &str, source_term: &str) -> Result<bool, ServiceError> {
+        let deleted = self.phrasebook.delete_glossary_term(domain, source_term)?;
+        if let Ok(terms) = self.phrasebook.get_glossary_terms(domain) {
+            self.nmt.register_glossary(domain, terms);
+        }
+        Ok(deleted)
+    }
+
+    pub fn list_glossary_domains(&self) -> Result<Vec<String>, ServiceError> {
+        Ok(self.phrasebook.list_glossary_domains()?)
+    }
+
     // -----------------------------------------------------------------------
     // Conversation Mode (Split-Screen Dialogue)
     // -----------------------------------------------------------------------
