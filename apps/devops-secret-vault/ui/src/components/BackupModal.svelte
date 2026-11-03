@@ -11,7 +11,8 @@
   // Export state
   let exportPassphrase = '';
   let exportConfirm = '';
-  let exportPath = 'vault_backup.vaultbackup';
+  const todayStr = new Date().toISOString().slice(0, 10);
+  let exportPath = `vault_backup_${todayStr}.vaultbackup`;
   let exportLoading = false;
   let exportSummary: BackupExportSummary | null = null;
   let exportError = '';
@@ -19,10 +20,25 @@
   // Import state
   let importPath = '';
   let importPassphrase = '';
-  let importOverwrite = false;
+  let conflictMode: 'skip' | 'overwrite' = 'skip';
   let importLoading = false;
   let importSummary: BackupImportSummary | null = null;
   let importError = '';
+
+  function setDefaultExportName() {
+    exportPath = `vault_backup_${new Date().toISOString().slice(0, 10)}.vaultbackup`;
+  }
+
+  function formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
+  function formatEpoch(epoch: number): string {
+    if (!epoch || epoch <= 0) return 'Just now';
+    return new Date(epoch * 1000).toLocaleString();
+  }
 
   async function handleExport() {
     exportError = '';
@@ -46,8 +62,9 @@
       exportSummary = await onExport(exportPassphrase, exportPath);
       exportPassphrase = '';
       exportConfirm = '';
-    } catch (err: any) {
-      exportError = err?.message || String(err);
+    } catch (err: unknown) {
+      const e = err as { message?: string };
+      exportError = e?.message || String(err);
     } finally {
       exportLoading = false;
     }
@@ -68,27 +85,34 @@
 
     importLoading = true;
     try {
-      importSummary = await onImport(importPassphrase, importPath, importOverwrite);
+      const overwrite = conflictMode === 'overwrite';
+      importSummary = await onImport(importPassphrase, importPath, overwrite);
       importPassphrase = '';
       onRefreshVault();
-    } catch (err: any) {
-      importError = err?.message || String(err);
+    } catch (err: unknown) {
+      const e = err as { message?: string };
+      importError = e?.message || String(err);
     } finally {
       importLoading = false;
     }
   }
 </script>
 
-<div class="modal-overlay">
+<div class="modal-overlay" role="dialog" aria-modal="true" tabindex="-1">
   <div class="backup-modal">
     <div class="modal-header">
       <div class="header-left">
-        <svg viewBox="0 0 20 20" fill="currentColor" class="header-icon">
-          <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z" />
-        </svg>
-        <h3>Encrypted Backup & Portability</h3>
+        <div class="header-icon-box">
+          <svg viewBox="0 0 20 20" fill="currentColor" class="header-icon">
+            <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z" />
+          </svg>
+        </div>
+        <div class="header-titles">
+          <h3>Encrypted Backup & Migration</h3>
+          <p class="header-subtitle">Argon2id + AES-256-GCM Authenticated Offline Archives</p>
+        </div>
       </div>
-      <button type="button" class="close-btn" on:click={onClose}>&times;</button>
+      <button type="button" class="close-btn" on:click={onClose} aria-label="Close modal">&times;</button>
     </div>
 
     <div class="tab-nav">
@@ -98,7 +122,7 @@
         class:active={activeTab === 'export'}
         on:click={() => (activeTab = 'export')}
       >
-        Export Archive (.vaultbackup)
+        <span class="tab-num">1</span> Export Archive (.vaultbackup)
       </button>
       <button
         type="button"
@@ -106,7 +130,7 @@
         class:active={activeTab === 'import'}
         on:click={() => (activeTab = 'import')}
       >
-        Restore from Archive
+        <span class="tab-num">2</span> Restore & Conflict Resolution
       </button>
     </div>
 
@@ -114,37 +138,62 @@
       {#if activeTab === 'export'}
         <div class="tab-content">
           <p class="tab-description">
-            Exports a self-contained, authenticated binary archive encrypted with <strong>Argon2id + AES-256-GCM</strong>.
-            All secret metadata, payloads, and SHA-256 digital integrity tags are preserved.
+            Generates an authenticated standalone binary archive encrypted with <strong>Argon2id (M:64MB, T:3, P:4) + AES-256-GCM</strong>.
+            All metadata, payloads, TOTP keys, and digital integrity signatures are preserved 100% offline.
           </p>
 
           {#if exportError}
-            <div class="error-banner">{exportError}</div>
+            <div class="banner error-banner">
+              <span class="banner-icon">⚠️</span>
+              <span>{exportError}</span>
+            </div>
           {/if}
 
           {#if exportSummary}
-            <div class="success-banner">
-              <strong>Export Succeeded!</strong>
-              <span>
-                Backed up {exportSummary.total_secrets} secrets ({exportSummary.file_size_bytes} bytes) to
-                <code>{exportSummary.output_path}</code>
-              </span>
+            <div class="banner success-banner">
+              <div class="success-header">
+                <span class="banner-icon">✓</span>
+                <strong>Backup Export Completed Successfully!</strong>
+              </div>
+              <div class="summary-details">
+                <div class="stat-row">
+                  <span class="stat-lbl">Output Archive:</span>
+                  <code class="stat-val path-val">{exportSummary.output_path}</code>
+                </div>
+                <div class="stat-grid">
+                  <div class="stat-col">
+                    <span class="stat-lbl">Secrets Packaged</span>
+                    <span class="stat-metric">{exportSummary.total_secrets}</span>
+                  </div>
+                  <div class="stat-col">
+                    <span class="stat-lbl">Archive Size</span>
+                    <span class="stat-metric">{formatBytes(exportSummary.file_size_bytes)}</span>
+                  </div>
+                  <div class="stat-col">
+                    <span class="stat-lbl">Exported At</span>
+                    <span class="stat-metric">{formatEpoch(exportSummary.exported_at)}</span>
+                  </div>
+                </div>
+              </div>
             </div>
           {/if}
 
           <div class="form-group">
-            <label for="export-path">Destination File Path (.vaultbackup)</label>
+            <div class="label-row">
+              <label for="export-path">Destination File Path</label>
+              <button type="button" class="btn-link" on:click={setDefaultExportName}>Default Name</button>
+            </div>
             <input
               id="export-path"
               type="text"
               class="input-field"
-              placeholder="e.g. backup_2026.vaultbackup"
+              placeholder="e.g. vault_backup_2026-11-03.vaultbackup"
               bind:value={exportPath}
             />
           </div>
 
           <div class="form-group">
-            <label for="export-pass">Backup Passphrase (Used to Encrypt)</label>
+            <label for="export-pass">Archive Passphrase (Key Derivation)</label>
             <input
               id="export-pass"
               type="password"
@@ -155,7 +204,7 @@
           </div>
 
           <div class="form-group">
-            <label for="export-confirm">Confirm Backup Passphrase</label>
+            <label for="export-confirm">Confirm Passphrase</label>
             <input
               id="export-confirm"
               type="password"
@@ -163,6 +212,9 @@
               placeholder="Re-enter backup passphrase"
               bind:value={exportConfirm}
             />
+            {#if exportPassphrase && exportConfirm && exportPassphrase !== exportConfirm}
+              <span class="validation-warn">⚠️ Passphrase confirmation does not match</span>
+            {/if}
           </div>
 
           <div class="modal-footer">
@@ -173,57 +225,121 @@
               disabled={exportLoading}
               on:click={handleExport}
             >
-              {exportLoading ? 'Deriving Key & Encrypting...' : 'Export Backup'}
+              {#if exportLoading}
+                <span class="spinner-sm"></span> Encrypting Archive...
+              {:else}
+                Export Encrypted Backup
+              {/if}
             </button>
           </div>
         </div>
       {:else}
         <div class="tab-content">
           <p class="tab-description">
-            Restores secrets from an authenticated <code>.vaultbackup</code> archive. The archive checksum will be
-            verified against corruption before records are merged into local storage.
+            Restores secrets from an authenticated <code>.vaultbackup</code> archive. The archive SHA-256
+            checksum is cryptographically verified before any records are committed into local storage.
           </p>
 
           {#if importError}
-            <div class="error-banner">{importError}</div>
+            <div class="banner error-banner">
+              <span class="banner-icon">⚠️</span>
+              <span>{importError}</span>
+            </div>
           {/if}
 
           {#if importSummary}
-            <div class="success-banner">
-              <strong>Restore Completed!</strong>
-              <span>
-                {importSummary.total_imported} imported, {importSummary.total_overwritten} overwritten, {importSummary.total_skipped} skipped.
-              </span>
+            <div class="banner success-banner">
+              <div class="success-header">
+                <span class="banner-icon">✓</span>
+                <strong>Restore & Merge Completed!</strong>
+              </div>
+              <div class="summary-details">
+                <div class="stat-grid">
+                  <div class="stat-col">
+                    <span class="stat-lbl">Newly Imported</span>
+                    <span class="stat-metric text-emerald">{importSummary.total_imported}</span>
+                  </div>
+                  <div class="stat-col">
+                    <span class="stat-lbl">Overwritten</span>
+                    <span class="stat-metric text-amber">{importSummary.total_overwritten}</span>
+                  </div>
+                  <div class="stat-col">
+                    <span class="stat-lbl">Skipped / Preserved</span>
+                    <span class="stat-metric text-slate">{importSummary.total_skipped}</span>
+                  </div>
+                  <div class="stat-col">
+                    <span class="stat-lbl">Original Archive Date</span>
+                    <span class="stat-metric">{formatEpoch(importSummary.original_exported_at)}</span>
+                  </div>
+                </div>
+              </div>
             </div>
           {/if}
 
           <div class="form-group">
-            <label for="import-path">Backup Archive Path (.vaultbackup)</label>
+            <label for="import-path">Backup Archive File (.vaultbackup)</label>
             <input
               id="import-path"
               type="text"
               class="input-field"
-              placeholder="e.g. backup_2026.vaultbackup"
+              placeholder="e.g. vault_backup_2026-11-03.vaultbackup"
               bind:value={importPath}
             />
           </div>
 
           <div class="form-group">
-            <label for="import-pass">Backup Passphrase</label>
+            <label for="import-pass">Archive Passphrase</label>
             <input
               id="import-pass"
               type="password"
               class="input-field"
-              placeholder="Passphrase used when creating this backup"
+              placeholder="Passphrase used when creating this archive"
               bind:value={importPassphrase}
             />
           </div>
 
-          <div class="checkbox-group">
-            <label class="checkbox-label">
-              <input type="checkbox" bind:checked={importOverwrite} />
-              <span>Overwrite existing secrets with matching IDs</span>
-            </label>
+          <!-- Conflict Resolution Strategy -->
+          <div class="form-group conflict-section">
+            <span class="conflict-title">Conflict Resolution Strategy (Matching Secret IDs)</span>
+            <div class="conflict-options">
+              <label class="conflict-card" class:selected={conflictMode === 'skip'}>
+                <input
+                  type="radio"
+                  name="conflictMode"
+                  value="skip"
+                  checked={conflictMode === 'skip'}
+                  on:change={() => (conflictMode = 'skip')}
+                />
+                <div class="conflict-info">
+                  <div class="conflict-header-row">
+                    <strong>Skip Existing Secrets (Safe)</strong>
+                    <span class="mode-pill safe">Preserve Local</span>
+                  </div>
+                  <p class="conflict-desc">
+                    Retains current local secrets unchanged. Only new secrets with IDs not found in the current vault will be imported.
+                  </p>
+                </div>
+              </label>
+
+              <label class="conflict-card" class:selected={conflictMode === 'overwrite'}>
+                <input
+                  type="radio"
+                  name="conflictMode"
+                  value="overwrite"
+                  checked={conflictMode === 'overwrite'}
+                  on:change={() => (conflictMode = 'overwrite')}
+                />
+                <div class="conflict-info">
+                  <div class="conflict-header-row">
+                    <strong>Overwrite Existing Secrets</strong>
+                    <span class="mode-pill warn">Replace Local</span>
+                  </div>
+                  <p class="conflict-desc">
+                    Replaces local records with the archive versions whenever an ID matches. Useful for restoring canonical vault backups.
+                  </p>
+                </div>
+              </label>
+            </div>
           </div>
 
           <div class="modal-footer">
@@ -234,7 +350,11 @@
               disabled={importLoading}
               on:click={handleImport}
             >
-              {importLoading ? 'Decrypting & Verifying Integrity...' : 'Restore Archive'}
+              {#if importLoading}
+                <span class="spinner-sm"></span> Verifying & Restoring...
+              {:else}
+                Restore from Archive
+              {/if}
             </button>
           </div>
         </div>
@@ -256,7 +376,7 @@
   }
 
   .backup-modal {
-    width: 560px;
+    width: 620px;
     max-width: 95vw;
     background: #0f172a;
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -276,19 +396,36 @@
   .header-left {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
+  }
+
+  .header-icon-box {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: rgba(56, 189, 248, 0.15);
+    color: #38bdf8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .header-icon {
     width: 22px;
     height: 22px;
-    color: #38bdf8;
   }
 
-  h3 {
+  .header-titles h3 {
     margin: 0;
     font-size: 16px;
+    font-weight: 700;
     color: #f8fafc;
+  }
+
+  .header-subtitle {
+    margin: 2px 0 0 0;
+    font-size: 12px;
+    color: #94a3b8;
   }
 
   .close-btn {
@@ -297,6 +434,8 @@
     color: #94a3b8;
     font-size: 24px;
     cursor: pointer;
+    line-height: 1;
+    padding: 4px;
   }
 
   .close-btn:hover {
@@ -311,7 +450,11 @@
 
   .tab-btn {
     flex: 1;
-    padding: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px 16px;
     background: none;
     border: none;
     border-bottom: 2px solid transparent;
@@ -320,6 +463,17 @@
     font-weight: 600;
     cursor: pointer;
     transition: all 0.2s ease;
+  }
+
+  .tab-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.1);
+    font-size: 11px;
   }
 
   .tab-btn:hover {
@@ -332,8 +486,16 @@
     background: rgba(56, 189, 248, 0.05);
   }
 
+  .tab-btn.active .tab-num {
+    background: #38bdf8;
+    color: #0f172a;
+    font-weight: 700;
+  }
+
   .modal-body {
-    padding: 20px 24px;
+    padding: 22px 24px;
+    max-height: 75vh;
+    overflow-y: auto;
   }
 
   .tab-description {
@@ -343,8 +505,19 @@
     margin: 0 0 16px 0;
   }
 
+  .tab-description strong {
+    color: #e2e8f0;
+  }
+
   .form-group {
-    margin-bottom: 14px;
+    margin-bottom: 16px;
+  }
+
+  .label-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
   }
 
   label {
@@ -355,45 +528,238 @@
     margin-bottom: 6px;
   }
 
+  .label-row label {
+    margin-bottom: 0;
+  }
+
+  .btn-link {
+    background: none;
+    border: none;
+    color: #38bdf8;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .btn-link:hover {
+    text-decoration: underline;
+  }
+
   .input-field {
     width: 100%;
-    padding: 10px 12px;
+    padding: 10px 14px;
     background: rgba(0, 0, 0, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 8px;
     color: #f8fafc;
     font-size: 13px;
     box-sizing: border-box;
+    transition: all 0.15s ease;
   }
 
   .input-field:focus {
     outline: none;
     border-color: #38bdf8;
     box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+    background: rgba(0, 0, 0, 0.6);
   }
 
-  .checkbox-group {
-    margin: 16px 0;
+  .validation-warn {
+    display: block;
+    font-size: 11px;
+    color: #fbbf24;
+    margin-top: 4px;
   }
 
-  .checkbox-label {
+  /* Conflict Section */
+  .conflict-section {
+    margin-top: 18px;
+    padding: 14px;
+    background: rgba(30, 41, 59, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+  }
+
+  .conflict-title {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 10px;
+    color: #e2e8f0;
+  }
+
+  .conflict-options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .conflict-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .conflict-card:hover {
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+
+  .conflict-card.selected {
+    border-color: rgba(56, 189, 248, 0.4);
+    background: rgba(56, 189, 248, 0.06);
+  }
+
+  .conflict-card input[type="radio"] {
+    margin-top: 3px;
+    accent-color: #38bdf8;
+  }
+
+  .conflict-info {
+    flex: 1;
+  }
+
+  .conflict-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 3px;
+  }
+
+  .conflict-header-row strong {
+    font-size: 13px;
+    color: #f1f5f9;
+  }
+
+  .mode-pill {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+
+  .mode-pill.safe {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+  }
+
+  .mode-pill.warn {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+  }
+
+  .conflict-desc {
+    margin: 0;
+    font-size: 11px;
+    color: #94a3b8;
+    line-height: 1.4;
+  }
+
+  /* Banners */
+  .banner {
+    padding: 12px 14px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 12px;
+  }
+
+  .error-banner {
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #f87171;
+  }
+
+  .success-banner {
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    color: #34d399;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .success-header {
     display: flex;
     align-items: center;
     gap: 8px;
     font-size: 13px;
-    color: #cbd5e1;
-    cursor: pointer;
   }
 
+  .summary-details {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .stat-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .path-val {
+    background: rgba(0, 0, 0, 0.35);
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    color: #a7f3d0;
+    word-break: break-all;
+  }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+  }
+
+  .stat-col {
+    background: rgba(0, 0, 0, 0.25);
+    padding: 8px 10px;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .stat-lbl {
+    font-size: 10px;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 2px;
+  }
+
+  .stat-metric {
+    font-size: 13px;
+    font-weight: 700;
+    color: #f1f5f9;
+  }
+
+  .text-emerald { color: #10b981; }
+  .text-amber { color: #f59e0b; }
+  .text-slate { color: #94a3b8; }
+
+  /* Modal Footer */
   .modal-footer {
     display: flex;
     justify-content: flex-end;
-    gap: 12px;
-    margin-top: 20px;
+    gap: 10px;
+    margin-top: 22px;
   }
 
   .cancel-btn {
-    padding: 10px 16px;
+    padding: 9px 16px;
     background: transparent;
     border: 1px solid rgba(255, 255, 255, 0.15);
     color: #cbd5e1;
@@ -408,7 +774,10 @@
   }
 
   .action-btn {
-    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 18px;
     background: #0284c7;
     border: none;
     color: #ffffff;
@@ -416,16 +785,11 @@
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all 0.15s ease;
   }
 
   .action-btn:hover:not(:disabled) {
     background: #0369a1;
-  }
-
-  .action-btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
   }
 
   .action-btn.restore {
@@ -436,33 +800,21 @@
     background: #047857;
   }
 
-  .error-banner {
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    color: #f87171;
-    font-size: 12px;
-    padding: 10px 12px;
-    border-radius: 8px;
-    margin-bottom: 14px;
+  .action-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 
-  .success-banner {
-    background: rgba(16, 185, 129, 0.15);
-    border: 1px solid rgba(16, 185, 129, 0.3);
-    color: #34d399;
-    font-size: 12px;
-    padding: 10px 12px;
-    border-radius: 8px;
-    margin-bottom: 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+  .spinner-sm {
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #ffffff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
   }
 
-  .success-banner code {
-    background: rgba(0, 0, 0, 0.3);
-    padding: 2px 6px;
-    border-radius: 4px;
-    color: #a7f3d0;
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
 </style>

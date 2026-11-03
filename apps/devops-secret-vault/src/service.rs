@@ -957,4 +957,114 @@ mod tests {
         let hits = service.search_secrets("Kubernetes", 5).await.unwrap();
         assert_eq!(hits.len(), 1);
     }
+
+    #[tokio::test]
+    async fn test_encrypted_backup_conflict_resolution() {
+        let storage = VaultStorage::open_in_memory().unwrap();
+        let service = VaultService::new(storage, Some(Argon2Params::fast_for_tests()));
+
+        service.initialize("MasterPassword123!").await.unwrap();
+
+        // Create 2 initial secrets
+        let sec1 = service
+            .create_secret(
+                CreateSecretInput {
+                    title: "DB Master Password".to_string(),
+                    tags: vec!["db".to_string()],
+                    username: Some("admin".to_string()),
+                    url: None,
+                    notes: None,
+                    payload: SecretPayload::Password {
+                        password: "InitialPassword123!".to_string(),
+                    },
+                },
+                "test",
+            )
+            .await
+            .unwrap();
+
+        let _sec2 = service
+            .create_secret(
+                CreateSecretInput {
+                    title: "API Gateway Token".to_string(),
+                    tags: vec!["api".to_string()],
+                    username: None,
+                    url: None,
+                    notes: None,
+                    payload: SecretPayload::ApiKey {
+                        api_key: "gw-token-999".to_string(),
+                        api_secret: None,
+                        endpoint_url: None,
+                    },
+                },
+                "test",
+            )
+            .await
+            .unwrap();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let backup_file = temp_dir.path().join("vault_backup.vaultbackup");
+
+        // Export backup
+        let export_summary = service
+            .export_encrypted_backup("BackupPass123!", &backup_file)
+            .await
+            .unwrap();
+        assert_eq!(export_summary.total_secrets, 2);
+
+        // Modify sec1 in the vault
+        service
+            .update_secret(
+                &sec1.id,
+                crate::models::UpdateSecretInput {
+                    title: Some("DB Master Password (MODIFIED)".to_string()),
+                    tags: Some(vec!["db".to_string(), "modified".to_string()]),
+                    username: Some("admin".to_string()),
+                    url: None,
+                    notes: None,
+                    payload: Some(SecretPayload::Password {
+                        password: "ModifiedPassword456!".to_string(),
+                    }),
+                },
+                "test",
+            )
+            .await
+            .unwrap();
+
+        // Check modified title
+        let current_sec1 = service.get_secret(&sec1.id, "test").await.unwrap();
+        assert_eq!(current_sec1.metadata.title, "DB Master Password (MODIFIED)");
+
+        // 1. Import with overwrite = false (skip on conflict)
+        let import_skip = service
+            .import_encrypted_backup("BackupPass123!", &backup_file, false)
+            .await
+            .unwrap();
+        assert_eq!(import_skip.total_imported, 0);
+        assert_eq!(import_skip.total_overwritten, 0);
+        assert_eq!(import_skip.total_skipped, 2);
+
+        // Verify sec1 still has modified title
+        let current_sec1_after_skip = service.get_secret(&sec1.id, "test").await.unwrap();
+        assert_eq!(
+            current_sec1_after_skip.metadata.title,
+            "DB Master Password (MODIFIED)"
+        );
+
+        // 2. Import with overwrite = true (replace on conflict)
+        let import_overwrite = service
+            .import_encrypted_backup("BackupPass123!", &backup_file, true)
+            .await
+            .unwrap();
+        assert_eq!(import_overwrite.total_imported, 0);
+        assert_eq!(import_overwrite.total_overwritten, 2);
+        assert_eq!(import_overwrite.total_skipped, 0);
+
+        // Verify sec1 restored to original title from backup
+        let current_sec1_after_overwrite = service.get_secret(&sec1.id, "test").await.unwrap();
+        assert_eq!(
+            current_sec1_after_overwrite.metadata.title,
+            "DB Master Password"
+        );
+    }
 }
