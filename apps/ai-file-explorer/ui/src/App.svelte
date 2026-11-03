@@ -516,6 +516,7 @@
         rootNode={treemapNode}
         onDrillDown={loadDirectory}
         onRefreshTreemap={() => loadTreemap(currentPath)}
+        onInspectDoc={handleInspectDoc}
       />
     {:else if activeTab === 'batch_rename'}
       <BatchRenameModal

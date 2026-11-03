@@ -5,6 +5,7 @@
   export let rootNode: TreemapNode | null;
   export let onDrillDown: (path: string) => void;
   export let onRefreshTreemap: () => void;
+  export let onInspectDoc: (path: string) => void = () => {};
 
   let canvas: HTMLCanvasElement;
   let container: HTMLDivElement;
@@ -19,6 +20,38 @@
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
+
+  function getBreadcrumbs(pathStr: string): { name: string; path: string }[] {
+    if (!pathStr) return [];
+    const normalized = pathStr.replace(/\\/g, '/');
+    const segments = normalized.split('/').filter(Boolean);
+    const crumbs: { name: string; path: string }[] = [];
+    let current = '';
+
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      if (i === 0 && seg.endsWith(':')) {
+        current = seg;
+      } else {
+        current = current ? `${current}/${seg}` : (normalized.startsWith('/') ? `/${seg}` : seg);
+      }
+      crumbs.push({ name: seg, path: current });
+    }
+    return crumbs;
+  }
+
+  function getParentPath(pathStr: string): string | null {
+    if (!pathStr) return null;
+    const normalized = pathStr.replace(/\\/g, '/');
+    const idx = normalized.lastIndexOf('/');
+    if (idx > 0) {
+      return normalized.slice(0, idx);
+    }
+    return null;
+  }
+
+  $: breadcrumbs = rootNode?.path ? getBreadcrumbs(rootNode.path) : [];
+  $: parentPath = rootNode?.path ? getParentPath(rootNode.path) : null;
 
   function getNodeColor(node: TreemapNode, index: number): string {
     if (node.is_dir) {
@@ -102,8 +135,12 @@
     const y = e.clientY - rect.top;
 
     const hit = findHitNode(rootNode, x, y);
-    if (hit && hit.is_dir) {
-      onDrillDown(hit.path);
+    if (hit) {
+      if (hit.is_dir) {
+        onDrillDown(hit.path);
+      } else {
+        onInspectDoc(hit.path);
+      }
     }
   }
 
@@ -147,8 +184,32 @@
   <!-- Treemap Toolbar -->
   <div class="treemap-toolbar">
     <div class="path-focus">
-      <span class="focus-label">Treemap Focus:</span>
-      <span class="focus-path">{rootNode?.path || 'Root'}</span>
+      {#if parentPath}
+        <button
+          class="btn btn-secondary nav-up-btn"
+          title="Navigate Up ({parentPath})"
+          on:click={() => onDrillDown(parentPath)}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="18 15 12 9 6 15"></polyline>
+          </svg>
+          Up
+        </button>
+      {/if}
+      <span class="focus-label">Focus:</span>
+      <div class="breadcrumbs-list">
+        {#each breadcrumbs as crumb, i}
+          <button
+            class="crumb-btn {i === breadcrumbs.length - 1 ? 'active' : ''}"
+            on:click={() => onDrillDown(crumb.path)}
+          >
+            {crumb.name}
+          </button>
+          {#if i < breadcrumbs.length - 1}
+            <span class="crumb-separator">/</span>
+          {/if}
+        {/each}
+      </div>
     </div>
 
     <div class="toolbar-actions">
@@ -218,17 +279,50 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
+  }
+  .nav-up-btn {
+    padding: 3px 8px;
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 26px;
+  }
+  .breadcrumbs-list {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .crumb-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: all 0.15s ease;
+  }
+  .crumb-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--accent-cyan);
+  }
+  .crumb-btn.active {
+    color: var(--accent-cyan);
+    font-weight: 700;
+  }
+  .crumb-separator {
+    color: var(--text-faint);
+    font-size: 11px;
   }
   .focus-label {
     font-size: 11px;
     font-weight: 600;
     color: var(--text-faint);
     text-transform: uppercase;
-  }
-  .focus-path {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    color: var(--accent-cyan);
   }
 
   .toolbar-actions {
