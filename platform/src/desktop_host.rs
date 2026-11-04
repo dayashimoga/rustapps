@@ -15,7 +15,7 @@ use std::process::Child;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::{AppPaths, PlatformError};
@@ -290,6 +290,69 @@ fn inject_bridge_into_html(index_html: &str, app_title: &str, session_token: &st
     }
 }
 
+struct Worker {
+    _id: usize,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+struct ThreadPool {
+    workers: Vec<Worker>,
+    sender: Option<std::sync::mpsc::Sender<Job>>,
+}
+
+impl ThreadPool {
+    fn new(size: usize) -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel::<Job>();
+        let receiver = Arc::new(Mutex::new(receiver));
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            let rx = Arc::clone(&receiver);
+            let thread = std::thread::Builder::new()
+                .name(format!("ag-desktop-worker-{}", id))
+                .spawn(move || loop {
+                    let job = {
+                        let Ok(lock) = rx.lock() else { break };
+                        match lock.recv() {
+                            Ok(job) => job,
+                            Err(_) => break,
+                        }
+                    };
+                    job();
+                })
+                .ok();
+            workers.push(Worker { _id: id, thread });
+        }
+
+        ThreadPool {
+            workers,
+            sender: Some(sender),
+        }
+    }
+
+    fn execute<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        if let Some(ref sender) = self.sender {
+            let _ = sender.send(Box::new(f));
+        }
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        drop(self.sender.take());
+        for worker in &mut self.workers {
+            if let Some(thread) = worker.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+}
+
 /// Launch the desktop application runtime or execute `--self-test` / `--headless-server`.
 pub fn run_desktop_app<H: DesktopIpcHandler>(
     bundle: EmbeddedUiBundle,
@@ -344,6 +407,12 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
 
     let server_thread = std::thread::spawn(move || {
         let _ = listener.set_nonblocking(true);
+        let pool_size = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(8)
+            .clamp(4, 16);
+        let pool = ThreadPool::new(pool_size);
+
         while !server_shutdown.load(Ordering::SeqCst) {
             match listener.accept() {
                 Ok((stream, _peer)) => {
@@ -356,7 +425,7 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
                     let h = Arc::clone(&server_handler);
                     let html = Arc::clone(&index_with_bridge);
                     let tok = Arc::clone(&server_token);
-                    std::thread::spawn(move || {
+                    pool.execute(move || {
                         handle_http_connection(
                             stream,
                             &bundle,
@@ -692,10 +761,11 @@ fn write_http_response(
         400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
+        416 => "Range Not Satisfiable",
         _ => "Internal Server Error",
     };
     let header = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type, X-Antigravity-Token, Authorization, Range\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type, X-Antigravity-Token, Authorization, Range\r\nAccess-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
         status,
         status_text,
         content_type,
@@ -729,6 +799,59 @@ fn url_decode(input: &str) -> String {
         i += 1;
     }
     String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).to_string())
+}
+
+fn url_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for b in input.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                out.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    out
+}
+
+fn parse_byte_range(range_header: &str, total_size: u64) -> Option<Result<(u64, u64), ()>> {
+    let spec = range_header.strip_prefix("bytes=")?;
+    let first = spec.split(',').next()?.trim();
+    let (start_str, end_str) = first.split_once('-')?;
+    let start_str = start_str.trim();
+    let end_str = end_str.trim();
+
+    if start_str.is_empty() {
+        // Suffix byte range: bytes=-suffix (e.g. -500 means last 500 bytes)
+        let suffix = end_str.parse::<u64>().ok()?;
+        if suffix == 0 || total_size == 0 {
+            return Some(Err(()));
+        }
+        let len = suffix.min(total_size);
+        let start = total_size - len;
+        let end = total_size - 1;
+        Some(Ok((start, end)))
+    } else if end_str.is_empty() {
+        // Open-ended range: bytes=start-
+        let start = start_str.parse::<u64>().ok()?;
+        if start >= total_size {
+            return Some(Err(()));
+        }
+        let end = total_size.saturating_sub(1);
+        Some(Ok((start, end)))
+    } else {
+        // Explicit range: bytes=start-end
+        let start = start_str.parse::<u64>().ok()?;
+        let end = end_str.parse::<u64>().ok()?;
+        if start <= end && start < total_size {
+            let clamped_end = end.min(total_size.saturating_sub(1));
+            Some(Ok((start, clamped_end)))
+        } else {
+            Some(Err(()))
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -1042,58 +1165,80 @@ fn serve_local_file(stream: &mut TcpStream, query_string: &str, range_header: Op
     let content_type = mime_type_for_path(path_obj);
 
     if let Some(range_str) = range_header {
-        if let Some(byte_spec) = range_str.strip_prefix("bytes=") {
-            let (start_str, end_str) = byte_spec.split_once('-').unwrap_or((byte_spec, ""));
-            let start = start_str.trim().parse::<u64>().unwrap_or(0);
-            let max_chunk = 8 * 1024 * 1024u64; // 8 MB per range chunk
-            let end = if end_str.trim().is_empty() {
-                (start + max_chunk - 1).min(total_size.saturating_sub(1))
-            } else {
-                end_str
-                    .trim()
-                    .parse::<u64>()
-                    .unwrap_or_else(|_| total_size.saturating_sub(1))
-                    .min(total_size.saturating_sub(1))
-            };
+        match parse_byte_range(range_str, total_size) {
+            Some(Ok((start, end))) => {
+                let length = end - start + 1;
+                if file.seek(SeekFrom::Start(start)).is_err() {
+                    let _ = write_http_response(stream, 500, "text/plain", b"Seek error");
+                    return;
+                }
 
-            if start < total_size && start <= end {
-                let length = (end - start + 1) as usize;
-                if file.seek(SeekFrom::Start(start)).is_ok() {
-                    let mut buf = vec![0u8; length];
-                    if file.read_exact(&mut buf).is_ok() {
-                        let header = format!(
-                            "HTTP/1.1 206 Partial Content\r\nContent-Type: {}\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-                            content_type,
-                            buf.len(),
-                            start,
-                            end,
-                            total_size
-                        );
-                        let _ = stream.write_all(header.as_bytes());
-                        let _ = stream.write_all(&buf);
-                        let _ = stream.flush();
-                        return;
+                let header = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Type: {}\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type, X-Antigravity-Token, Authorization, Range\r\nAccess-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+                    content_type, length, start, end, total_size
+                );
+                if stream.write_all(header.as_bytes()).is_err() {
+                    return;
+                }
+
+                let mut remaining = length;
+                let mut buffer = [0u8; 65536];
+                while remaining > 0 {
+                    let to_read = (remaining as usize).min(buffer.len());
+                    match file.read(&mut buffer[..to_read]) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if stream.write_all(&buffer[..n]).is_err() {
+                                return;
+                            }
+                            remaining -= n as u64;
+                        }
+                        Err(_) => return,
                     }
                 }
+                let _ = stream.flush();
+                return;
+            }
+            Some(Err(())) => {
+                let header = format!(
+                    "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{}\r\nContent-Type: text/plain\r\nContent-Length: 0\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+                    total_size
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.flush();
+                return;
+            }
+            None => {
+                // Invalid or unsupported Range header syntax: fall through to 200 OK stream
             }
         }
     }
 
-    // Standard full-file response (capped at 64 MB for non-range requests)
-    let read_len = (total_size as usize).min(64 * 1024 * 1024);
-    let mut buf = vec![0u8; read_len];
-    if file.read_exact(&mut buf).is_ok() {
-        let header = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-            content_type,
-            buf.len()
-        );
-        let _ = stream.write_all(header.as_bytes());
-        let _ = stream.write_all(&buf);
-        let _ = stream.flush();
-    } else {
-        let _ = write_http_response(stream, 500, "text/plain", b"Read error");
+    // Standard streaming full-file response using 64 KB stack buffer
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type, X-Antigravity-Token, Authorization, Range\r\nAccess-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        content_type, total_size
+    );
+    if stream.write_all(header.as_bytes()).is_err() {
+        return;
     }
+
+    let mut remaining = total_size;
+    let mut buffer = [0u8; 65536];
+    while remaining > 0 {
+        let to_read = (remaining as usize).min(buffer.len());
+        match file.read(&mut buffer[..to_read]) {
+            Ok(0) => break,
+            Ok(n) => {
+                if stream.write_all(&buffer[..n]).is_err() {
+                    return;
+                }
+                remaining -= n as u64;
+            }
+            Err(_) => return,
+        }
+    }
+    let _ = stream.flush();
 }
 
 fn execute_self_test(
@@ -1103,7 +1248,7 @@ fn execute_self_test(
     session_token: &str,
 ) -> Result<SelfTestReport, PlatformError> {
     // 1. Verify HTML endpoint over loopback TCP
-    let (status_html, html_body) = loopback_http_request(port, "GET", "/", b"", None)?;
+    let (status_html, html_body) = loopback_http_request(port, "GET", "/", b"", None, &[])?;
     if status_html != 200 || html_body.len() < 200 {
         return Err(PlatformError::Unsupported(format!(
             "Self-test HTML check failed: status={} len={}",
@@ -1113,7 +1258,8 @@ fn execute_self_test(
     }
 
     // 2. Verify JS & CSS asset bundles over loopback TCP
-    let (status_js, js_body) = loopback_http_request(port, "GET", "/assets/app.js", b"", None)?;
+    let (status_js, js_body) =
+        loopback_http_request(port, "GET", "/assets/app.js", b"", None, &[])?;
     if status_js != 200 || js_body.len() < 1024 {
         return Err(PlatformError::Unsupported(format!(
             "Self-test JS bundle check failed: status={} len={}",
@@ -1122,7 +1268,8 @@ fn execute_self_test(
         )));
     }
 
-    let (status_css, css_body) = loopback_http_request(port, "GET", "/assets/app.css", b"", None)?;
+    let (status_css, css_body) =
+        loopback_http_request(port, "GET", "/assets/app.css", b"", None, &[])?;
     if status_css != 200 || css_body.is_empty() {
         return Err(PlatformError::Unsupported(format!(
             "Self-test CSS bundle check failed: status={} len={}",
@@ -1132,7 +1279,8 @@ fn execute_self_test(
     }
 
     // 3. Negative Security Gate: Verify unauthenticated and bad-token calls to /__* return 403 Forbidden
-    let (status_unauth, _) = loopback_http_request(port, "POST", "/__fs/drives", b"", None)?;
+    let (status_unauth, _) =
+        loopback_http_request(port, "POST", "/__fs/drives", b"", None, &[])?;
     if status_unauth != 403 {
         return Err(PlatformError::Unsupported(format!(
             "Loopback security gate check failed: unauthenticated /__fs/drives returned HTTP {} instead of expected 403 Forbidden",
@@ -1146,6 +1294,7 @@ fn execute_self_test(
         "/__fs/drives",
         b"",
         Some("invalid_token_12345"),
+        &[],
     )?;
     if status_bad_token != 403 {
         return Err(PlatformError::Unsupported(format!(
@@ -1156,7 +1305,7 @@ fn execute_self_test(
 
     // 4. Positive Security Gate: Authenticated drive check
     let (status_auth_fs, _) =
-        loopback_http_request(port, "POST", "/__fs/drives", b"", Some(session_token))?;
+        loopback_http_request(port, "POST", "/__fs/drives", b"", Some(session_token), &[])?;
     if status_auth_fs != 200 {
         return Err(PlatformError::Unsupported(format!(
             "Authenticated loopback check failed: valid token /__fs/drives returned HTTP {}",
@@ -1164,7 +1313,52 @@ fn execute_self_test(
         )));
     }
 
-    // 5. Execute live IPC checks over HTTP POST /__ipc/<command> with session token
+    // 5. Verify HTTP Range Streaming (206 Partial Content & 416 Range Not Satisfiable)
+    let temp_range_file = std::env::temp_dir().join(format!("ag_range_test_{}.dat", port));
+    let sample_payload = vec![0x42u8; 4096];
+    if std::fs::write(&temp_range_file, &sample_payload).is_ok() {
+        let test_path = temp_range_file.to_string_lossy().to_string();
+        let range_path = format!("/__file?path={}", url_encode(&test_path));
+
+        // Exact range check: bytes=1024-2047 (exactly 1024 bytes)
+        let (status_range, range_bytes) = loopback_http_request(
+            port,
+            "GET",
+            &range_path,
+            b"",
+            Some(session_token),
+            &[("Range", "bytes=1024-2047")],
+        )?;
+        if status_range != 206 || range_bytes.len() != 1024 {
+            let _ = std::fs::remove_file(&temp_range_file);
+            return Err(PlatformError::Unsupported(format!(
+                "Range streaming check failed: status={} len={} (expected 206 and 1024 bytes)",
+                status_range,
+                range_bytes.len()
+            )));
+        }
+
+        // Out-of-bounds range check: bytes=10000-20000 -> 416
+        let (status_oob, _) = loopback_http_request(
+            port,
+            "GET",
+            &range_path,
+            b"",
+            Some(session_token),
+            &[("Range", "bytes=10000-20000")],
+        )?;
+        if status_oob != 416 {
+            let _ = std::fs::remove_file(&temp_range_file);
+            return Err(PlatformError::Unsupported(format!(
+                "Range streaming out-of-bounds check failed: status={} (expected 416)",
+                status_oob
+            )));
+        }
+
+        let _ = std::fs::remove_file(&temp_range_file);
+    }
+
+    // 6. Execute live IPC checks over HTTP POST /__ipc/<command> with session token
     let checks = handler.self_test_checks();
     let total = checks.len();
     let mut passed = 0usize;
@@ -1172,8 +1366,14 @@ fn execute_self_test(
     for check in checks {
         let path = format!("/__ipc/{}", check.command);
         let body = serde_json::to_vec(&check.payload).unwrap_or_default();
-        let (status, resp_bytes) =
-            loopback_http_request(port, "POST", &path, &body, Some(session_token))?;
+        let (status, resp_bytes) = loopback_http_request(
+            port,
+            "POST",
+            &path,
+            &body,
+            Some(session_token),
+            &[],
+        )?;
         if status == 200 {
             if let Ok(val) = serde_json::from_slice::<Value>(&resp_bytes) {
                 if val.get("__ipc_ok").and_then(|v| v.as_bool()) == Some(true) {
@@ -1220,6 +1420,7 @@ fn loopback_http_request(
     path: &str,
     body: &[u8],
     auth_token: Option<&str>,
+    extra_headers: &[(&str, &str)],
 ) -> Result<(u16, Vec<u8>), PlatformError> {
     let mut stream = TcpStream::connect(("127.0.0.1", port))?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
@@ -1230,12 +1431,18 @@ fn loopback_http_request(
         None => String::new(),
     };
 
+    let mut extra_str = String::new();
+    for (name, val) in extra_headers {
+        extra_str.push_str(&format!("{}: {}\r\n", name, val));
+    }
+
     let req = format!(
-        "{} {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "{} {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{}{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         method,
         path,
         port,
         auth_header,
+        extra_str,
         body.len()
     );
     stream.write_all(req.as_bytes())?;
@@ -1447,5 +1654,67 @@ mod tests {
         assert!(html.contains("<title>TestApp</title>"));
         assert!(html.contains(r#"const __AUTH_TOKEN__ = "test_session_token_12345";"#));
         assert!(html.contains("window.__ANTIGRAVITY_TOKEN__ = __AUTH_TOKEN__;"));
+    }
+
+    #[test]
+    fn test_url_encode_and_decode_roundtrip() {
+        let original = "H:\\rustapps\\test file & folder [v1.0].mp4";
+        let encoded = url_encode(original);
+        assert_eq!(url_decode(&encoded), original);
+    }
+
+    #[test]
+    fn test_parse_byte_range_variants() {
+        let total = 4096u64;
+
+        // Explicit range
+        assert_eq!(
+            parse_byte_range("bytes=1024-2047", total),
+            Some(Ok((1024, 2047)))
+        );
+
+        // Clamped explicit range
+        assert_eq!(
+            parse_byte_range("bytes=4000-5000", total),
+            Some(Ok((4000, 4095)))
+        );
+
+        // Open-ended range
+        assert_eq!(
+            parse_byte_range("bytes=2048-", total),
+            Some(Ok((2048, 4095)))
+        );
+
+        // Suffix range (last 512 bytes)
+        assert_eq!(
+            parse_byte_range("bytes=-512", total),
+            Some(Ok((3584, 4095)))
+        );
+
+        // Out-of-bounds start
+        assert_eq!(parse_byte_range("bytes=5000-", total), Some(Err(())));
+
+        // Inverted range
+        assert_eq!(parse_byte_range("bytes=2000-1000", total), Some(Err(())));
+
+        // Non-range header
+        assert_eq!(parse_byte_range("no-range", total), None);
+    }
+
+    #[test]
+    fn test_thread_pool_bounded_execution() {
+        let pool = ThreadPool::new(4);
+        let counter = Arc::new(AtomicU64::new(0));
+
+        for _ in 0..16 {
+            let c = Arc::clone(&counter);
+            pool.execute(move || {
+                c.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+
+        // Drop pool to join workers and verify all jobs ran
+        drop(pool);
+        assert_eq!(counter.load(Ordering::SeqCst), 16);
     }
 }
