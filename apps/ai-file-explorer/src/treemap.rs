@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! Squarified Treemap Layout Engine for Hierarchical Storage Visualization (ADR-0025)
 
+use crate::crawler::strip_verbatim_prefix;
 use crate::models::{TreemapNode, TreemapRect};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,13 +26,15 @@ impl TreemapGenerator {
         height: f64,
         max_depth: usize,
     ) -> Result<TreemapNode, TreemapError> {
-        let root = root_path.as_ref();
-        if !root.exists() {
-            return Err(TreemapError::NotFound(root.to_path_buf()));
+        let root_raw = root_path.as_ref();
+        if !root_raw.exists() {
+            return Err(TreemapError::NotFound(root_raw.to_path_buf()));
         }
+        let root = strip_verbatim_prefix(root_raw);
+        let clamped_depth = max_depth.clamp(1, 3);
 
         // Build size tree
-        let mut root_node = Self::build_tree(root, 0, max_depth)?;
+        let mut root_node = Self::build_tree(&root, 0, clamped_depth)?;
 
         // Layout squarified rectangles
         let initial_bounds = TreemapRect {
@@ -42,7 +45,7 @@ impl TreemapGenerator {
         };
         root_node.bounds = initial_bounds.clone();
 
-        Self::layout_children(&mut root_node, &initial_bounds, 0, max_depth);
+        Self::layout_children(&mut root_node, &initial_bounds, 0, clamped_depth);
 
         Ok(root_node)
     }
@@ -53,12 +56,13 @@ impl TreemapGenerator {
         depth: usize,
         max_depth: usize,
     ) -> Result<TreemapNode, TreemapError> {
-        let name = path
+        let clean_path = strip_verbatim_prefix(path);
+        let name = clean_path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| path.to_string_lossy().to_string());
+            .unwrap_or_else(|| clean_path.to_string_lossy().to_string());
 
-        let metadata = match fs::metadata(path) {
+        let metadata = match fs::metadata(&clean_path) {
             Ok(m) => m,
             Err(e) => return Err(TreemapError::Io(e)),
         };
@@ -68,9 +72,12 @@ impl TreemapGenerator {
         let mut children = Vec::new();
 
         if is_dir && depth < max_depth {
-            if let Ok(entries) = fs::read_dir(path) {
-                for entry in entries.flatten() {
-                    let child_path = entry.path();
+            if let Ok(entries) = fs::read_dir(&clean_path) {
+                for (idx, entry) in entries.flatten().enumerate() {
+                    if idx >= 400 {
+                        break;
+                    }
+                    let child_path = strip_verbatim_prefix(&entry.path());
                     if let Ok(child_node) = Self::build_tree(&child_path, depth + 1, max_depth) {
                         size_bytes = size_bytes.saturating_add(child_node.size_bytes);
                         children.push(child_node);
@@ -84,7 +91,7 @@ impl TreemapGenerator {
 
         Ok(TreemapNode {
             name,
-            path: path.to_path_buf(),
+            path: clean_path,
             size_bytes,
             is_dir,
             bounds: TreemapRect {

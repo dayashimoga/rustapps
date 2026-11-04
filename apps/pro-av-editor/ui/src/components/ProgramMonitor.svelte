@@ -1,7 +1,16 @@
 <script lang="ts">
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
-  import { formatTimecode, tauriInvoke, type VideoScopeData } from '../types';
+  import {
+    formatTimecode,
+    getMediaFileUrl,
+    tauriInvoke,
+    type Clip,
+    type MediaSource,
+    type TimelineProject,
+    type VideoScopeData,
+  } from '../types';
 
+  export let project: TimelineProject | null = null;
   export let playheadMs: number = 0;
   export let durationMs: number = 5000;
   export let fps: number = 60.0;
@@ -23,11 +32,105 @@
   let showCenterCross: boolean = false;
   let zoomLevel: 'fit' | '100%' | '200%' = 'fit';
   let scopesData: VideoScopeData | null = null;
+  let activeSourceLabel: string = '';
 
   let viewportContainerRef: HTMLDivElement | null = null;
   let canvasRef: HTMLCanvasElement | null = null;
+  let videoEl: HTMLVideoElement | null = null;
+  let audioEl: HTMLAudioElement | null = null;
+  let loadedVideoSrcUrl: string = '';
+  let loadedAudioSrcUrl: string = '';
+  let loadedImageCache: Record<string, HTMLImageElement> = {};
 
   $: timecodeStr = formatTimecode(playheadMs, fps);
+
+  function resolveMediaSource(sourceId?: string | null): MediaSource | null {
+    if (!sourceId || !project?.media_pool) return null;
+    return (
+      project.media_pool.find(
+        (m) => m.id === sourceId || m.file_path === sourceId
+      ) || null
+    );
+  }
+
+  function findActiveClip(
+    trackType: 'Video' | 'Audio'
+  ): { clip: Clip; source: MediaSource } | null {
+    if (!project) return null;
+    for (const track of project.tracks) {
+      if (track.track_type !== trackType || track.muted) continue;
+      for (const clip of track.clips) {
+        if (
+          playheadMs >= clip.timeline_in_ms &&
+          playheadMs < clip.timeline_out_ms
+        ) {
+          const source = resolveMediaSource(clip.source_id);
+          if (source && source.file_path) {
+            return { clip, source };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  function isHtmlVideoOrImage(filePath: string): 'video' | 'image' | null {
+    const ext = (filePath.split('.').pop() || '').toLowerCase();
+    if (['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v'].includes(ext)) {
+      return 'video';
+    }
+    if (['jpg', 'jpeg', 'webp', 'gif', 'png', 'bmp'].includes(ext)) {
+      return 'image';
+    }
+    return null;
+  }
+
+  function applyGradeFilterString(clip: Clip): string {
+    const cg = clip.color_grading;
+    if (!cg) return 'none';
+    const brightness = Math.max(0.2, Math.min(3.0, Math.pow(2.0, cg.exposure || 0)));
+    const contrast = Math.max(0.2, Math.min(3.0, cg.contrast ?? 1.0));
+    const saturate = Math.max(0.0, Math.min(3.0, cg.saturation ?? 1.0));
+    const hueRotate = Math.round(((cg.temperature || 0) * -0.25) + ((cg.tint || 0) * 0.25));
+    return `brightness(${brightness.toFixed(2)}) contrast(${contrast.toFixed(2)}) saturate(${saturate.toFixed(2)}) hue-rotate(${hueRotate}deg)`;
+  }
+
+  function syncAudioPlayback() {
+    if (!audioEl) return;
+    const activeAudio = findActiveClip('Audio') || findActiveClip('Video');
+    if (!activeAudio) {
+      if (!audioEl.paused) {
+        audioEl.pause();
+      }
+      return;
+    }
+    const mediaUrl = getMediaFileUrl(activeAudio.source.file_path);
+    if (loadedAudioSrcUrl !== mediaUrl) {
+      loadedAudioSrcUrl = mediaUrl;
+      audioEl.src = mediaUrl;
+    }
+    const clipOffsetSec =
+      ((playheadMs - activeAudio.clip.timeline_in_ms) *
+        (activeAudio.clip.speed_multiplier || 1.0) +
+        activeAudio.clip.source_in_ms) /
+      1000.0;
+    const vol = activeAudio.clip.volume?.static_value ?? 1.0;
+    audioEl.volume = Math.max(0, Math.min(1, vol));
+    audioEl.playbackRate = Math.max(0.25, Math.min(4.0, Math.abs(playbackSpeed)));
+
+    if (isPlaying && playbackSpeed > 0) {
+      if (Math.abs(audioEl.currentTime - clipOffsetSec) > 0.25) {
+        audioEl.currentTime = Math.max(0, clipOffsetSec);
+      }
+      if (audioEl.paused) {
+        audioEl.play().catch(() => {});
+      }
+    } else {
+      if (!audioEl.paused) {
+        audioEl.pause();
+      }
+    }
+  }
 
   onMount(async () => {
     window.addEventListener('keydown', handleKeydown);
@@ -104,7 +207,136 @@
   export async function seekTo(ms: number) {
     playheadMs = Math.max(0, Math.min(ms, durationMs));
     dispatch('timeupdate', playheadMs);
+    syncAudioPlayback();
     await updateFrame();
+  }
+
+  function drawHudOverlays(ctx: CanvasRenderingContext2D, w: number, h: number) {
+    // Safe Areas Overlay
+    if (showSafeAreas) {
+      const ax = w * 0.05;
+      const ay = h * 0.05;
+      const aw = w * 0.9;
+      const ah = h * 0.9;
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.7)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(ax, ay, aw, ah);
+
+      const tx = w * 0.1;
+      const ty = h * 0.1;
+      const tw = w * 0.8;
+      const th = h * 0.8;
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.7)';
+      ctx.strokeRect(tx, ty, tw, th);
+      ctx.setLineDash([]);
+    }
+
+    // Center Crosshair
+    if (showCenterCross) {
+      const cx = w / 2;
+      const cy = h / 2;
+      const len = 16;
+      ctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx - len, cy);
+      ctx.lineTo(cx + len, cy);
+      ctx.moveTo(cx, cy - len);
+      ctx.lineTo(cx, cy + len);
+      ctx.stroke();
+    }
+  }
+
+  async function tryRenderLiveHtmlMedia(): Promise<boolean> {
+    const activeVideo = findActiveClip('Video');
+    if (!activeVideo || !canvasRef) {
+      activeSourceLabel = '';
+      if (videoEl && !videoEl.paused) {
+        videoEl.pause();
+      }
+      return false;
+    }
+
+    const kind = isHtmlVideoOrImage(activeVideo.source.file_path);
+    if (!kind) return false;
+
+    const mediaUrl = getMediaFileUrl(activeVideo.source.file_path);
+    activeSourceLabel = activeVideo.source.name;
+    const ctx = canvasRef.getContext('2d');
+    if (!ctx) return false;
+
+    if (kind === 'video' && videoEl) {
+      if (loadedVideoSrcUrl !== mediaUrl) {
+        loadedVideoSrcUrl = mediaUrl;
+        videoEl.src = mediaUrl;
+      }
+      const clipOffsetSec =
+        ((playheadMs - activeVideo.clip.timeline_in_ms) *
+          (activeVideo.clip.speed_multiplier || 1.0) +
+          activeVideo.clip.source_in_ms) /
+        1000.0;
+
+      if (isPlaying && playbackSpeed > 0) {
+        videoEl.playbackRate = Math.max(0.25, Math.min(4.0, playbackSpeed));
+        if (Math.abs(videoEl.currentTime - clipOffsetSec) > 0.25) {
+          videoEl.currentTime = Math.max(0, clipOffsetSec);
+        }
+        if (videoEl.paused) {
+          videoEl.play().catch(() => {});
+        }
+      } else {
+        if (!videoEl.paused) {
+          videoEl.pause();
+        }
+        if (Math.abs(videoEl.currentTime - clipOffsetSec) > 0.04) {
+          videoEl.currentTime = Math.max(0, clipOffsetSec);
+        }
+      }
+
+      if (videoEl.readyState >= 2) {
+        canvasRef.width = 640;
+        canvasRef.height = 360;
+        ctx.save();
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, 640, 360);
+        ctx.filter = applyGradeFilterString(activeVideo.clip);
+        ctx.globalAlpha = activeVideo.clip.opacity?.static_value ?? 1.0;
+        ctx.drawImage(videoEl, 0, 0, 640, 360);
+        ctx.restore();
+        drawHudOverlays(ctx, 640, 360);
+        previewBmpBase64 = 'LIVE_VIDEO';
+        return true;
+      }
+    } else if (kind === 'image') {
+      // For JPG/WEBP/GIF (or fast cached PNG/BMP), draw via HTMLImageElement if cached
+      const ext = (activeVideo.source.file_path.split('.').pop() || '').toLowerCase();
+      if (['jpg', 'jpeg', 'webp', 'gif'].includes(ext)) {
+        let img = loadedImageCache[mediaUrl];
+        if (!img) {
+          img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.src = mediaUrl;
+          loadedImageCache[mediaUrl] = img;
+        }
+        if (img.complete && img.naturalWidth > 0) {
+          canvasRef.width = 640;
+          canvasRef.height = 360;
+          ctx.save();
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, 640, 360);
+          ctx.filter = applyGradeFilterString(activeVideo.clip);
+          ctx.globalAlpha = activeVideo.clip.opacity?.static_value ?? 1.0;
+          ctx.drawImage(img, 0, 0, 640, 360);
+          ctx.restore();
+          drawHudOverlays(ctx, 640, 360);
+          previewBmpBase64 = 'LIVE_IMAGE';
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   export async function updateFrame() {
@@ -115,15 +347,20 @@
     isRenderingFrame = true;
 
     try {
-      const res = await tauriInvoke<string>('render_preview_frame_cmd', {
-        timestampMs: playheadMs,
-        width: 640,
-        height: 360,
-      });
+      syncAudioPlayback();
+      const handledByHtmlMedia = await tryRenderLiveHtmlMedia();
 
-      if (res) {
-        previewBmpBase64 = res;
-        renderCanvasFrame(res);
+      if (!handledByHtmlMedia) {
+        const res = await tauriInvoke<string>('render_preview_frame_cmd', {
+          timestampMs: playheadMs,
+          width: 640,
+          height: 360,
+        });
+
+        if (res) {
+          previewBmpBase64 = res;
+          renderCanvasFrame(res);
+        }
       }
 
       if (showMiniScopes) {
@@ -149,7 +386,7 @@
   }
 
   function renderCanvasFrame(base64Bmp: string) {
-    if (!canvasRef) return;
+    if (!canvasRef || base64Bmp === 'LIVE_VIDEO' || base64Bmp === 'LIVE_IMAGE') return;
     const img = new Image();
     img.onload = () => {
       if (!canvasRef) return;
@@ -160,45 +397,7 @@
       canvasRef.height = img.height || 360;
       ctx.drawImage(img, 0, 0);
 
-      const w = canvasRef.width;
-      const h = canvasRef.height;
-
-      // Safe Areas Overlay
-      if (showSafeAreas) {
-        // Action Safe: 90%
-        const ax = w * 0.05;
-        const ay = h * 0.05;
-        const aw = w * 0.9;
-        const ah = h * 0.9;
-        ctx.strokeStyle = 'rgba(56, 189, 248, 0.7)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
-        ctx.strokeRect(ax, ay, aw, ah);
-
-        // Title Safe: 80%
-        const tx = w * 0.1;
-        const ty = h * 0.1;
-        const tw = w * 0.8;
-        const th = h * 0.8;
-        ctx.strokeStyle = 'rgba(251, 191, 36, 0.7)';
-        ctx.strokeRect(tx, ty, tw, th);
-        ctx.setLineDash([]);
-      }
-
-      // Center Crosshair
-      if (showCenterCross) {
-        const cx = w / 2;
-        const cy = h / 2;
-        const len = 16;
-        ctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(cx - len, cy);
-        ctx.lineTo(cx + len, cy);
-        ctx.moveTo(cx, cy - len);
-        ctx.lineTo(cx, cy + len);
-        ctx.stroke();
-      }
+      drawHudOverlays(ctx, canvasRef.width, canvasRef.height);
     };
     img.src = `data:image/bmp;base64,${base64Bmp}`;
   }
@@ -223,6 +422,12 @@
   function stopPlayback() {
     isPlaying = false;
     playbackSpeed = 1.0;
+    if (videoEl && !videoEl.paused) {
+      videoEl.pause();
+    }
+    if (audioEl && !audioEl.paused) {
+      audioEl.pause();
+    }
     if (animFrameId !== null) {
       cancelAnimationFrame(animFrameId);
       animFrameId = null;
@@ -278,6 +483,11 @@
     <div class="hud-left">
       <span class="program-title">Program Monitor</span>
       <span class="res-tag">1920×1080 @ {Math.round(fps)}fps</span>
+      {#if activeSourceLabel}
+        <span class="res-tag" style="color: #38bdf8; border: 1px solid rgba(56,189,248,0.3);">
+          🎬 {activeSourceLabel}
+        </span>
+      {/if}
       {#if isPlaying && playbackSpeed !== 1.0}
         <span class="speed-pill">
           {playbackSpeed > 0 ? `▶▶ ${playbackSpeed}x` : `◀◀ ${playbackSpeed}x`}
@@ -338,6 +548,21 @@
 
   <!-- Viewport Canvas Area -->
   <div class="viewport" class:zoom-fit={zoomLevel === 'fit'} class:zoom-100={zoomLevel === '100%'} class:zoom-200={zoomLevel === '200%'}>
+    <!-- Hidden HTML5 Video & Audio Elements for Real Media Decoding -->
+    <!-- svelte-ignore a11y-media-has-caption -->
+    <video
+      bind:this={videoEl}
+      style="display: none;"
+      preload="auto"
+      playsinline
+      muted
+    ></video>
+    <audio
+      bind:this={audioEl}
+      style="display: none;"
+      preload="auto"
+    ></audio>
+
     <canvas
       bind:this={canvasRef}
       class="program-canvas"

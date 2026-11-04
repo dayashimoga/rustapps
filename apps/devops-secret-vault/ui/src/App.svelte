@@ -25,6 +25,7 @@
   let isLocked = true;
   let isLoading = false;
   let errorMessage = '';
+  let vaultPath = '';
 
   let secrets: SecretMetadata[] = [];
   let selectedSecretId: string | null = null;
@@ -35,6 +36,7 @@
   let filterType: SecretType | 'all' = 'all';
 
   let isNewSecretModalOpen = false;
+  let editingSecret: DecryptedSecret | null = null;
   let isHealthDashboardOpen = false;
   let isBackupModalOpen = false;
   let isShamirModalOpen = false;
@@ -145,6 +147,9 @@
         const res: any = await (window as any).__TAURI__.invoke('get_vault_status');
         isInitialized = res.is_initialized;
         isLocked = res.is_locked;
+        if (res.vault_path) {
+          vaultPath = res.vault_path;
+        }
         try {
           biometricAvailable = await (window as any).__TAURI__.invoke('is_biometric_available');
         } catch (_) {
@@ -230,6 +235,74 @@
     }
   }
 
+  async function handleToggleBiometricEnrollment() {
+    try {
+      if (biometricAvailable) {
+        if (isTauri) {
+          await (window as any).__TAURI__.invoke('disable_biometric_unlock');
+        }
+        biometricAvailable = false;
+        showToast('Biometric unlock disabled and key purged from OS Keyring.');
+      } else {
+        if (isTauri) {
+          await (window as any).__TAURI__.invoke('enable_biometric_unlock');
+        }
+        biometricAvailable = true;
+        showToast('Windows Hello / OS Biometric unlock enabled for this vault.');
+      }
+    } catch (err: any) {
+      showToast('Biometric enrollment failed: ' + (err?.toString() || 'Unknown error'));
+    }
+  }
+
+  async function handleResetVault() {
+    isLoading = true;
+    errorMessage = '';
+    try {
+      if (isTauri) {
+        const status: any = await (window as any).__TAURI__.invoke('reset_vault', {});
+        isInitialized = Boolean(status?.is_initialized);
+        isLocked = status?.is_locked ?? true;
+        if (status?.vault_path) vaultPath = status.vault_path;
+      } else {
+        isInitialized = false;
+        isLocked = true;
+      }
+      secrets = [];
+      selectedSecretId = null;
+      selectedSecret = null;
+      showToast('Vault reset to uninitialized state. Set your new Master Passphrase.');
+    } catch (err: any) {
+      errorMessage = err?.toString() || 'Failed to reset vault';
+    } finally {
+      isLoading = false;
+    }
+  }
+
+  async function handleSwitchVault(event: CustomEvent<{ path: string }>) {
+    isLoading = true;
+    errorMessage = '';
+    try {
+      const targetPath = event.detail.path;
+      if (isTauri) {
+        const status: any = await (window as any).__TAURI__.invoke('switch_vault_db', { path: targetPath });
+        isInitialized = Boolean(status?.is_initialized);
+        isLocked = status?.is_locked ?? true;
+        if (status?.vault_path) vaultPath = status.vault_path;
+      } else {
+        vaultPath = targetPath;
+      }
+      secrets = [];
+      selectedSecretId = null;
+      selectedSecret = null;
+      showToast(`Switched active vault database to: ${targetPath}`);
+    } catch (err: any) {
+      errorMessage = err?.toString() || 'Failed to switch vault file';
+    } finally {
+      isLoading = false;
+    }
+  }
+
   async function handleLock() {
     if (isTauri) {
       await (window as any).__TAURI__.invoke('lock_vault');
@@ -305,26 +378,61 @@
       case 'certificate': return payload.data.private_key;
       case 'api_key': return payload.data.api_key;
       case 'database_credential': return payload.data.password;
+      case 'aws_credential': return payload.data.secret_access_key;
+      case 'azure_credential': return payload.data.client_secret;
+      case 'terraform_secret': return payload.data.provider_token || payload.data.state_key || payload.data.tf_vars;
+      case 'totp': return payload.data.secret_base32;
       default: return '';
     }
   }
 
-  async function handleCopySecret(event: CustomEvent<{ id: string; field: string }>) {
-    const { id } = event.detail;
+  function getSecretFieldValue(sec: DecryptedSecret | null, field: string, directVal?: string): string {
+    if (directVal) return directVal;
+    if (!sec) return '';
+    if (field === 'username') return sec.metadata.username || '';
+    if (field === 'url') return sec.metadata.url || '';
+    if (field === 'notes') return sec.metadata.notes || '';
+    if (field === 'primary') return getPrimarySecretValue(sec.payload);
+
+    const data: Record<string, any> = (sec.payload as any).data || {};
+    if (field in data && data[field] !== undefined && data[field] !== null) {
+      return String(data[field]);
+    }
+    return getPrimarySecretValue(sec.payload);
+  }
+
+  async function handleCopySecret(event: CustomEvent<{ id: string; field?: string; value?: string; directValue?: boolean }>) {
+    const { id, field = 'primary', value } = event.detail;
     clipboardSeconds = 30;
 
-    if (isTauri) {
-      await (window as any).__TAURI__.invoke('copy_to_clipboard', { id, ttlSecs: 30 });
-    } else {
-      if (selectedSecret) {
-        await navigator.clipboard.writeText(getPrimarySecretValue(selectedSecret.payload));
+    const textToCopy = getSecretFieldValue(selectedSecret, field, value);
+    if (textToCopy && navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(textToCopy);
+      } catch (e) {
+        console.warn('Browser clipboard write warning:', e);
       }
     }
 
-    showToast('Copied to secure clipboard. Auto-wiping memory in 30 seconds.');
+    if (isTauri && id) {
+      try {
+        await (window as any).__TAURI__.invoke('copy_to_clipboard', { id, ttlSecs: 30 });
+      } catch (e) {
+        console.warn('Backend clipboard audit warning:', e);
+      }
+    }
+
+    showToast(`Copied ${field === 'primary' ? 'secret' : field.replace('_', ' ')} to clipboard. Auto-wiping in 30s.`);
   }
 
   async function handleClearClipboard() {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText('');
+      } catch {
+        // ignore
+      }
+    }
     if (isTauri) {
       await (window as any).__TAURI__.invoke('clear_clipboard');
     }
@@ -338,6 +446,9 @@
         clipboardSeconds -= 1;
         if (clipboardSeconds <= 0) {
           clipboardSeconds = null;
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText('').catch(() => {});
+          }
           showToast('Clipboard timer expired. Secret zeroized from memory.');
         }
       }
@@ -374,9 +485,52 @@
       }
 
       isNewSecretModalOpen = false;
+      editingSecret = null;
       showToast('Encrypted secret stored with AES-256-GCM.');
     } catch (err: any) {
       showToast('Error saving secret: ' + err.toString());
+    } finally {
+      isLoading = false;
+    }
+  }
+
+  async function handleUpdateSecret(event: CustomEvent<{ id: string; input: any }>) {
+    isLoading = true;
+    try {
+      const { id, input } = event.detail;
+      if (isTauri) {
+        const meta = await (window as any).__TAURI__.invoke('update_secret', { id, input });
+        secrets = secrets.map(s => (s.id === id ? meta : s));
+        await selectSecret(id);
+        showToast(`Encrypted secret updated (v${meta.version}).`);
+      } else {
+        const idx = mockSecrets.findIndex(s => s.metadata.id === id);
+        if (idx !== -1) {
+          const prev = mockSecrets[idx];
+          const updated: DecryptedSecret = {
+            metadata: {
+              ...prev.metadata,
+              title: input.title ?? prev.metadata.title,
+              tags: input.tags ?? prev.metadata.tags,
+              username: input.username ?? prev.metadata.username,
+              url: input.url ?? prev.metadata.url,
+              notes: input.notes ?? prev.metadata.notes,
+              secret_type: input.payload?.type ?? prev.metadata.secret_type,
+              version: prev.metadata.version + 1,
+              updated_at: Math.floor(Date.now() / 1000),
+            },
+            payload: input.payload ?? prev.payload,
+          };
+          mockSecrets[idx] = updated;
+          await loadSecrets();
+          await selectSecret(id);
+          showToast(`Encrypted secret updated (v${updated.metadata.version}).`);
+        }
+      }
+      isNewSecretModalOpen = false;
+      editingSecret = null;
+    } catch (err: any) {
+      showToast('Error updating secret: ' + err.toString());
     } finally {
       isLoading = false;
     }
@@ -489,12 +643,14 @@
     selectedType={filterType}
     {clipboardSeconds}
     {isLocked}
+    biometricEnrolled={biometricAvailable}
     on:search={handleSearch}
     on:filterChange={e => { filterType = e.detail; }}
-    on:openNewSecretModal={() => { isNewSecretModalOpen = true; }}
+    on:openNewSecretModal={() => { editingSecret = null; isNewSecretModalOpen = true; }}
     on:openHealthDashboard={() => { isHealthDashboardOpen = true; }}
     on:openBackupModal={() => { isBackupModalOpen = true; }}
     on:openShamirModal={() => { shamirModalMode = 'split'; isShamirModalOpen = true; }}
+    on:toggleBiometricEnrollment={handleToggleBiometricEnrollment}
     on:lockVault={handleLock}
     on:clearClipboard={handleClearClipboard}
   />
@@ -508,7 +664,7 @@
           {selectedSecretId}
           {filterType}
           on:selectSecret={e => selectSecret(e.detail)}
-          on:openNewSecret={() => { isNewSecretModalOpen = true; }}
+          on:openNewSecret={() => { editingSecret = null; isNewSecretModalOpen = true; }}
         />
       </div>
 
@@ -521,6 +677,7 @@
           onGenerateTotp={handleGenerateTotp}
           onInspectCert={handleInspectCert}
           on:copySecret={handleCopySecret}
+          on:editSecret={e => { editingSecret = e.detail; isNewSecretModalOpen = true; }}
           on:deleteSecret={handleDeleteSecret}
         />
       </div>
@@ -534,19 +691,24 @@
       {errorMessage}
       {isLoading}
       {biometricAvailable}
+      {vaultPath}
       on:unlock={handleUnlock}
       on:initialize={handleInitialize}
       on:biometricUnlock={handleBiometricUnlock}
+      on:resetVault={handleResetVault}
+      on:switchVault={handleSwitchVault}
       on:openShamirRecovery={() => { shamirModalMode = 'unlock'; isShamirModalOpen = true; }}
     />
   {/if}
 
-  <!-- New Secret Modal -->
+  <!-- New / Edit Secret Modal -->
   <NewSecretModal
     isOpen={isNewSecretModalOpen}
     {isLoading}
-    on:close={() => { isNewSecretModalOpen = false; }}
+    {editingSecret}
+    on:close={() => { isNewSecretModalOpen = false; editingSecret = null; }}
     on:createSecret={handleCreateSecret}
+    on:updateSecret={handleUpdateSecret}
   />
 
   <!-- Health Dashboard Modal -->

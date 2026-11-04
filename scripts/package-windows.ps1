@@ -3,7 +3,8 @@
 param (
     [string]$Target = $( (rustc -vV | Select-String "host:").ToString().Split(':')[1].Trim() ),
     [string]$Version = "0.1.0",
-    [string]$OutputDir = "dist/windows"
+    [string]$OutputDir = "dist/windows",
+    [string]$AppName = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,7 +12,11 @@ Write-Host "==========================================================" -Foregro
 Write-Host "  Packaging Monorepo Apps for Windows ($Target) v$Version" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
-$Apps = @("devops-secret-vault", "ai-file-explorer", "universal-log-viewer", "universal-live-translator", "pro-av-editor")
+if ($AppName -ne "") {
+    $Apps = @($AppName)
+} else {
+    $Apps = @("devops-secret-vault", "ai-file-explorer", "universal-log-viewer", "universal-live-translator", "pro-av-editor")
+}
 
 # Ensure output directory exists
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
@@ -48,6 +53,9 @@ foreach ($app in $Apps) {
         New-Item -ItemType File -Force -Path "$stageDir/portable.flag" | Out-Null
         if (Test-Path "LICENSE") { Copy-Item "LICENSE" -Destination $stageDir }
         if (Test-Path "README.md") { Copy-Item "README.md" -Destination $stageDir }
+
+        # Also copy standalone executable directly into $OutputDir for direct launch
+        Copy-Item $srcPath -Destination "$OutputDir/$binName" -Force
 
         $zipName = "${app}_${Version}_${Target}_portable.zip"
         $zipPath = "$OutputDir/$zipName"

@@ -6,6 +6,7 @@
   export let selectedType: SecretType | 'all' = 'all';
   export let clipboardSeconds: number | null = null;
   export let isLocked: boolean = false;
+  export let biometricEnrolled: boolean = false;
 
   const dispatch = createEventDispatcher();
 
@@ -100,6 +101,17 @@
           <path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.599-.8a1 1 0 01.894 1.79l-1.233.616 1.738 5.42a1 1 0 01-.285 1.05A3.989 3.989 0 0115 15a3.989 3.989 0 01-2.667-1.019 1 1 0 01-.285-1.05l1.715-5.349L11 6.477V16h2a1 1 0 110 2H7a1 1 0 110-2h2V6.477L6.237 7.582l1.715 5.349a1 1 0 01-.285 1.05A3.989 3.989 0 015 15a3.989 3.989 0 01-2.667-1.019 1 1 0 01-.285-1.05l1.738-5.42-1.233-.617a1 1 0 01.894-1.788l1.599.799L9 4.323V3a1 1 0 011-1z" clip-rule="evenodd" />
         </svg>
         Shamir
+      </button>
+
+      <button
+        class="btn btn-secondary {biometricEnrolled ? 'bio-enrolled' : ''}"
+        on:click={() => dispatch('toggleBiometricEnrollment')}
+        title={biometricEnrolled ? 'Biometric Unlock Enabled — Click to disable' : 'Enroll Windows Hello / Touch ID / OS Biometric Unlock'}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="16" height="16">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.39-2.823 1.07-4" />
+        </svg>
+        {biometricEnrolled ? 'Biometrics ON' : 'Biometrics'}
       </button>
 
       <button class="btn btn-primary" on:click={() => dispatch('openNewSecretModal')}>
@@ -276,6 +288,12 @@
     cursor: pointer;
     font-size: 11px;
     margin-left: 2px;
+  }
+
+  .bio-enrolled {
+    border-color: rgba(16, 185, 129, 0.45) !important;
+    color: var(--accent-emerald, #10b981) !important;
+    background: rgba(16, 185, 129, 0.1) !important;
   }
 
   @keyframes pulseGlow {

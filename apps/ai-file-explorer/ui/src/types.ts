@@ -195,3 +195,11 @@ export type ActiveTab =
   | 'content_search'
   | 'screenshots'
   | 'compliance';
+
+export interface FsLocationEntry {
+  name: string;
+  path: string;
+  kind: 'drive' | 'quick_access' | string;
+  available: boolean;
+}
+

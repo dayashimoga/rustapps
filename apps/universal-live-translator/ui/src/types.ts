@@ -26,6 +26,7 @@ export interface TranslationRequest {
   targetLang: LanguageCode;
   preserveFormatting?: boolean;
   domainGlossary?: string | null;
+  recordHistory?: boolean;
 }
 
 export interface TranslationResponse {
@@ -51,6 +52,18 @@ export interface TtsSynthesisResponse {
   channels: number;
   durationMs: number;
   audioWavBase64: string;
+}
+
+export interface SpeechRecognitionResponse {
+  text: string;
+  confidence: number;
+  segments: Array<{
+    start_ms: number;
+    end_ms: number;
+    text: string;
+    confidence: number;
+    is_final: boolean;
+  }>;
 }
 
 export interface ConversationTurn {
@@ -170,6 +183,10 @@ declare global {
   interface Window {
     __TAURI__?: {
       invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+      dialog?: {
+        open: (opts?: { title?: string; directory?: boolean; multiple?: boolean; filters?: string }) => Promise<string | string[] | null>;
+        save: (opts?: { title?: string; defaultName?: string; filters?: string }) => Promise<string | null>;
+      };
     };
   }
 }

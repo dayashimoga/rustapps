@@ -59,6 +59,8 @@
   let isAiAnalyzing = false;
 
   let viewportComponent: VirtualizedViewport;
+  let openFileError = '';
+  let hiddenFileInput: HTMLInputElement;
 
   // In-memory mock database for standalone browser preview / testing
   let mockFileLines: string[] = [];
@@ -78,6 +80,7 @@
   }
 
   async function openRealFile(path: string) {
+    openFileError = '';
     if (isTauri) {
       try {
         const info = await tauriInvoke<OpenedFileInfo>('open_file', { path });
@@ -93,29 +96,88 @@
           return;
         }
       } catch (e) {
+        openFileError = e instanceof Error ? e.message : String(e);
         console.error('Failed to open file via Tauri:', e);
+        return;
       }
     }
-    generateSampleLogs(100000);
+    if (path === 'default') {
+      generateSampleLogs(100000);
+    }
+  }
+
+  async function handleBrowserFileChosen(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input?.files?.[0];
+    if (!file) return;
+    await loadDroppedOrSelectedFileObject(file);
+  }
+
+  async function loadDroppedOrSelectedFileObject(file: File) {
+    openFileError = '';
+    try {
+      const content = await file.text();
+      if (isTauri) {
+        const info = await tauriInvoke<OpenedFileInfo>('open_raw_log_content', {
+          fileName: file.name,
+          content,
+        });
+        if (info) {
+          filePath = info.path;
+          originalTotalLines = info.total_lines;
+          totalLines = info.total_lines;
+          filteredLineIndices = null;
+          selectedRange = null;
+          fileSizeBytes = info.file_size_bytes;
+          await fetchSlice(0, 60);
+          await loadAiInsights();
+          return;
+        }
+      }
+      const splitLines = content.split(/\r?\n/);
+      mockFileLines = splitLines;
+      filePath = file.name;
+      originalTotalLines = splitLines.length;
+      totalLines = splitLines.length;
+      filteredLineIndices = null;
+      selectedRange = null;
+      fileSizeBytes = file.size;
+      await fetchSlice(0, 60);
+    } catch (err) {
+      openFileError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  async function handleFileDrop(e: DragEvent) {
+    e.preventDefault();
+    const file = e.dataTransfer?.files?.[0];
+    if (file) {
+      await loadDroppedOrSelectedFileObject(file);
+    }
   }
 
   async function handleOpenFilePrompt() {
+    openFileError = '';
     if (isTauri && (window as any).__TAURI__?.dialog?.open) {
       try {
         const selected = await (window as any).__TAURI__.dialog.open({
           multiple: false,
-          filters: [{ name: 'Log Files', extensions: ['log', 'txt', 'jsonl', 'csv', 'tsv'] }],
+          title: 'Open Log File in Universal Log Viewer',
+          filters: [{ name: 'Log Files', extensions: ['log', 'txt', 'jsonl', 'json', 'csv', 'tsv', 'out', 'err'] }],
         });
-        if (typeof selected === 'string') {
-          await openRealFile(selected);
+        if (typeof selected === 'string' && selected.trim()) {
+          await openRealFile(selected.trim());
           return;
         }
+        // User cancelled the native dialog — keep existing log open
+        return;
       } catch (err) {
         console.warn('Native open dialog failed:', err);
       }
     }
-    // Browser fallback
-    generateSampleLogs(100000);
+    if (hiddenFileInput) {
+      hiddenFileInput.click();
+    }
   }
 
   async function loadAiInsights() {
@@ -630,7 +692,16 @@
   });
 </script>
 
-<div class="app-layout">
+<!-- svelte-ignore a11y-no-static-element-interactions -->
+<div class="app-layout" on:dragover|preventDefault on:drop={handleFileDrop}>
+  <input
+    type="file"
+    bind:this={hiddenFileInput}
+    on:change={handleBrowserFileChosen}
+    accept=".log,.txt,.jsonl,.json,.csv,.tsv,.out,.err"
+    style="display: none;"
+  />
+
   <!-- Top Navigation Bar -->
   <Header
     {filePath}
@@ -645,6 +716,7 @@
     {showAiInsights}
     bookmarksCount={bookmarks.length}
     on:openFile={handleOpenFilePrompt}
+    on:openPath={(e) => openRealFile(e.detail)}
     on:toggleTail={toggleTailMode}
     on:search={handleSearch}
     on:jumpLine={handleJumpLine}
@@ -653,6 +725,13 @@
     on:toggleAiInsights={() => (showAiInsights = !showAiInsights)}
     on:openRedactModal={() => (isRedactModalOpen = true)}
   />
+
+  {#if openFileError}
+    <div class="open-error-banner">
+      <span>⚠️ {openFileError}</span>
+      <button on:click={() => (openFileError = '')}>Dismiss</button>
+    </div>
+  {/if}
 
   <!-- Interactive Timeline Histogram (Phase 2 Advanced) -->
   {#if showTimeline && timelineBuckets.length > 0}
@@ -765,6 +844,27 @@
     height: 100vh;
     width: 100vw;
     background: var(--bg-primary);
+  }
+
+  .open-error-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 16px;
+    background: rgba(239, 68, 68, 0.18);
+    border-bottom: 1px solid rgba(239, 68, 68, 0.45);
+    color: #fca5a5;
+    font-size: 12px;
+  }
+
+  .open-error-banner button {
+    background: transparent;
+    border: 1px solid rgba(252, 165, 165, 0.4);
+    color: #fca5a5;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
   }
 
   .main-content {

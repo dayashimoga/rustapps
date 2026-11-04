@@ -686,15 +686,50 @@ pub fn dispatch_ipc_command(
                 let raw_path = args
                     .get("path")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("default");
-                let target_path = if raw_path.is_empty()
-                    || raw_path == "default"
-                    || !Path::new(raw_path).exists()
-                {
+                    .unwrap_or("default")
+                    .trim();
+                let target_path = if raw_path.is_empty() || raw_path == "default" {
                     sample_path
                 } else {
-                    PathBuf::from(raw_path)
+                    let p = PathBuf::from(raw_path);
+                    if !p.exists() {
+                        return Err(format!("Log file does not exist: {}", raw_path));
+                    }
+                    p
                 };
+                let info = svc
+                    .open_file(&target_path)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(info).map_err(|e| e.to_string())
+            }
+            "open_raw_log_content" => {
+                let file_name = args
+                    .get("fileName")
+                    .or_else(|| args.get("file_name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("imported.log");
+                let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                let safe_name: String = file_name
+                    .chars()
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect();
+                let target_dir = sample_path
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(std::env::temp_dir);
+                let target_path = target_dir.join(if safe_name.is_empty() {
+                    "imported.log".to_string()
+                } else {
+                    safe_name
+                });
+                std::fs::write(&target_path, content.as_bytes()).map_err(|e| e.to_string())?;
                 let info = svc
                     .open_file(&target_path)
                     .await

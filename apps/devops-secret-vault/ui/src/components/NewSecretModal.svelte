@@ -1,10 +1,11 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import type { PasswordStrength, SecretPayload, SecretType } from '../types';
+  import type { DecryptedSecret, PasswordStrength, SecretPayload, SecretType } from '../types';
   import EntropyMeter from './EntropyMeter.svelte';
 
   export let isOpen: boolean = false;
   export let isLoading: boolean = false;
+  export let editingSecret: DecryptedSecret | null = null;
 
   const dispatch = createEventDispatcher();
 
@@ -392,14 +393,140 @@
       .map(t => t.trim().toLowerCase())
       .filter(t => t.length > 0);
 
-    dispatch('createSecret', {
+    const inputPayload = {
       title: title.trim(),
       tags,
       username: username.trim() || null,
       url: url.trim() || null,
       notes: notes.trim() || null,
       payload,
-    });
+    };
+
+    if (editingSecret) {
+      dispatch('updateSecret', {
+        id: editingSecret.metadata.id,
+        input: inputPayload,
+      });
+    } else {
+      dispatch('createSecret', inputPayload);
+    }
+  }
+
+  let lastOpenState = false;
+  let lastEditingId: string | null = null;
+
+  function resetOrPopulateFields(sec: DecryptedSecret | null) {
+    title = sec?.metadata.title || '';
+    tagsStr = sec?.metadata.tags?.join(', ') || '';
+    username = sec?.metadata.username || '';
+    url = sec?.metadata.url || '';
+    notes = sec?.metadata.notes || '';
+    secretType = sec?.payload.type || 'password';
+
+    passwordVal = '';
+    sshPrivateKey = '';
+    sshPublicKey = '';
+    sshPassphrase = '';
+    certPrivateKey = '';
+    certPem = '';
+    certChain = '';
+    apiKeyVal = '';
+    apiSecretVal = '';
+    apiEndpoint = '';
+    dbEngine = 'postgresql';
+    dbHost = 'localhost';
+    dbPort = 5432;
+    dbName = '';
+    dbUser = '';
+    dbPassword = '';
+    dbConnString = '';
+    awsAccessKey = '';
+    awsSecretKey = '';
+    awsSessionToken = '';
+    awsRegion = 'us-east-1';
+    awsProfile = 'default';
+    azSubId = '';
+    azTenantId = '';
+    azClientId = '';
+    azClientSecret = '';
+    azCloudEnv = 'AzureCloud';
+    tfStateKey = '';
+    tfVars = '';
+    tfToken = '';
+    tfBackend = '';
+    totpSecretBase32 = '';
+    totpIssuer = '';
+    totpAccount = '';
+    totpDigits = 6;
+    totpPeriod = 30;
+
+    if (!sec) return;
+    const p = sec.payload;
+    switch (p.type) {
+      case 'password':
+        passwordVal = p.data.password || '';
+        break;
+      case 'ssh_key':
+        sshPrivateKey = p.data.private_key || '';
+        sshPublicKey = p.data.public_key || '';
+        sshPassphrase = p.data.passphrase || '';
+        break;
+      case 'certificate':
+        certPrivateKey = p.data.private_key || '';
+        certPem = p.data.certificate_pem || '';
+        certChain = p.data.chain_pem || '';
+        break;
+      case 'api_key':
+        apiKeyVal = p.data.api_key || '';
+        apiSecretVal = p.data.api_secret || '';
+        apiEndpoint = p.data.endpoint_url || '';
+        break;
+      case 'database_credential':
+        dbEngine = p.data.engine || 'postgresql';
+        dbHost = p.data.host || 'localhost';
+        dbPort = p.data.port || 5432;
+        dbName = p.data.database || '';
+        dbUser = p.data.username || '';
+        dbPassword = p.data.password || '';
+        dbConnString = p.data.connection_string || '';
+        break;
+      case 'aws_credential':
+        awsAccessKey = p.data.access_key_id || '';
+        awsSecretKey = p.data.secret_access_key || '';
+        awsSessionToken = p.data.session_token || '';
+        awsRegion = p.data.region || 'us-east-1';
+        awsProfile = p.data.profile_name || 'default';
+        break;
+      case 'azure_credential':
+        azSubId = p.data.subscription_id || '';
+        azTenantId = p.data.tenant_id || '';
+        azClientId = p.data.client_id || '';
+        azClientSecret = p.data.client_secret || '';
+        azCloudEnv = p.data.cloud_environment || 'AzureCloud';
+        break;
+      case 'terraform_secret':
+        tfStateKey = p.data.state_key || '';
+        tfVars = p.data.tf_vars || '';
+        tfToken = p.data.provider_token || '';
+        tfBackend = p.data.backend_config || '';
+        break;
+      case 'totp':
+        totpSecretBase32 = p.data.secret_base32 || '';
+        totpIssuer = p.data.issuer || '';
+        totpAccount = p.data.account_name || '';
+        totpDigits = p.data.digits || 6;
+        totpPeriod = p.data.period_seconds || 30;
+        break;
+    }
+  }
+
+  $: {
+    const currentEditId = editingSecret?.metadata.id ?? null;
+    if (isOpen && (!lastOpenState || currentEditId !== lastEditingId)) {
+      resetOrPopulateFields(editingSecret);
+    }
+    lastOpenState = isOpen;
+    lastEditingId = currentEditId;
   }
 
   function closeModal() {
@@ -416,7 +543,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="20" height="20" class="header-icon">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
           </svg>
-          <h2 class="modal-title">Create Encrypted Secret</h2>
+          <h2 class="modal-title">{editingSecret ? 'Edit Encrypted Secret' : 'Create Encrypted Secret'}</h2>
         </div>
         <button class="close-btn" on:click={closeModal}>✕</button>
       </div>
@@ -868,7 +995,7 @@
         <div class="modal-footer">
           <button type="button" class="btn" on:click={closeModal}>Cancel</button>
           <button type="submit" class="btn btn-primary" disabled={isLoading}>
-            {#if isLoading}Encrypting...{:else}Encrypt & Save Secret{/if}
+            {#if isLoading}Encrypting...{:else}{editingSecret ? 'Save Changes' : 'Encrypt & Save Secret'}{/if}
           </button>
         </div>
       </form>

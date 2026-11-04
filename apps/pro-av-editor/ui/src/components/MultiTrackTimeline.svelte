@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import {
     formatTimecode,
     tauriInvoke,
@@ -15,6 +15,17 @@
 
   let zoomPxPerSec: number = 80; // 80px per second default zoom
   let snappingEnabled: boolean = true;
+  let timelineNotice: string = '';
+
+  // Drag / Trim state
+  let dragMode: 'move' | 'trim-left' | 'trim-right' | null = null;
+  let dragClipId: string | null = null;
+  let dragTrackId: string | null = null;
+  let dragStartX: number = 0;
+  let dragOrigInMs: number = 0;
+  let dragOrigOutMs: number = 0;
+  let dragCurrentInMs: number = 0;
+  let dragCurrentOutMs: number = 0;
 
   const dispatch = createEventDispatcher<{
     seek: number;
@@ -23,6 +34,47 @@
   }>();
 
   $: timelineWidthPx = Math.max(800, Math.round((durationMs / 1000) * zoomPxPerSec));
+  $: hasAnyClips = Boolean(
+    project?.tracks?.some((t) => t.clips && t.clips.length > 0)
+  );
+
+  function showNotice(msg: string) {
+    timelineNotice = msg;
+    setTimeout(() => {
+      if (timelineNotice === msg) {
+        timelineNotice = '';
+      }
+    }, 3000);
+  }
+
+  onMount(() => {
+    window.addEventListener('keydown', handleTimelineKeys);
+    window.addEventListener('mousemove', handleGlobalMouseMove);
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+  });
+
+  onDestroy(() => {
+    window.removeEventListener('keydown', handleTimelineKeys);
+    window.removeEventListener('mousemove', handleGlobalMouseMove);
+    window.removeEventListener('mouseup', handleGlobalMouseUp);
+  });
+
+  function handleTimelineKeys(e: KeyboardEvent) {
+    const active = document.activeElement;
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) {
+      return;
+    }
+    if (e.code === 'KeyC' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      splitSelectedClip();
+    } else if ((e.code === 'Delete' || e.code === 'Backspace') && e.shiftKey) {
+      e.preventDefault();
+      rippleDeleteSelectedClip();
+    } else if (e.code === 'Delete' || e.code === 'Backspace') {
+      e.preventDefault();
+      removeSelectedClip();
+    }
+  }
 
   function handleRulerClick(e: MouseEvent) {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -65,42 +117,222 @@
     dispatch('selectClip', clip);
   }
 
+  function resolveTargetClip(requirePlayheadInside: boolean = false): Clip | null {
+    if (!project) return null;
+    if (selectedClipId) {
+      for (const tr of project.tracks) {
+        if (tr.locked) continue;
+        const found = tr.clips.find((c) => c.id === selectedClipId);
+        if (found) {
+          if (!requirePlayheadInside || (playheadMs > found.timeline_in_ms && playheadMs < found.timeline_out_ms)) {
+            return found;
+          }
+        }
+      }
+    }
+    // Fallback: find the first unlocked clip under the playhead
+    for (const tr of project.tracks) {
+      if (tr.locked) continue;
+      for (const cl of tr.clips) {
+        if (playheadMs > cl.timeline_in_ms && playheadMs < cl.timeline_out_ms) {
+          selectedClipId = cl.id;
+          dispatch('selectClip', cl);
+          return cl;
+        }
+      }
+    }
+    if (!requirePlayheadInside) {
+      for (const tr of project.tracks) {
+        if (tr.locked) continue;
+        if (tr.clips.length > 0) {
+          selectedClipId = tr.clips[0].id;
+          dispatch('selectClip', tr.clips[0]);
+          return tr.clips[0];
+        }
+      }
+    }
+    return null;
+  }
+
   async function splitSelectedClip() {
-    if (!selectedClipId) return;
+    const target = resolveTargetClip(true) || resolveTargetClip(false);
+    if (!target) {
+      showNotice('No clip on timeline to split.');
+      return;
+    }
+    let splitAtMs = playheadMs;
+    if (splitAtMs <= target.timeline_in_ms || splitAtMs >= target.timeline_out_ms) {
+      // Split at clip midpoint if playhead is outside the selected clip
+      splitAtMs = Math.round((target.timeline_in_ms + target.timeline_out_ms) / 2);
+    }
     try {
       await tauriInvoke('split_clip_cmd', {
-        clipId: selectedClipId,
-        timestampMs: playheadMs,
+        clipId: target.id,
+        timestampMs: splitAtMs,
       });
+      showNotice(`Split "${target.name}" at ${formatTimecode(splitAtMs)}`);
       dispatch('refreshProject');
     } catch (e) {
       console.error('Split failed:', e);
+      showNotice(`Split error: ${e}`);
     }
   }
 
   async function rippleDeleteSelectedClip() {
-    if (!selectedClipId) return;
+    const target = resolveTargetClip(false);
+    if (!target) {
+      showNotice('Select a clip to ripple delete.');
+      return;
+    }
     try {
       await tauriInvoke('ripple_delete_cmd', {
-        clipId: selectedClipId,
+        clipId: target.id,
       });
       selectedClipId = null;
+      showNotice(`Ripple deleted "${target.name}"`);
       dispatch('refreshProject');
     } catch (e) {
       console.error('Ripple delete failed:', e);
+      showNotice(`Ripple delete error: ${e}`);
     }
   }
 
   async function removeSelectedClip() {
-    if (!selectedClipId) return;
+    const target = resolveTargetClip(false);
+    if (!target) {
+      showNotice('Select a clip to delete.');
+      return;
+    }
     try {
       await tauriInvoke('remove_clip_cmd', {
-        clipId: selectedClipId,
+        clipId: target.id,
       });
       selectedClipId = null;
+      showNotice(`Deleted "${target.name}"`);
       dispatch('refreshProject');
     } catch (e) {
       console.error('Delete failed:', e);
+      showNotice(`Delete error: ${e}`);
+    }
+  }
+
+  async function addNewTrack(trackType: 'Video' | 'Audio') {
+    try {
+      await tauriInvoke('add_track_cmd', {
+        name: '',
+        trackType,
+      });
+      showNotice(`Added ${trackType} track`);
+      dispatch('refreshProject');
+    } catch (e) {
+      console.error('Failed to add track:', e);
+    }
+  }
+
+  async function toggleTrackState(
+    track: Track,
+    field: 'muted' | 'solo' | 'locked'
+  ) {
+    const nextMuted = field === 'muted' ? !track.muted : track.muted;
+    const nextSolo = field === 'solo' ? !track.solo : track.solo;
+    const nextLocked = field === 'locked' ? !track.locked : track.locked;
+    try {
+      await tauriInvoke('update_track_state_cmd', {
+        trackId: track.id,
+        muted: nextMuted,
+        solo: nextSolo,
+        locked: nextLocked,
+      });
+      dispatch('refreshProject');
+    } catch (e) {
+      console.error('Failed to update track state:', e);
+    }
+  }
+
+  function startClipDrag(
+    clip: Clip,
+    track: Track,
+    mode: 'move' | 'trim-left' | 'trim-right',
+    e: MouseEvent
+  ) {
+    if (track.locked) {
+      showNotice(`Track "${track.name}" is locked.`);
+      return;
+    }
+    e.stopPropagation();
+    selectedClipId = clip.id;
+    dispatch('selectClip', clip);
+
+    dragMode = mode;
+    dragClipId = clip.id;
+    dragTrackId = track.id;
+    dragStartX = e.clientX;
+    dragOrigInMs = clip.timeline_in_ms;
+    dragOrigOutMs = clip.timeline_out_ms;
+    dragCurrentInMs = clip.timeline_in_ms;
+    dragCurrentOutMs = clip.timeline_out_ms;
+  }
+
+  function handleGlobalMouseMove(e: MouseEvent) {
+    if (!dragMode || !dragClipId) return;
+    const deltaPx = e.clientX - dragStartX;
+    const deltaMs = Math.round((deltaPx / zoomPxPerSec) * 1000);
+
+    if (dragMode === 'move') {
+      const dur = dragOrigOutMs - dragOrigInMs;
+      let nextIn = Math.max(0, dragOrigInMs + deltaMs);
+      if (snappingEnabled) {
+        nextIn = calculateSnap(nextIn);
+      }
+      dragCurrentInMs = nextIn;
+      dragCurrentOutMs = nextIn + dur;
+    } else if (dragMode === 'trim-left') {
+      let nextIn = Math.max(0, Math.min(dragOrigOutMs - 100, dragOrigInMs + deltaMs));
+      if (snappingEnabled) {
+        nextIn = calculateSnap(nextIn);
+      }
+      dragCurrentInMs = nextIn;
+    } else if (dragMode === 'trim-right') {
+      let nextOut = Math.max(dragOrigInMs + 100, dragOrigOutMs + deltaMs);
+      if (snappingEnabled) {
+        nextOut = calculateSnap(nextOut);
+      }
+      dragCurrentOutMs = nextOut;
+    }
+  }
+
+  async function handleGlobalMouseUp() {
+    if (!dragMode || !dragClipId) return;
+    const mode = dragMode;
+    const clipId = dragClipId;
+    const trackId = dragTrackId;
+    const finalIn = dragCurrentInMs;
+    const finalOut = dragCurrentOutMs;
+    const changed = finalIn !== dragOrigInMs || finalOut !== dragOrigOutMs;
+
+    dragMode = null;
+    dragClipId = null;
+    dragTrackId = null;
+
+    if (!changed) return;
+
+    try {
+      if (mode === 'move') {
+        await tauriInvoke('move_clip_cmd', {
+          clipId,
+          trackId,
+          timelineInMs: finalIn,
+        });
+      } else {
+        await tauriInvoke('trim_clip_cmd', {
+          clipId,
+          newInMs: finalIn,
+          newOutMs: finalOut,
+        });
+      }
+      dispatch('refreshProject');
+    } catch (e) {
+      console.error('Clip drag/trim failed:', e);
     }
   }
 </script>
@@ -111,7 +343,7 @@
     <div class="tool-group">
       <button
         class="action-btn"
-        disabled={!selectedClipId}
+        disabled={!hasAnyClips}
         on:click={splitSelectedClip}
         title="Razor / Split at Playhead (C)"
       >
@@ -119,7 +351,7 @@
       </button>
       <button
         class="action-btn"
-        disabled={!selectedClipId}
+        disabled={!hasAnyClips}
         on:click={rippleDeleteSelectedClip}
         title="Ripple Delete Clip (Shift+Del)"
       >
@@ -127,12 +359,29 @@
       </button>
       <button
         class="action-btn"
-        disabled={!selectedClipId}
+        disabled={!hasAnyClips}
         on:click={removeSelectedClip}
         title="Delete Clip (Del)"
       >
         🗑 Delete
       </button>
+      <button
+        class="action-btn"
+        on:click={() => addNewTrack('Video')}
+        title="Add New Video Track"
+      >
+        + Video Track
+      </button>
+      <button
+        class="action-btn"
+        on:click={() => addNewTrack('Audio')}
+        title="Add New Audio Track"
+      >
+        + Audio Track
+      </button>
+      {#if timelineNotice}
+        <span class="timeline-notice">{timelineNotice}</span>
+      {/if}
     </div>
 
     <div class="snap-zoom-group">
@@ -167,7 +416,7 @@
               <button
                 class="state-btn"
                 class:active={track.muted}
-                on:click={() => (track.muted = !track.muted)}
+                on:click={() => toggleTrackState(track, 'muted')}
                 title="Mute Track"
               >
                 M
@@ -175,7 +424,7 @@
               <button
                 class="state-btn"
                 class:active={track.solo}
-                on:click={() => (track.solo = !track.solo)}
+                on:click={() => toggleTrackState(track, 'solo')}
                 title="Solo Track"
               >
                 S
@@ -183,7 +432,7 @@
               <button
                 class="state-btn"
                 class:active={track.locked}
-                on:click={() => (track.locked = !track.locked)}
+                on:click={() => toggleTrackState(track, 'locked')}
                 title="Lock Track"
               >
                 🔒
@@ -230,6 +479,8 @@
                 class:audio-lane={track.track_type === 'Audio'}
               >
                 {#each track.clips as clip}
+                  {@const dispInMs = dragClipId === clip.id ? dragCurrentInMs : clip.timeline_in_ms}
+                  {@const dispOutMs = dragClipId === clip.id ? dragCurrentOutMs : clip.timeline_out_ms}
                   <!-- svelte-ignore a11y-click-events-have-key-events -->
                   <div
                     class="clip-box"
@@ -239,11 +490,24 @@
                     class:video-clip={track.track_type === 'Video'}
                     class:audio-clip={track.track_type === 'Audio'}
                     class:sub-clip={track.track_type === 'Subtitle'}
-                    style={`left: ${(clip.timeline_in_ms / 1000) * zoomPxPerSec}px; width: ${Math.max(20, ((clip.timeline_out_ms - clip.timeline_in_ms) / 1000) * zoomPxPerSec)}px;`}
+                    style={`left: ${(dispInMs / 1000) * zoomPxPerSec}px; width: ${Math.max(20, ((dispOutMs - dispInMs) / 1000) * zoomPxPerSec)}px;`}
+                    on:mousedown={(e) => startClipDrag(clip, track, 'move', e)}
                     on:click={(e) => selectClip(clip, e)}
                   >
+                    <!-- svelte-ignore a11y-no-static-element-interactions -->
+                    <div
+                      class="trim-handle trim-left"
+                      title="Drag to Trim In-Point"
+                      on:mousedown={(e) => startClipDrag(clip, track, 'trim-left', e)}
+                    ></div>
                     <span class="clip-name">{clip.name}</span>
-                    <span class="clip-dur">{((clip.timeline_out_ms - clip.timeline_in_ms) / 1000).toFixed(1)}s</span>
+                    <span class="clip-dur">{((dispOutMs - dispInMs) / 1000).toFixed(1)}s</span>
+                    <!-- svelte-ignore a11y-no-static-element-interactions -->
+                    <div
+                      class="trim-handle trim-right"
+                      title="Drag to Trim Out-Point"
+                      on:mousedown={(e) => startClipDrag(clip, track, 'trim-right', e)}
+                    ></div>
                   </div>
                 {/each}
               </div>
@@ -285,7 +549,41 @@
 
   .tool-group {
     display: flex;
+    align-items: center;
     gap: 0.4rem;
+  }
+
+  .timeline-notice {
+    font-size: 0.72rem;
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.12);
+    border: 1px solid rgba(56, 189, 248, 0.3);
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-left: 6px;
+  }
+
+  .trim-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 6px;
+    cursor: ew-resize;
+    z-index: 5;
+  }
+
+  .trim-left {
+    left: 0;
+    border-left: 2px solid rgba(255, 255, 255, 0.55);
+  }
+
+  .trim-right {
+    right: 0;
+    border-right: 2px solid rgba(255, 255, 255, 0.55);
+  }
+
+  .trim-handle:hover {
+    background: rgba(255, 255, 255, 0.35);
   }
 
   .action-btn {

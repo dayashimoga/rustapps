@@ -7,15 +7,141 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::{AppPaths, PlatformError};
+
+/// Drive or quick-access folder entry exposed to desktop UIs via `/__fs/drives`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsLocationEntry {
+    pub name: String,
+    pub path: String,
+    pub kind: String,
+    pub available: bool,
+}
+
+/// Normalize a Windows or POSIX path by stripping verbatim prefixes (`\\?\` or `\\?\UNC\`).
+pub fn normalize_display_path(raw: &str) -> String {
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{}", rest)
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        raw.to_string()
+    }
+}
+
+/// Enumerate mounted drives (`A:\`–`Z:\` on Windows, `/` and `/Volumes` on POSIX) and standard user folders.
+pub fn enumerate_drives_and_places() -> Vec<FsLocationEntry> {
+    let mut entries = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        for letter in b'A'..=b'Z' {
+            let root = format!("{}:\\", letter as char);
+            if Path::new(&root).exists() {
+                entries.push(FsLocationEntry {
+                    name: format!("Local Disk ({}:)", letter as char),
+                    path: root,
+                    kind: "drive".to_string(),
+                    available: true,
+                });
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        entries.push(FsLocationEntry {
+            name: "Root (/)".to_string(),
+            path: "/".to_string(),
+            kind: "drive".to_string(),
+            available: true,
+        });
+        if Path::new("/Volumes").exists() {
+            if let Ok(rd) = std::fs::read_dir("/Volumes") {
+                for entry in rd.flatten() {
+                    let p = entry.path();
+                    if p.is_dir() {
+                        entries.push(FsLocationEntry {
+                            name: entry.file_name().to_string_lossy().to_string(),
+                            path: p.to_string_lossy().to_string(),
+                            kind: "drive".to_string(),
+                            available: true,
+                        });
+                    }
+                }
+            }
+        }
+        if Path::new("/mnt").exists() {
+            if let Ok(rd) = std::fs::read_dir("/mnt") {
+                for entry in rd.flatten() {
+                    let p = entry.path();
+                    if p.is_dir() {
+                        entries.push(FsLocationEntry {
+                            name: format!("/mnt/{}", entry.file_name().to_string_lossy()),
+                            path: p.to_string_lossy().to_string(),
+                            kind: "drive".to_string(),
+                            available: true,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Standard user quick-access directories
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from);
+
+    if let Some(home_dir) = home {
+        if home_dir.exists() {
+            entries.push(FsLocationEntry {
+                name: "Home".to_string(),
+                path: normalize_display_path(&home_dir.to_string_lossy()),
+                kind: "quick_access".to_string(),
+                available: true,
+            });
+        }
+        for (label, folder) in [
+            ("Desktop", "Desktop"),
+            ("Downloads", "Downloads"),
+            ("Documents", "Documents"),
+            ("Pictures", "Pictures"),
+            ("Music", "Music"),
+            ("Videos", "Videos"),
+        ] {
+            let candidate = home_dir.join(folder);
+            if candidate.exists() {
+                entries.push(FsLocationEntry {
+                    name: label.to_string(),
+                    path: normalize_display_path(&candidate.to_string_lossy()),
+                    kind: "quick_access".to_string(),
+                    available: true,
+                });
+            }
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        entries.push(FsLocationEntry {
+            name: "Workspace".to_string(),
+            path: normalize_display_path(&cwd.to_string_lossy()),
+            kind: "quick_access".to_string(),
+            available: true,
+        });
+    }
+
+    entries
+}
 
 /// Static UI bundle embedded into an application binary via `include_str!` / `include_bytes!`.
 #[derive(Debug, Clone, Copy)]
@@ -68,14 +194,49 @@ const TAURI_BRIDGE_SCRIPT: &str = r#"<script>
       body: JSON.stringify(args || {})
     });
     const payload = await response.json();
-    if (!response.ok || (payload && payload. __ipc_error)) {
+    if (!response.ok || (payload && payload.__ipc_error)) {
       throw new Error((payload && payload.__ipc_error) || ('IPC HTTP ' + response.status));
     }
     return payload ? payload.__ipc_data : null;
   }
+
+  async function dialogOpen(options) {
+    const response = await fetch('/__dialog/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options || {})
+    });
+    const payload = await response.json();
+    return payload ? payload.path : null;
+  }
+
+  async function dialogSave(options) {
+    const response = await fetch('/__dialog/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options || {})
+    });
+    const payload = await response.json();
+    return payload ? payload.path : null;
+  }
+
+  async function getDrivesAndPlaces() {
+    const response = await fetch('/__fs/drives');
+    if (!response.ok) return [];
+    const payload = await response.json();
+    return payload && payload.entries ? payload.entries : [];
+  }
+
+  function fileUrl(localPath) {
+    if (!localPath) return '';
+    return '/__file?path=' + encodeURIComponent(localPath);
+  }
+
   window.__TAURI__ = window.__TAURI__ || {};
   window.__TAURI__.invoke = ipcInvoke;
   window.__TAURI__.core = { invoke: ipcInvoke };
+  window.__TAURI__.dialog = { open: dialogOpen, save: dialogSave };
+  window.__TAURI__.fs = { getDrivesAndPlaces: getDrivesAndPlaces, fileUrl: fileUrl };
   window.__TAURI_INTERNALS__ = { invoke: ipcInvoke };
 
   setInterval(function() {
@@ -251,9 +412,10 @@ fn handle_http_connection(
     }
     let method = parts[0];
     let raw_path = parts[1];
-    let path = raw_path.split('?').next().unwrap_or("/");
+    let (path, query_string) = raw_path.split_once('?').unwrap_or((raw_path, ""));
 
     let mut content_length: usize = 0;
+    let mut range_header: Option<String> = None;
     loop {
         let mut header_line = String::new();
         if reader.read_line(&mut header_line).is_err() {
@@ -266,6 +428,8 @@ fn handle_http_connection(
         if let Some((k, v)) = trimmed.split_once(':') {
             if k.trim().eq_ignore_ascii_case("content-length") {
                 content_length = v.trim().parse::<usize>().unwrap_or(0);
+            } else if k.trim().eq_ignore_ascii_case("range") {
+                range_header = Some(v.trim().to_string());
             }
         }
     }
@@ -291,6 +455,70 @@ fn handle_http_connection(
     if path == "/__shutdown" {
         let _ = write_http_response(&mut stream, 200, "application/json", b"{\"shutdown\":true}");
         shutdown_flag.store(true, Ordering::SeqCst);
+        return;
+    }
+
+    if path == "/__fs/drives" {
+        let entries = enumerate_drives_and_places();
+        let payload = serde_json::json!({ "entries": entries });
+        let bytes = serde_json::to_vec(&payload).unwrap_or_default();
+        let _ = write_http_response(&mut stream, 200, "application/json", &bytes);
+        return;
+    }
+
+    if path == "/__dialog/open" {
+        let opts: Value = if body_bytes.is_empty() {
+            Value::Object(serde_json::Map::new())
+        } else {
+            serde_json::from_slice(&body_bytes)
+                .unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
+        };
+        let is_dir = opts
+            .get("directory")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let multiple = opts
+            .get("multiple")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let title = opts
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or(if is_dir { "Select Folder" } else { "Open File" });
+
+        let selected = invoke_native_open_dialog(title, is_dir, multiple, &opts);
+        let payload = serde_json::json!({ "path": selected });
+        let bytes = serde_json::to_vec(&payload).unwrap_or_default();
+        let _ = write_http_response(&mut stream, 200, "application/json", &bytes);
+        return;
+    }
+
+    if path == "/__dialog/save" {
+        let opts: Value = if body_bytes.is_empty() {
+            Value::Object(serde_json::Map::new())
+        } else {
+            serde_json::from_slice(&body_bytes)
+                .unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
+        };
+        let title = opts
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Save File");
+        let default_path = opts
+            .get("defaultPath")
+            .or_else(|| opts.get("default_path"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let selected = invoke_native_save_dialog(title, default_path, &opts);
+        let payload = serde_json::json!({ "path": selected });
+        let bytes = serde_json::to_vec(&payload).unwrap_or_default();
+        let _ = write_http_response(&mut stream, 200, "application/json", &bytes);
+        return;
+    }
+
+    if path == "/__file" {
+        serve_local_file(&mut stream, query_string, range_header.as_deref());
         return;
     }
 
@@ -386,7 +614,7 @@ fn write_http_response(
 }
 
 fn url_decode(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
+    let mut out = Vec::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -395,15 +623,380 @@ fn url_decode(input: &str) -> String {
                 (bytes[i + 1] as char).to_digit(16),
                 (bytes[i + 2] as char).to_digit(16),
             ) {
-                out.push(((h * 16 + l) as u8) as char);
+                out.push((h * 16 + l) as u8);
                 i += 3;
                 continue;
             }
+        } else if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+            continue;
         }
-        out.push(bytes[i] as char);
+        out.push(bytes[i]);
         i += 1;
     }
-    out
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).to_string())
+}
+
+fn build_windows_filter_string(opts: &Value) -> String {
+    let mut parts = Vec::new();
+    if let Some(filters) = opts.get("filters").and_then(|v| v.as_array()) {
+        for f in filters {
+            let name = f
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Files")
+                .replace('|', " ");
+            if let Some(exts) = f.get("extensions").and_then(|v| v.as_array()) {
+                let patterns: Vec<String> = exts
+                    .iter()
+                    .filter_map(|e| e.as_str())
+                    .map(|e| {
+                        let clean = e.trim_start_matches('.');
+                        if clean == "*" {
+                            "*.*".to_string()
+                        } else {
+                            format!("*.{}", clean)
+                        }
+                    })
+                    .collect();
+                if !patterns.is_empty() {
+                    let joined = patterns.join(";");
+                    parts.push(format!("{} ({})|{}", name, joined, joined));
+                }
+            }
+        }
+    }
+    parts.push("All Files (*.*)|*.*".to_string());
+    parts.join("|")
+}
+
+fn invoke_native_open_dialog(title: &str, is_dir: bool, multiple: bool, opts: &Value) -> Value {
+    let safe_title = title.replace('\'', "''").replace('"', "");
+
+    #[cfg(target_os = "windows")]
+    {
+        let script = if is_dir {
+            format!(
+                "Add-Type -AssemblyName System.Windows.Forms; \
+                 $f = New-Object System.Windows.Forms.FolderBrowserDialog; \
+                 $f.Description = '{}'; \
+                 $f.ShowNewFolderButton = $true; \
+                 $owner = New-Object System.Windows.Forms.Form -Property @{{TopMost = $true}}; \
+                 if ($f.ShowDialog($owner) -eq 'OK') {{ [Console]::Out.Write($f.SelectedPath) }}",
+                safe_title
+            )
+        } else {
+            let filter = build_windows_filter_string(opts).replace('\'', "''");
+            let multi_flag = if multiple { "$true" } else { "$false" };
+            format!(
+                "Add-Type -AssemblyName System.Windows.Forms; \
+                 $f = New-Object System.Windows.Forms.OpenFileDialog; \
+                 $f.Title = '{}'; \
+                 $f.Filter = '{}'; \
+                 $f.Multiselect = {}; \
+                 $owner = New-Object System.Windows.Forms.Form -Property @{{TopMost = $true}}; \
+                 if ($f.ShowDialog($owner) -eq 'OK') {{ \
+                   if ($f.Multiselect) {{ [Console]::Out.Write(($f.FileNames -join \"`n\")) }} \
+                   else {{ [Console]::Out.Write($f.FileName) }} \
+                 }}",
+                safe_title, filter, multi_flag
+            )
+        };
+
+        if let Ok(output) = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-STA",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                &script,
+            ])
+            .stdin(Stdio::null())
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !stdout.is_empty() {
+                if multiple && !is_dir {
+                    let list: Vec<Value> = stdout
+                        .lines()
+                        .map(|l| Value::String(normalize_display_path(l.trim())))
+                        .filter(|v| v.as_str().map(|s| !s.is_empty()).unwrap_or(false))
+                        .collect();
+                    return Value::Array(list);
+                }
+                return Value::String(normalize_display_path(&stdout));
+            }
+        }
+        Value::Null
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (multiple, opts);
+        let script = if is_dir {
+            format!(
+                "POSIX path of (choose folder with prompt \"{}\")",
+                safe_title
+            )
+        } else {
+            format!("POSIX path of (choose file with prompt \"{}\")", safe_title)
+        };
+        if let Ok(output) = Command::new("osascript")
+            .args(["-e", &script])
+            .stdin(Stdio::null())
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if output.status.success() && !stdout.is_empty() {
+                return Value::String(stdout);
+            }
+        }
+        Value::Null
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (multiple, opts);
+        let mut args = vec!["--file-selection", "--title", title];
+        if is_dir {
+            args.push("--directory");
+        }
+        if let Ok(output) = Command::new("zenity")
+            .args(&args)
+            .stdin(Stdio::null())
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if output.status.success() && !stdout.is_empty() {
+                return Value::String(stdout);
+            }
+        }
+        Value::Null
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (safe_title, is_dir, multiple, opts);
+        Value::Null
+    }
+}
+
+fn invoke_native_save_dialog(title: &str, default_path: &str, opts: &Value) -> Value {
+    let safe_title = title.replace('\'', "''").replace('"', "");
+    let safe_default = default_path.replace('\'', "''").replace('"', "");
+
+    #[cfg(target_os = "windows")]
+    {
+        let filter = build_windows_filter_string(opts).replace('\'', "''");
+        let script = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; \
+             $f = New-Object System.Windows.Forms.SaveFileDialog; \
+             $f.Title = '{}'; \
+             $f.Filter = '{}'; \
+             $f.FileName = '{}'; \
+             $owner = New-Object System.Windows.Forms.Form -Property @{{TopMost = $true}}; \
+             if ($f.ShowDialog($owner) -eq 'OK') {{ [Console]::Out.Write($f.FileName) }}",
+            safe_title, filter, safe_default
+        );
+        if let Ok(output) = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-STA",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                &script,
+            ])
+            .stdin(Stdio::null())
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !stdout.is_empty() {
+                return Value::String(normalize_display_path(&stdout));
+            }
+        }
+        Value::Null
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = opts;
+        let script = format!(
+            "POSIX path of (choose file name with prompt \"{}\" default name \"{}\")",
+            safe_title, safe_default
+        );
+        if let Ok(output) = Command::new("osascript")
+            .args(["-e", &script])
+            .stdin(Stdio::null())
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if output.status.success() && !stdout.is_empty() {
+                return Value::String(stdout);
+            }
+        }
+        Value::Null
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = opts;
+        if let Ok(output) = Command::new("zenity")
+            .args([
+                "--file-selection",
+                "--save",
+                "--confirm-overwrite",
+                "--title",
+                title,
+                "--filename",
+                default_path,
+            ])
+            .stdin(Stdio::null())
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if output.status.success() && !stdout.is_empty() {
+                return Value::String(stdout);
+            }
+        }
+        Value::Null
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (safe_title, safe_default, opts);
+        Value::Null
+    }
+}
+
+fn mime_type_for_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "mkv" => "video/x-matroska",
+        "avi" => "video/x-msvideo",
+        "wav" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        "ogg" => "audio/ogg",
+        "flac" => "audio/flac",
+        "aac" | "m4a" => "audio/mp4",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "json" => "application/json",
+        "txt" | "log" | "md" | "csv" | "edl" | "cube" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+fn serve_local_file(stream: &mut TcpStream, query_string: &str, range_header: Option<&str>) {
+    let mut target_path: Option<String> = None;
+    for pair in query_string.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            if k == "path" {
+                target_path = Some(url_decode(v));
+                break;
+            }
+        }
+    }
+
+    let Some(raw_path) = target_path else {
+        let _ = write_http_response(stream, 400, "text/plain", b"Missing path query parameter");
+        return;
+    };
+
+    let clean_path = normalize_display_path(&raw_path);
+    let path_obj = Path::new(&clean_path);
+    if !path_obj.exists() || !path_obj.is_file() {
+        let _ = write_http_response(stream, 404, "text/plain", b"File not found");
+        return;
+    }
+
+    let mut file = match File::open(path_obj) {
+        Ok(f) => f,
+        Err(_) => {
+            let _ = write_http_response(stream, 404, "text/plain", b"Cannot open file");
+            return;
+        }
+    };
+
+    let total_size = match file.metadata() {
+        Ok(m) => m.len(),
+        Err(_) => {
+            let _ = write_http_response(stream, 500, "text/plain", b"Metadata error");
+            return;
+        }
+    };
+
+    let content_type = mime_type_for_path(path_obj);
+
+    if let Some(range_str) = range_header {
+        if let Some(byte_spec) = range_str.strip_prefix("bytes=") {
+            let (start_str, end_str) = byte_spec.split_once('-').unwrap_or((byte_spec, ""));
+            let start = start_str.trim().parse::<u64>().unwrap_or(0);
+            let max_chunk = 8 * 1024 * 1024u64; // 8 MB per range chunk
+            let end = if end_str.trim().is_empty() {
+                (start + max_chunk - 1).min(total_size.saturating_sub(1))
+            } else {
+                end_str
+                    .trim()
+                    .parse::<u64>()
+                    .unwrap_or_else(|_| total_size.saturating_sub(1))
+                    .min(total_size.saturating_sub(1))
+            };
+
+            if start < total_size && start <= end {
+                let length = (end - start + 1) as usize;
+                if file.seek(SeekFrom::Start(start)).is_ok() {
+                    let mut buf = vec![0u8; length];
+                    if file.read_exact(&mut buf).is_ok() {
+                        let header = format!(
+                            "HTTP/1.1 206 Partial Content\r\nContent-Type: {}\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+                            content_type,
+                            buf.len(),
+                            start,
+                            end,
+                            total_size
+                        );
+                        let _ = stream.write_all(header.as_bytes());
+                        let _ = stream.write_all(&buf);
+                        let _ = stream.flush();
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    // Standard full-file response (capped at 64 MB for non-range requests)
+    let read_len = (total_size as usize).min(64 * 1024 * 1024);
+    let mut buf = vec![0u8; read_len];
+    if file.read_exact(&mut buf).is_ok() {
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+            content_type,
+            buf.len()
+        );
+        let _ = stream.write_all(header.as_bytes());
+        let _ = stream.write_all(&buf);
+        let _ = stream.flush();
+    } else {
+        let _ = write_http_response(stream, 500, "text/plain", b"Read error");
+    }
 }
 
 fn execute_self_test(
@@ -660,5 +1253,54 @@ fn spawn_native_app_window(url: &str, bundle: &EmbeddedUiBundle) -> Option<Child
     {
         let _ = (app_arg, size_arg, profile_arg);
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_url_decode_utf8_and_plus() {
+        assert_eq!(url_decode("hello%20world+test"), "hello world test");
+        assert_eq!(
+            url_decode("H%3A%5Crustapps%5C%E6%97%A5%E6%9C%AC"),
+            r"H:\rustapps\日本"
+        );
+    }
+
+    #[test]
+    fn test_normalize_display_path_strips_verbatim_prefix() {
+        assert_eq!(normalize_display_path(r"\\?\H:\rustapps"), r"H:\rustapps");
+        assert_eq!(normalize_display_path(r"\\?\H:\"), r"H:\");
+        assert_eq!(
+            normalize_display_path(r"\\?\UNC\server\share\folder"),
+            r"\\server\share\folder"
+        );
+        assert_eq!(normalize_display_path("/home/user/docs"), "/home/user/docs");
+    }
+
+    #[test]
+    fn test_enumerate_drives_and_places_returns_non_empty() {
+        let places = enumerate_drives_and_places();
+        assert!(!places.is_empty());
+        assert!(places
+            .iter()
+            .any(|p| p.kind == "drive" || p.kind == "quick_access"));
+    }
+
+    #[test]
+    fn test_mime_type_detection() {
+        assert_eq!(mime_type_for_path(Path::new("clip.mp4")), "video/mp4");
+        assert_eq!(mime_type_for_path(Path::new("voice.wav")), "audio/wav");
+        assert_eq!(mime_type_for_path(Path::new("frame.png")), "image/png");
+    }
+
+    #[test]
+    fn test_bridge_injection_includes_dialog_and_fs() {
+        let html = inject_bridge_into_html("<html><head></head><body></body></html>", "TestApp");
+        assert!(html.contains("window.__TAURI__.dialog"));
+        assert!(html.contains("window.__TAURI__.fs"));
+        assert!(html.contains("<title>TestApp</title>"));
     }
 }

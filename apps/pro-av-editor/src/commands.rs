@@ -5,7 +5,9 @@
 
 use crate::audio_engine::LoudnessMeterData;
 use crate::color::VideoScopeData;
-use crate::models::{Clip, ColorGradingSettings, TimelineProject};
+use crate::models::{
+    BlendMode, Clip, ColorGradingSettings, TimelineProject, TrackType, Transform2D,
+};
 use crate::service::EditorService;
 use crate::templates::{ExportPreset, ProjectTemplate};
 use serde_json::{json, Value};
@@ -37,7 +39,8 @@ pub fn create_project_cmd(
     if let Some(tid) = template_id {
         *svc = EditorService::from_template(&tid, &name).map_err(|e| e.to_string())?;
     } else {
-        *svc = EditorService::new();
+        *svc = EditorService::from_template("tpl_standard_video", &name)
+            .unwrap_or_else(|_| EditorService::new());
     }
 
     svc.get_project().map_err(|e| e.to_string())
@@ -55,6 +58,53 @@ pub fn load_project_cmd(path: String) -> Result<TimelineProject, String> {
     let service = get_service();
     let svc = service.lock().map_err(|e| e.to_string())?;
     svc.load_project(path).map_err(|e| e.to_string())?;
+    svc.get_project().map_err(|e| e.to_string())
+}
+
+/// Import a local media file into the project's media pool and optionally append it onto the timeline
+pub fn import_media_file_cmd(
+    file_path: String,
+    auto_add_to_timeline: bool,
+) -> Result<TimelineProject, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.import_media_file(&file_path, auto_add_to_timeline)
+        .map_err(|e| e.to_string())?;
+    svc.get_project().map_err(|e| e.to_string())
+}
+
+/// Add a media source from `media_pool` onto a timeline track
+pub fn add_media_to_timeline_cmd(
+    source_id: String,
+    track_id: Option<String>,
+    timeline_in_ms: Option<u64>,
+) -> Result<TimelineProject, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.add_media_to_timeline(&source_id, track_id.as_deref(), timeline_in_ms)
+        .map_err(|e| e.to_string())?;
+    svc.get_project().map_err(|e| e.to_string())
+}
+
+/// Add a new track to the timeline
+pub fn add_track_cmd(name: String, track_type: TrackType) -> Result<TimelineProject, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.add_track(&name, track_type)
+        .map_err(|e| e.to_string())?;
+    svc.get_project().map_err(|e| e.to_string())
+}
+
+/// Move a clip to a new timeline position and optionally a different track
+pub fn move_clip_cmd(
+    clip_id: String,
+    track_id: Option<String>,
+    timeline_in_ms: u64,
+) -> Result<TimelineProject, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.move_clip(&clip_id, track_id.as_deref(), timeline_in_ms)
+        .map_err(|e| e.to_string())?;
     svc.get_project().map_err(|e| e.to_string())
 }
 
@@ -370,13 +420,172 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             save_project_cmd(path.clone())?;
             Ok(json!(path))
         }
-        "load_project_cmd" => {
+        "load_project_cmd" | "open_project_cmd" => {
             let path = args
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing path".to_string())?
                 .to_string();
             let res = load_project_cmd(path)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "import_media_file_cmd" => {
+            let file_path = args
+                .get("filePath")
+                .or_else(|| args.get("file_path"))
+                .or_else(|| args.get("path"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing filePath".to_string())?
+                .to_string();
+            let auto_add = args
+                .get("autoAddToTimeline")
+                .or_else(|| args.get("auto_add_to_timeline"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let res = import_media_file_cmd(file_path, auto_add)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "add_media_to_timeline_cmd" => {
+            let source_id = args
+                .get("sourceId")
+                .or_else(|| args.get("source_id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing sourceId".to_string())?
+                .to_string();
+            let track_id = args
+                .get("trackId")
+                .or_else(|| args.get("track_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let timeline_in_ms = args
+                .get("timelineInMs")
+                .or_else(|| args.get("timeline_in_ms"))
+                .and_then(|v| v.as_u64());
+            let res = add_media_to_timeline_cmd(source_id, track_id, timeline_in_ms)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "add_track_cmd" => {
+            let name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let track_type_str = args
+                .get("trackType")
+                .or_else(|| args.get("track_type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("Video");
+            let track_type = match track_type_str.to_ascii_lowercase().as_str() {
+                "audio" => TrackType::Audio,
+                "subtitle" => TrackType::Subtitle,
+                "adjustment" => TrackType::Adjustment,
+                _ => TrackType::Video,
+            };
+            let res = add_track_cmd(name, track_type)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "move_clip_cmd" => {
+            let clip_id = args
+                .get("clipId")
+                .or_else(|| args.get("clip_id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing clipId".to_string())?
+                .to_string();
+            let track_id = args
+                .get("trackId")
+                .or_else(|| args.get("track_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let timeline_in_ms = args
+                .get("timelineInMs")
+                .or_else(|| args.get("timeline_in_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let res = move_clip_cmd(clip_id, track_id, timeline_in_ms)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "update_clip_properties_cmd" => {
+            let clip_id = args
+                .get("clipId")
+                .or_else(|| args.get("clip_id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing clipId".to_string())?
+                .to_string();
+            let name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let timeline_in_ms = args
+                .get("timelineInMs")
+                .or_else(|| args.get("timeline_in_ms"))
+                .and_then(|v| v.as_u64());
+            let timeline_out_ms = args
+                .get("timelineOutMs")
+                .or_else(|| args.get("timeline_out_ms"))
+                .and_then(|v| v.as_u64());
+            let speed_multiplier = args
+                .get("speedMultiplier")
+                .or_else(|| args.get("speed_multiplier"))
+                .and_then(|v| v.as_f64())
+                .map(|f| f as f32);
+            let opacity = args
+                .get("opacity")
+                .and_then(|v| v.as_f64())
+                .map(|f| f as f32);
+            let volume = args
+                .get("volume")
+                .and_then(|v| v.as_f64())
+                .map(|f| f as f32);
+            let pan = args.get("pan").and_then(|v| v.as_f64()).map(|f| f as f32);
+            let blend_mode: Option<BlendMode> = args
+                .get("blendMode")
+                .or_else(|| args.get("blend_mode"))
+                .cloned()
+                .and_then(|v| serde_json::from_value(v).ok());
+            let transform: Option<Transform2D> = args
+                .get("transform")
+                .cloned()
+                .and_then(|v| serde_json::from_value(v).ok());
+
+            let service = get_service();
+            let svc = service.lock().map_err(|e| e.to_string())?;
+            svc.update_clip_properties(
+                &clip_id,
+                name,
+                timeline_in_ms,
+                timeline_out_ms,
+                speed_multiplier,
+                opacity,
+                volume,
+                pan,
+                blend_mode,
+                transform,
+            )
+            .map_err(|e| e.to_string())?;
+            let res = svc.get_project().map_err(|e| e.to_string())?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "update_media_duration_cmd" => {
+            let source_id = args
+                .get("sourceId")
+                .or_else(|| args.get("source_id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing sourceId".to_string())?;
+            let duration_ms = args
+                .get("durationMs")
+                .or_else(|| args.get("duration_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let width = args.get("width").and_then(|v| v.as_u64()).map(|w| w as u32);
+            let height = args
+                .get("height")
+                .and_then(|v| v.as_u64())
+                .map(|h| h as u32);
+            let service = get_service();
+            let svc = service.lock().map_err(|e| e.to_string())?;
+            svc.update_media_duration(source_id, duration_ms, width, height)
+                .map_err(|e| e.to_string())?;
+            let res = svc.get_project().map_err(|e| e.to_string())?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "add_clip_cmd" => {
@@ -631,5 +840,24 @@ mod tests {
 
         let scopes = get_video_scopes_cmd(0, 64, 36).unwrap();
         assert_eq!(scopes.histogram_r.len(), 256);
+
+        // Verify real BMP image import, media pool registration, track addition, and clip movement
+        let tmp_bmp = std::env::temp_dir().join("pave_test_import_image.bmp");
+        let frame = crate::compositor::VideoFrame::new_solid(4, 4, 255, 64, 32, 255, 0);
+        let bmp_bytes = frame.encode_to_bmp();
+        std::fs::write(&tmp_bmp, &bmp_bytes).unwrap();
+
+        let imported_proj =
+            import_media_file_cmd(tmp_bmp.to_string_lossy().to_string(), true).unwrap();
+        assert!(!imported_proj.media_pool.is_empty());
+
+        let track_proj = add_track_cmd("Overlay Video 2".to_string(), TrackType::Video).unwrap();
+        assert!(track_proj.tracks.len() >= 4);
+
+        let first_clip_id = track_proj.tracks[0].clips[0].id.clone();
+        let moved_proj = move_clip_cmd(first_clip_id, None, 250).unwrap();
+        assert_eq!(moved_proj.tracks[0].clips[0].timeline_in_ms, 250);
+
+        let _ = std::fs::remove_file(&tmp_bmp);
     }
 }

@@ -5,11 +5,15 @@
   export let errorMessage: string = '';
   export let isLoading: boolean = false;
   export let biometricAvailable: boolean = true;
+  export let vaultPath: string = '';
 
   let masterPassword = '';
   let confirmPassword = '';
   let showPassword = false;
   let shakeError = false;
+  let confirmResetMode = false;
+  let showSwitchPathInput = false;
+  let customVaultPath = '';
 
   const dispatch = createEventDispatcher();
 
@@ -36,6 +40,35 @@
   function handleBiometric() {
     dispatch('biometricUnlock');
   }
+
+  async function handleBrowseVaultFile() {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const tauri = (window as any).__TAURI__;
+      if (tauri?.dialog?.open) {
+        const picked = await tauri.dialog.open({
+          title: 'Open or Select DevOps Secret Vault Database (.db)',
+          directory: false,
+          multiple: false,
+          filters: 'Vault Database (*.db;*.sqlite)|*.db;*.sqlite|All Files (*.*)|*.*',
+        });
+        if (typeof picked === 'string' && picked.trim()) {
+          dispatch('switchVault', { path: picked.trim() });
+          return;
+        }
+      }
+    } catch (e) {
+      console.error('Vault file dialog error:', e);
+    }
+    customVaultPath = vaultPath;
+    showSwitchPathInput = !showSwitchPathInput;
+  }
+
+  function applyCustomVaultPath() {
+    if (!customVaultPath.trim()) return;
+    showSwitchPathInput = false;
+    dispatch('switchVault', { path: customVaultPath.trim() });
+  }
 </script>
 
 <div class="modal-backdrop">
@@ -56,6 +89,13 @@
         ? 'Enter your master passphrase or use hardware biometrics to decrypt in-memory keys.'
         : 'Set a strong master passphrase. It will derive your 256-bit AES master key via Argon2id.'}
     </p>
+
+    {#if vaultPath}
+      <div class="vault-path-pill" title={vaultPath}>
+        <span>🗄️ Vault DB:</span>
+        <code>{vaultPath}</code>
+      </div>
+    {/if}
 
     {#if errorMessage}
       <div class="error-banner">
@@ -172,6 +212,58 @@
             </svg>
             Emergency Shamir Recovery
           </button>
+        {/if}
+
+        <div class="vault-recovery-row">
+          <button
+            type="button"
+            class="btn btn-secondary-action"
+            on:click={handleBrowseVaultFile}
+            disabled={isLoading}
+            title="Switch to a different .db vault file on disk"
+          >
+            📂 Switch Vault File...
+          </button>
+
+          {#if isInitialized}
+            {#if !confirmResetMode}
+              <button
+                type="button"
+                class="btn btn-reset-action"
+                on:click={() => { confirmResetMode = true; }}
+                disabled={isLoading}
+                title="Reset vault database and create a new master passphrase"
+              >
+                🔄 Reset / Create New Vault
+              </button>
+            {:else}
+              <button
+                type="button"
+                class="btn btn-danger-confirm"
+                on:click={() => {
+                  confirmResetMode = false;
+                  masterPassword = '';
+                  confirmPassword = '';
+                  dispatch('resetVault');
+                }}
+                disabled={isLoading}
+              >
+                ⚠️ Confirm Wipe &amp; Create New
+              </button>
+            {/if}
+          {/if}
+        </div>
+
+        {#if showSwitchPathInput}
+          <div class="switch-path-row">
+            <input
+              type="text"
+              bind:value={customVaultPath}
+              placeholder="Enter .db file path (e.g. C:\vaults\team_vault.db)..."
+              on:keydown={(e) => e.key === 'Enter' && applyCustomVaultPath()}
+            />
+            <button type="button" class="btn btn-primary" on:click={applyCustomVaultPath}>Open</button>
+          </div>
         {/if}
       </div>
     </form>
@@ -345,6 +437,83 @@
     background: rgba(168, 85, 247, 0.2);
     border-color: rgba(168, 85, 247, 0.4);
     color: #e9d5ff;
+  }
+
+  .vault-path-pill {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(15, 23, 42, 0.65);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 14px;
+    overflow: hidden;
+  }
+
+  .vault-path-pill code {
+    font-family: var(--font-mono);
+    color: var(--accent-cyan);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .vault-recovery-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .btn-secondary-action {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+
+  .btn-secondary-action:hover {
+    background: rgba(255, 255, 255, 0.09);
+    color: #ffffff;
+  }
+
+  .btn-reset-action {
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: #fcd34d;
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+
+  .btn-reset-action:hover {
+    background: rgba(245, 158, 11, 0.2);
+    border-color: rgba(245, 158, 11, 0.5);
+  }
+
+  .btn-danger-confirm {
+    background: rgba(239, 68, 68, 0.25);
+    border: 1px solid #ef4444;
+    color: #fecaca;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .switch-path-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+  }
+
+  .switch-path-row input {
+    flex: 1;
+    font-size: 12px;
+    padding: 6px 10px;
   }
 
   .security-footer {

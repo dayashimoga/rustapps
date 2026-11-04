@@ -58,9 +58,18 @@ pub fn detect_language_cmd(text: String) -> Result<Option<crate::lid::LidResult>
 
 /// Text translation command
 pub fn translate_text_cmd(request: TranslationRequest) -> Result<TranslationResponse, String> {
+    translate_text_with_options_cmd(request, true)
+}
+
+/// Text translation command with explicit history recording flag
+pub fn translate_text_with_options_cmd(
+    request: TranslationRequest,
+    record_history: bool,
+) -> Result<TranslationResponse, String> {
     let service = get_service();
     let svc = service.lock().map_err(|e| e.to_string())?;
-    svc.translate_text(&request).map_err(|e| e.to_string())
+    svc.translate_text_with_options(&request, record_history)
+        .map_err(|e| e.to_string())
 }
 
 /// Speech synthesis command returning WAV bytes
@@ -68,6 +77,29 @@ pub fn synthesize_speech_cmd(request: TtsSynthesisRequest) -> Result<TtsSynthesi
     let service = get_service();
     let svc = service.lock().map_err(|e| e.to_string())?;
     svc.synthesize_speech(&request).map_err(|e| e.to_string())
+}
+
+/// Offline speech recognition command consuming 16kHz mono float PCM samples
+pub fn recognize_speech_cmd(
+    pcm: Vec<f32>,
+    language_str: String,
+) -> Result<Vec<crate::models::TranscriptSegment>, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    let language = LanguageCode::parse(&language_str).unwrap_or(LanguageCode::En);
+    svc.recognize_speech(&pcm, language)
+        .map_err(|e| e.to_string())
+}
+
+/// Offline speech recognition command from a local .wav file path
+pub fn recognize_audio_file_cmd(
+    file_path: String,
+    language_str: String,
+) -> Result<Vec<crate::models::TranscriptSegment>, String> {
+    let bytes = std::fs::read(&file_path)
+        .map_err(|e| format!("Failed to read audio file '{}': {}", file_path, e))?;
+    let pcm = crate::speech::decode_wav_to_16khz_mono(&bytes).map_err(|e| e.to_string())?;
+    recognize_speech_cmd(pcm, language_str)
 }
 
 /// Subtitle translation command (.srt or .vtt)
@@ -348,6 +380,14 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
                 .filter(|s| !s.trim().is_empty())
                 .map(|s| s.to_string());
 
+            let record_history = req_obj
+                .get("recordHistory")
+                .or_else(|| req_obj.get("record_history"))
+                .or_else(|| args.get("recordHistory"))
+                .or_else(|| args.get("record_history"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+
             let req = TranslationRequest {
                 source_lang,
                 target_lang,
@@ -355,7 +395,7 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
                 preserve_formatting,
                 domain_glossary,
             };
-            let res = translate_text_cmd(req)?;
+            let res = translate_text_with_options_cmd(req, record_history)?;
             Ok(json!({
                 "originalText": res.original_text,
                 "translatedText": res.translated_text,
@@ -403,6 +443,54 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
                 "channels": 1,
                 "durationMs": (res.duration_secs * 1000.0) as u64,
                 "audioWavBase64": base64_encode(&res.wav_bytes)
+            }))
+        }
+        "recognize_speech_cmd" => {
+            let language_str = args
+                .get("language")
+                .or_else(|| args.get("languageStr"))
+                .or_else(|| args.get("language_str"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("en")
+                .to_string();
+
+            let segments = if let Some(file_path) = args
+                .get("filePath")
+                .or_else(|| args.get("file_path"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+            {
+                recognize_audio_file_cmd(file_path.to_string(), language_str)?
+            } else {
+                let pcm: Vec<f32> = args
+                    .get("pcm")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|x| x.as_f64().unwrap_or(0.0) as f32)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                recognize_speech_cmd(pcm, language_str)?
+            };
+
+            let full_text = segments
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_string();
+            let avg_conf = if segments.is_empty() {
+                0.0
+            } else {
+                segments.iter().map(|s| s.confidence).sum::<f32>() / (segments.len() as f32)
+            };
+
+            Ok(json!({
+                "text": full_text,
+                "confidence": avg_conf,
+                "segments": segments
             }))
         }
         "translate_subtitles_cmd" => {

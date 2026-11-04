@@ -8,6 +8,8 @@
   export let onToggleSelect: (path: string) => void;
   export let onSelectAll: () => void;
   export let onDeselectAll: () => void;
+  export let onInspectFile: (filePath: string) => void = () => {};
+  export let onOpenInOs: (path: string) => void = () => {};
 
   function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B';
@@ -67,14 +69,15 @@
           <th>Name</th>
           <th style="width: 100px;">Type</th>
           <th style="width: 120px;">Size</th>
-          <th style="width: 180px;">Modified</th>
+          <th style="width: 170px;">Modified</th>
+          <th style="width: 130px; text-align: right;">Actions</th>
         </tr>
       </thead>
       <tbody>
         <!-- Parent Directory Navigation -->
-        <tr class="row-clickable parent-row" on:dblclick={onNavigateUp}>
+        <tr class="row-clickable parent-row" on:click={onNavigateUp}>
           <td></td>
-          <td colspan="4" class="name-cell">
+          <td colspan="5" class="name-cell">
             <svg class="folder-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
             </svg>
@@ -84,7 +87,7 @@
 
         {#if items.length === 0}
           <tr>
-            <td colspan="5" class="empty-state">
+            <td colspan="6" class="empty-state">
               <p>Folder is empty</p>
             </td>
           </tr>
@@ -93,9 +96,18 @@
             {@const isSelected = selectedPaths.includes(item.path)}
             <tr
               class="row-clickable {isSelected ? 'row-selected' : ''}"
+              on:click={() => {
+                if (item.is_dir) {
+                  onNavigateToFolder(item.path);
+                } else {
+                  onInspectFile(item.path);
+                }
+              }}
               on:dblclick={() => {
                 if (item.is_dir) {
                   onNavigateToFolder(item.path);
+                } else {
+                  onInspectFile(item.path);
                 }
               }}
             >
@@ -137,6 +149,15 @@
 
               <td class="date-cell">
                 {formatDate(item.modified_timestamp_secs)}
+              </td>
+
+              <td class="action-cell" on:click|stopPropagation>
+                {#if item.is_dir}
+                  <button class="mini-action-btn" on:click={() => onNavigateToFolder(item.path)}>Open</button>
+                {:else}
+                  <button class="mini-action-btn" on:click={() => onInspectFile(item.path)}>Preview</button>
+                {/if}
+                <button class="mini-action-btn secondary" on:click={() => onOpenInOs(item.path)} title="Open in OS Default Application">OS</button>
               </td>
             </tr>
           {/each}
@@ -290,5 +311,38 @@
     text-align: center;
     padding: 40px;
     color: var(--text-faint);
+  }
+
+  .action-cell {
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .mini-action-btn {
+    background: rgba(6, 182, 212, 0.14);
+    border: 1px solid rgba(6, 182, 212, 0.35);
+    color: var(--accent-cyan);
+    border-radius: 5px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-left: 4px;
+    transition: all 0.15s ease;
+  }
+
+  .mini-action-btn:hover {
+    background: rgba(6, 182, 212, 0.28);
+  }
+
+  .mini-action-btn.secondary {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.15);
+    color: var(--text-muted);
+  }
+
+  .mini-action-btn.secondary:hover {
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.12);
   }
 </style>

@@ -16,6 +16,7 @@
 
   const dispatch = createEventDispatcher<{
     openFile: void;
+    openPath: string;
     toggleTail: void;
     search: { query: string; isRegex: boolean; caseSensitive: boolean };
     jumpLine: number;
@@ -26,6 +27,16 @@
   }>();
 
   let jumpLineInput: string = '';
+  let directPathInput: string = '';
+  $: if (filePath && !directPathInput) {
+    directPathInput = filePath;
+  }
+
+  function handleDirectPathSubmit() {
+    if (directPathInput.trim()) {
+      dispatch('openPath', directPathInput.trim());
+    }
+  }
 
   function handleSearchInput() {
     dispatch('search', { query: searchQuery, isRegex, caseSensitive });
@@ -77,6 +88,17 @@
       </svg>
       Open Log
     </button>
+
+    <form class="direct-path-form" on:submit|preventDefault={handleDirectPathSubmit}>
+      <input
+        type="text"
+        class="direct-path-input"
+        placeholder="C:\logs\app.log or drop file..."
+        bind:value={directPathInput}
+        title="Enter absolute log file path and press Enter"
+      />
+      <button type="submit" class="direct-path-btn" title="Load Log Path">Load</button>
+    </form>
   </div>
 
   <!-- Central Search Omnibar -->
@@ -230,8 +252,38 @@
   .brand-group {
     display: flex;
     align-items: center;
-    gap: 12px;
-    min-width: 260px;
+    gap: 10px;
+    min-width: 380px;
+  }
+
+  .direct-path-form {
+    display: flex;
+    align-items: center;
+    background: hsla(222, 24%, 6%, 0.9);
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    padding: 2px 4px 2px 8px;
+  }
+
+  .direct-path-input {
+    width: 155px;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    outline: none;
+  }
+
+  .direct-path-btn {
+    background: hsla(217, 91%, 60%, 0.18);
+    border: 1px solid hsla(217, 91%, 60%, 0.4);
+    color: var(--accent-blue);
+    border-radius: 5px;
+    padding: 3px 7px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
   }
 
   .app-icon {

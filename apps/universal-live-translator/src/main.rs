@@ -35,11 +35,19 @@ impl DesktopIpcHandler for TranslatorDesktopHandler {
                 command: "translate_text_cmd",
                 payload: json!({
                     "request": {
-                        "text": "Hello world",
-                        "sourceLang": "en",
-                        "targetLang": "es",
-                        "preserveFormatting": true
+                        "text": "muchos gracias",
+                        "sourceLang": null,
+                        "targetLang": "en",
+                        "preserveFormatting": true,
+                        "recordHistory": false
                     }
+                }),
+            },
+            SelfTestCheck {
+                command: "recognize_speech_cmd",
+                payload: json!({
+                    "language": "en",
+                    "pcm": vec![0.35f32; 8000]
                 }),
             },
             SelfTestCheck {

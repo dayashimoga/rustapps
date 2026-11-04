@@ -21,6 +21,18 @@ pub enum CrawlerError {
     Cancelled,
 }
 
+/// Normalize a filesystem path by removing Windows verbatim prefixes (`\\?\` or `\\?\UNC\`).
+pub fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{}", rest))
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// Filesystem crawler and directory inspector
 pub struct FileCrawler;
 
@@ -35,8 +47,9 @@ impl FileCrawler {
             return Err(CrawlerError::NotADirectory(path.to_path_buf()));
         }
 
-        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let parent_path = canonical.parent().map(|p| p.to_path_buf());
+        let canonical_raw = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canonical = strip_verbatim_prefix(&canonical_raw);
+        let parent_path = canonical.parent().map(strip_verbatim_prefix);
 
         let mut items = Vec::new();
         let mut total_size_bytes = 0u64;
@@ -48,7 +61,7 @@ impl FileCrawler {
                 Err(_) => continue, // Skip unreadable entries gracefully
             };
 
-            let entry_path = entry.path();
+            let entry_path = strip_verbatim_prefix(&entry.path());
             let metadata = match entry.metadata() {
                 Ok(m) => m,
                 Err(_) => continue,

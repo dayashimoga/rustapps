@@ -131,6 +131,19 @@ export interface TimelineMarker {
   color_hex: string;
 }
 
+export interface MediaSource {
+  id: string;
+  file_path: string;
+  duration_ms: number;
+  width: number;
+  height: number;
+  fps: number;
+  sample_rate: number;
+  channels: number;
+  has_video: boolean;
+  has_audio: boolean;
+}
+
 export interface ProjectSettings {
   width: number;
   height: number;
@@ -147,6 +160,7 @@ export interface TimelineProject {
   tracks: Track[];
   transitions: Transition[];
   markers: TimelineMarker[];
+  media_pool?: MediaSource[];
   created_at_secs: number;
   updated_at_secs: number;
 }
@@ -209,8 +223,24 @@ declare global {
   interface Window {
     __TAURI__?: {
       invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+      dialog?: {
+        open: (opts?: Record<string, unknown>) => Promise<string | null>;
+        save: (opts?: Record<string, unknown>) => Promise<string | null>;
+      };
+      fs?: {
+        getDrivesAndPlaces: () => Promise<unknown>;
+        fileUrl: (path: string) => string;
+      };
     };
   }
+}
+
+export function getMediaFileUrl(filePath: string): string {
+  if (!filePath) return '';
+  if (typeof window !== 'undefined' && window.__TAURI__?.fs?.fileUrl) {
+    return window.__TAURI__.fs.fileUrl(filePath);
+  }
+  return '/__file?path=' + encodeURIComponent(filePath);
 }
 
 export async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {

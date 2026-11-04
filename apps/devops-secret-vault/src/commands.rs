@@ -19,6 +19,8 @@ pub struct VaultAppState {
 pub struct VaultStatusResponse {
     pub is_initialized: bool,
     pub is_locked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault_path: Option<String>,
 }
 
 /// Check vault initialization and lock status
@@ -28,6 +30,7 @@ pub async fn get_vault_status(service: &VaultService) -> Result<VaultStatusRespo
     Ok(VaultStatusResponse {
         is_initialized,
         is_locked,
+        vault_path: get_active_vault_db_path(),
     })
 }
 
@@ -283,23 +286,62 @@ pub async fn unlock_with_shamir_shares(
         .map_err(|e| e.to_string())
 }
 
-static DEFAULT_VAULT_SERVICE: std::sync::OnceLock<Arc<VaultService>> = std::sync::OnceLock::new();
+type VaultServiceHolder = std::sync::RwLock<(std::path::PathBuf, Arc<VaultService>)>;
 
-pub fn get_default_vault_service() -> Result<Arc<VaultService>, String> {
-    if let Some(svc) = DEFAULT_VAULT_SERVICE.get() {
-        return Ok(Arc::clone(svc));
-    }
-    let db_path = if let Ok(env_path) = std::env::var("VAULT_DB_PATH") {
+static DEFAULT_VAULT_SERVICE: std::sync::OnceLock<VaultServiceHolder> = std::sync::OnceLock::new();
+
+fn resolve_default_db_path() -> std::path::PathBuf {
+    if let Ok(env_path) = std::env::var("VAULT_DB_PATH") {
         std::path::PathBuf::from(env_path)
     } else if let Ok(paths) = platform_common::AppPaths::from_app_name("devops-secret-vault") {
+        let _ = paths.ensure_directories();
         paths.data_dir.join("devops_vault.db")
     } else {
         std::path::PathBuf::from("devops_vault.db")
-    };
+    }
+}
+
+pub fn get_active_vault_db_path() -> Option<String> {
+    if let Some(lock) = DEFAULT_VAULT_SERVICE.get() {
+        if let Ok(guard) = lock.read() {
+            return Some(guard.0.to_string_lossy().to_string());
+        }
+    }
+    Some(resolve_default_db_path().to_string_lossy().to_string())
+}
+
+pub fn get_default_vault_service() -> Result<Arc<VaultService>, String> {
+    if let Some(lock) = DEFAULT_VAULT_SERVICE.get() {
+        let guard = lock.read().map_err(|e| e.to_string())?;
+        return Ok(Arc::clone(&guard.1));
+    }
+    let db_path = resolve_default_db_path();
     let storage = crate::storage::VaultStorage::open(&db_path).map_err(|e| e.to_string())?;
     let svc = Arc::new(VaultService::new(storage, None));
-    let _ = DEFAULT_VAULT_SERVICE.set(Arc::clone(&svc));
+    let _ = DEFAULT_VAULT_SERVICE.set(std::sync::RwLock::new((db_path, Arc::clone(&svc))));
     Ok(svc)
+}
+
+pub fn switch_vault_db_path(new_path: &str) -> Result<Arc<VaultService>, String> {
+    let trimmed = new_path.trim();
+    if trimmed.is_empty() {
+        return Err("Vault database file path cannot be empty.".to_string());
+    }
+    let path_buf = std::path::PathBuf::from(trimmed);
+    if let Some(parent) = path_buf.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+    let storage = crate::storage::VaultStorage::open(&path_buf).map_err(|e| e.to_string())?;
+    let new_svc = Arc::new(VaultService::new(storage, None));
+    if let Some(lock) = DEFAULT_VAULT_SERVICE.get() {
+        let mut guard = lock.write().map_err(|e| e.to_string())?;
+        *guard = (path_buf, Arc::clone(&new_svc));
+    } else {
+        let _ = DEFAULT_VAULT_SERVICE.set(std::sync::RwLock::new((path_buf, Arc::clone(&new_svc))));
+    }
+    Ok(new_svc)
 }
 
 /// Dispatch desktop IPC commands from the Svelte 5 DevOps Secret Vault UI
@@ -340,6 +382,30 @@ pub fn dispatch_ipc_command(
             "lock_vault" => {
                 lock_vault(&svc).await?;
                 Ok(serde_json::json!(true))
+            }
+            "reset_vault" => {
+                svc.reset_vault().await.map_err(|e| e.to_string())?;
+                if let Some(pw) = args
+                    .get("masterPassword")
+                    .or_else(|| args.get("master_password"))
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    initialize_vault(&svc, pw).await?;
+                }
+                let status = get_vault_status(&svc).await?;
+                serde_json::to_value(status).map_err(|e| e.to_string())
+            }
+            "switch_vault_db" => {
+                let db_path = args
+                    .get("path")
+                    .or_else(|| args.get("dbPath"))
+                    .or_else(|| args.get("db_path"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let new_svc = switch_vault_db_path(db_path)?;
+                let status = get_vault_status(&new_svc).await?;
+                serde_json::to_value(status).map_err(|e| e.to_string())
             }
             "list_secrets" => {
                 let list = list_secrets(&svc).await?;

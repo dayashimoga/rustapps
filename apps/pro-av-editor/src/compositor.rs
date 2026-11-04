@@ -166,8 +166,13 @@ impl LayerCompositor {
             // Find active clip at timestamp
             if let Some(clip) = track.clip_at(timestamp_ms) {
                 // Generate layer pixel frame for this clip
-                let layer_frame =
-                    Self::render_clip_layer(clip, timestamp_ms, render_width, render_height)?;
+                let layer_frame = Self::render_clip_layer(
+                    clip,
+                    project,
+                    timestamp_ms,
+                    render_width,
+                    render_height,
+                )?;
 
                 // Composite layer frame onto target buffer
                 Self::composite_layer(
@@ -199,10 +204,26 @@ impl LayerCompositor {
     /// Synthesize or render layer content for an individual clip
     fn render_clip_layer(
         clip: &Clip,
+        project: &TimelineProject,
         timestamp_ms: u64,
         render_width: u32,
         render_height: u32,
     ) -> Result<VideoFrame, CompositorError> {
+        let resolved_file_path = clip.source_id.as_ref().and_then(|sid| {
+            project
+                .media_pool
+                .iter()
+                .find(|m| m.id == *sid)
+                .map(|m| m.file_path.clone())
+                .or_else(|| {
+                    if std::path::Path::new(sid).exists() {
+                        Some(sid.clone())
+                    } else {
+                        None
+                    }
+                })
+        });
+
         let mut frame = match clip.clip_type {
             ClipType::ColorSolid => {
                 // Procedural color solid based on clip hash
@@ -244,7 +265,49 @@ impl LayerCompositor {
                 f
             }
             ClipType::Video | ClipType::Image | ClipType::Adjustment => {
-                // Generate test gradient / visual grid simulating active media frame
+                if let Some(ref fpath) = resolved_file_path {
+                    if let Ok(bytes) = std::fs::read(fpath) {
+                        if let Ok((src_w, src_h, src_rgba)) =
+                            shared_ai_core::ImageDecoder::decode_rgba(&bytes)
+                        {
+                            if src_w > 0 && src_h > 0 {
+                                let mut f = VideoFrame::new_black(
+                                    render_width,
+                                    render_height,
+                                    timestamp_ms,
+                                );
+                                for y in 0..render_height {
+                                    let sy = ((y as u64 * src_h as u64)
+                                        / render_height.max(1) as u64)
+                                        .min((src_h - 1) as u64)
+                                        as u32;
+                                    for x in 0..render_width {
+                                        let sx = ((x as u64 * src_w as u64)
+                                            / render_width.max(1) as u64)
+                                            .min((src_w - 1) as u64)
+                                            as u32;
+                                        let s_idx = ((sy * src_w + sx) * 4) as usize;
+                                        let d_idx = ((y * render_width + x) * 4) as usize;
+                                        if s_idx + 3 < src_rgba.len() {
+                                            f.data[d_idx..d_idx + 4]
+                                                .copy_from_slice(&src_rgba[s_idx..s_idx + 4]);
+                                        }
+                                    }
+                                }
+                                let _ = ColorGradingEngine::apply(
+                                    &mut f.data,
+                                    render_width,
+                                    render_height,
+                                    &clip.color_grading,
+                                    None,
+                                );
+                                return Ok(f);
+                            }
+                        }
+                    }
+                }
+
+                // Procedural SMPTE / studio reference frame when no decoded raster file is attached
                 let mut f = VideoFrame::new_black(render_width, render_height, timestamp_ms);
                 let speed_adjusted_ts = clip.map_timeline_to_source_ms(timestamp_ms);
                 let phase = ((speed_adjusted_ts / 10) % 256) as u8;

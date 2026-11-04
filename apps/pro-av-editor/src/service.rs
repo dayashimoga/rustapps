@@ -13,7 +13,7 @@ use crate::color::{VideoScopeData, VideoScopeGenerator};
 use crate::compositor::{CompositorError, LayerCompositor, VideoFrame};
 use crate::models::{
     AnimatedProperty, BlendMode, Clip, ClipType, ColorGradingSettings, CompressorSettings, EqBand,
-    FilterType, ParametricEqSettings, TimelineProject, Track, Transform2D,
+    FilterType, MediaSource, ParametricEqSettings, TimelineProject, Track, TrackType, Transform2D,
 };
 use crate::templates::{EdlExporter, FcpxmlExporter, ProjectTemplate};
 use crate::timeline::{TimelineEngine, TimelineError};
@@ -177,6 +177,442 @@ impl EditorService {
             .write()
             .map_err(|_| ServiceError::LockPoisoned)?;
         *guard = loaded;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Media Pool & Real File Probing
+    // -----------------------------------------------------------------------
+
+    /// Probe a local media file (video, audio, or image) and extract metadata
+    pub fn probe_media_file(raw_path: &str) -> Result<MediaSource, ServiceError> {
+        let clean_path = platform_common::normalize_display_path(raw_path.trim());
+        let path = Path::new(&clean_path);
+        let meta = std::fs::metadata(path)?;
+        let file_size = meta.len();
+
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        let id = format!(
+            "src_{}",
+            &blake3::hash(clean_path.as_bytes()).to_hex()[..12]
+        );
+
+        let is_image = matches!(
+            ext.as_str(),
+            "png" | "bmp" | "jpg" | "jpeg" | "webp" | "gif"
+        );
+        let is_audio = matches!(ext.as_str(), "wav" | "mp3" | "flac" | "ogg" | "aac" | "m4a");
+
+        let mut width = 1920u32;
+        let mut height = 1080u32;
+        let mut fps = 60.0f64;
+        let mut sample_rate = 48000u32;
+        let mut channels = 2u32;
+        let mut duration_ms = 5000u64;
+        let mut has_video = !is_audio;
+        let mut has_audio = !is_image;
+
+        if is_image {
+            fps = 60.0;
+            sample_rate = 0;
+            channels = 0;
+            duration_ms = 5000;
+            if let Ok(bytes) = std::fs::read(path) {
+                if bytes.len() >= 24 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n" {
+                    let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+                    let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+                    if w > 0 && h > 0 {
+                        width = w;
+                        height = h;
+                    }
+                } else if bytes.len() >= 26 && &bytes[0..2] == b"BM" {
+                    let w = i32::from_le_bytes([bytes[18], bytes[19], bytes[20], bytes[21]])
+                        .unsigned_abs();
+                    let h = i32::from_le_bytes([bytes[22], bytes[23], bytes[24], bytes[25]])
+                        .unsigned_abs();
+                    if w > 0 && h > 0 {
+                        width = w;
+                        height = h;
+                    }
+                }
+            }
+        } else if is_audio {
+            width = 0;
+            height = 0;
+            fps = 0.0;
+            has_video = false;
+            has_audio = true;
+            if ext == "wav" {
+                if let Ok(bytes) = std::fs::read(path) {
+                    if let Ok(wav_buf) = shared_media_core::PcmAudioBuffer::decode_wav(&bytes) {
+                        sample_rate = wav_buf.sample_rate;
+                        channels = wav_buf.channels as u32;
+                        duration_ms = ((wav_buf.duration_secs() * 1000.0).round() as u64).max(500);
+                    }
+                }
+            } else {
+                // Estimate compressed audio duration (~192 kbps nominal)
+                duration_ms = ((file_size * 1000) / 24_000).clamp(2000, 600_000);
+            }
+        } else {
+            // Video container (.mp4, .webm, .mov, .mkv, .avi)
+            has_video = true;
+            has_audio = true;
+            duration_ms = ((file_size * 1000) / 350_000).clamp(4000, 600_000);
+        }
+
+        Ok(MediaSource {
+            id,
+            file_path: clean_path,
+            duration_ms,
+            width,
+            height,
+            fps,
+            sample_rate,
+            channels,
+            has_video,
+            has_audio,
+        })
+    }
+
+    /// Import a local media file into the project's `media_pool` and optionally append it as a clip on the timeline
+    pub fn import_media_file(
+        &self,
+        raw_path: &str,
+        auto_add_to_timeline: bool,
+    ) -> Result<MediaSource, ServiceError> {
+        let source = Self::probe_media_file(raw_path)?;
+        {
+            let mut guard = self
+                .engine
+                .write()
+                .map_err(|_| ServiceError::LockPoisoned)?;
+            let pool = &mut guard.project_mut().media_pool;
+            if let Some(existing) = pool.iter_mut().find(|m| m.file_path == source.file_path) {
+                *existing = source.clone();
+            } else {
+                pool.push(source.clone());
+            }
+        }
+
+        if auto_add_to_timeline {
+            let _ = self.add_media_to_timeline(&source.id, None, None)?;
+        }
+
+        Ok(source)
+    }
+
+    /// Add a media source from `media_pool` onto a timeline track
+    pub fn add_media_to_timeline(
+        &self,
+        source_id: &str,
+        target_track_id: Option<&str>,
+        timeline_in_ms: Option<u64>,
+    ) -> Result<Clip, ServiceError> {
+        let mut guard = self
+            .engine
+            .write()
+            .map_err(|_| ServiceError::LockPoisoned)?;
+
+        let source = guard
+            .project()
+            .media_pool
+            .iter()
+            .find(|m| m.id == source_id)
+            .cloned()
+            .ok_or_else(|| {
+                ServiceError::Timeline(TimelineError::ClipNotFound(format!(
+                    "Media source '{}' not found in media pool",
+                    source_id
+                )))
+            })?;
+
+        let ext = Path::new(&source.file_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let is_image = matches!(
+            ext.as_str(),
+            "png" | "bmp" | "jpg" | "jpeg" | "webp" | "gif"
+        );
+        let clip_type = if is_image {
+            ClipType::Image
+        } else if source.has_video {
+            ClipType::Video
+        } else {
+            ClipType::Audio
+        };
+        let desired_track_type = if source.has_video || is_image {
+            TrackType::Video
+        } else {
+            TrackType::Audio
+        };
+
+        // Resolve target track ID (unlock if needed or create a track if none exists)
+        let resolved_track_id = if let Some(tid) = target_track_id {
+            tid.to_string()
+        } else if let Some(tr) = guard
+            .project()
+            .tracks
+            .iter()
+            .find(|t| t.track_type == desired_track_type && !t.locked)
+        {
+            tr.id.clone()
+        } else {
+            let new_tid = format!(
+                "{}_{}",
+                if desired_track_type == TrackType::Video {
+                    "v"
+                } else {
+                    "a"
+                },
+                guard.project().tracks.len() + 1
+            );
+            let new_tname = format!(
+                "{} {}",
+                if desired_track_type == TrackType::Video {
+                    "Video"
+                } else {
+                    "Audio"
+                },
+                guard.project().tracks.len() + 1
+            );
+            guard.add_track(Track::new(&new_tid, new_tname, desired_track_type, 0))?;
+            new_tid
+        };
+
+        // Determine timeline_in_ms (append after last clip on that track if not specified)
+        let track_end_ms = guard
+            .project()
+            .tracks
+            .iter()
+            .find(|t| t.id == resolved_track_id)
+            .and_then(|t| t.clips.iter().map(|c| c.timeline_out_ms).max())
+            .unwrap_or(0);
+
+        let in_ms = timeline_in_ms.unwrap_or(track_end_ms);
+        let dur_ms = source.duration_ms.max(1000);
+        let file_name = Path::new(&source.file_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Imported Media")
+            .to_string();
+
+        let clip_id = format!(
+            "clip_{}_{}",
+            &source.id[..source.id.len().min(8)],
+            guard
+                .project()
+                .tracks
+                .iter()
+                .map(|t| t.clips.len())
+                .sum::<usize>()
+                + 1
+        );
+
+        let clip = Clip {
+            id: clip_id,
+            name: file_name,
+            clip_type,
+            track_id: resolved_track_id,
+            source_id: Some(source.id.clone()),
+            source_in_ms: 0,
+            source_out_ms: dur_ms,
+            timeline_in_ms: in_ms,
+            timeline_out_ms: in_ms + dur_ms,
+            speed_multiplier: 1.0,
+            volume: AnimatedProperty::constant(1.0),
+            pan: 0.0,
+            opacity: AnimatedProperty::constant(1.0),
+            blend_mode: BlendMode::Normal,
+            transform: Transform2D::default(),
+            color_grading: ColorGradingSettings::default(),
+            eq_settings: ParametricEqSettings::default(),
+            compressor: CompressorSettings::default(),
+        };
+
+        guard.add_clip(clip.clone())?;
+        Ok(clip)
+    }
+
+    /// Add a new track to the timeline
+    pub fn add_track(&self, name: &str, track_type: TrackType) -> Result<Track, ServiceError> {
+        let mut guard = self
+            .engine
+            .write()
+            .map_err(|_| ServiceError::LockPoisoned)?;
+        let count = guard
+            .project()
+            .tracks
+            .iter()
+            .filter(|t| t.track_type == track_type)
+            .count()
+            + 1;
+        let prefix = match track_type {
+            TrackType::Video => "v",
+            TrackType::Audio => "a",
+            TrackType::Subtitle => "s",
+            TrackType::Adjustment => "adj",
+        };
+        let id = format!("{}{}_{}", prefix, count, guard.project().tracks.len() + 1);
+        let label = if name.trim().is_empty() {
+            format!("{:?} {}", track_type, count)
+        } else {
+            name.trim().to_string()
+        };
+        let z_index = match track_type {
+            TrackType::Video => count as i32,
+            TrackType::Audio => 0,
+            TrackType::Subtitle => 10 + count as i32,
+            TrackType::Adjustment => 5 + count as i32,
+        };
+        let track = Track::new(id, label, track_type, z_index);
+        guard.add_track(track.clone())?;
+        Ok(track)
+    }
+
+    /// Move a clip to a new timeline start position and optionally a different track
+    pub fn move_clip(
+        &self,
+        clip_id: &str,
+        new_track_id: Option<&str>,
+        new_in_ms: u64,
+    ) -> Result<(), ServiceError> {
+        let mut guard = self
+            .engine
+            .write()
+            .map_err(|_| ServiceError::LockPoisoned)?;
+        let project = guard.project_mut();
+
+        let mut extracted_clip: Option<Clip> = None;
+        for track in &mut project.tracks {
+            if let Some(pos) = track.clips.iter().position(|c| c.id == clip_id) {
+                if track.locked {
+                    return Err(ServiceError::Timeline(TimelineError::TrackLocked(
+                        track.id.clone(),
+                    )));
+                }
+                extracted_clip = Some(track.clips.remove(pos));
+                break;
+            }
+        }
+
+        let mut clip = extracted_clip
+            .ok_or_else(|| ServiceError::Timeline(TimelineError::ClipNotFound(clip_id.into())))?;
+        let dur = clip.duration_ms().max(100);
+        clip.timeline_in_ms = new_in_ms;
+        clip.timeline_out_ms = new_in_ms + dur;
+
+        if let Some(tid) = new_track_id {
+            if project.tracks.iter().any(|t| t.id == tid && !t.locked) {
+                clip.track_id = tid.to_string();
+            }
+        }
+
+        if let Some(target_track) = project.tracks.iter_mut().find(|t| t.id == clip.track_id) {
+            target_track.clips.push(clip);
+            target_track.clips.sort_by_key(|c| c.timeline_in_ms);
+        }
+        Ok(())
+    }
+
+    /// Update editable clip properties from the Clip Inspector
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_clip_properties(
+        &self,
+        clip_id: &str,
+        name: Option<String>,
+        timeline_in_ms: Option<u64>,
+        timeline_out_ms: Option<u64>,
+        speed_multiplier: Option<f32>,
+        opacity: Option<f32>,
+        volume: Option<f32>,
+        pan: Option<f32>,
+        blend_mode: Option<BlendMode>,
+        transform: Option<Transform2D>,
+    ) -> Result<(), ServiceError> {
+        let mut guard = self
+            .engine
+            .write()
+            .map_err(|_| ServiceError::LockPoisoned)?;
+        let project = guard.project_mut();
+        for track in &mut project.tracks {
+            if let Some(clip) = track.clips.iter_mut().find(|c| c.id == clip_id) {
+                if track.locked {
+                    return Err(ServiceError::Timeline(TimelineError::TrackLocked(
+                        track.id.clone(),
+                    )));
+                }
+                if let Some(n) = name {
+                    if !n.trim().is_empty() {
+                        clip.name = n.trim().to_string();
+                    }
+                }
+                if let Some(in_ms) = timeline_in_ms {
+                    clip.timeline_in_ms = in_ms;
+                }
+                if let Some(out_ms) = timeline_out_ms {
+                    if out_ms > clip.timeline_in_ms {
+                        clip.timeline_out_ms = out_ms;
+                    }
+                }
+                if let Some(spd) = speed_multiplier {
+                    clip.speed_multiplier = spd.clamp(0.1, 10.0);
+                }
+                if let Some(op) = opacity {
+                    clip.opacity = AnimatedProperty::constant(op.clamp(0.0, 1.0));
+                }
+                if let Some(vol) = volume {
+                    clip.volume = AnimatedProperty::constant(vol.clamp(0.0, 2.0));
+                }
+                if let Some(p) = pan {
+                    clip.pan = p.clamp(-1.0, 1.0);
+                }
+                if let Some(bm) = blend_mode {
+                    clip.blend_mode = bm;
+                }
+                if let Some(tr) = transform {
+                    clip.transform = tr;
+                }
+                track.clips.sort_by_key(|c| c.timeline_in_ms);
+                return Ok(());
+            }
+        }
+        Err(ServiceError::Timeline(TimelineError::ClipNotFound(
+            clip_id.to_string(),
+        )))
+    }
+
+    /// Update probed duration and dimensions of a MediaSource (e.g., from HTML5 `<video>` metadata)
+    pub fn update_media_duration(
+        &self,
+        source_id: &str,
+        duration_ms: u64,
+        width: Option<u32>,
+        height: Option<u32>,
+    ) -> Result<(), ServiceError> {
+        let mut guard = self
+            .engine
+            .write()
+            .map_err(|_| ServiceError::LockPoisoned)?;
+        let project = guard.project_mut();
+        if let Some(src) = project.media_pool.iter_mut().find(|m| m.id == source_id) {
+            if duration_ms > 0 {
+                src.duration_ms = duration_ms;
+            }
+            if let Some(w) = width.filter(|&w| w > 0) {
+                src.width = w;
+            }
+            if let Some(h) = height.filter(|&h| h > 0) {
+                src.height = h;
+            }
+        }
         Ok(())
     }
 

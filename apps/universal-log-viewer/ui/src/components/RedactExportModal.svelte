@@ -25,6 +25,22 @@
     destPath = `redacted_export_${new Date().toISOString().slice(0, 10)}.log`;
   }
 
+  async function handleBrowseSavePath() {
+    const dialog = (window as unknown as {
+      __TAURI__?: { dialog?: { save?: (opts: Record<string, unknown>) => Promise<string | null> } };
+    }).__TAURI__?.dialog;
+    if (dialog?.save) {
+      const selected = await dialog.save({
+        title: 'Save Sanitized Redacted Log File',
+        defaultPath: destPath,
+        filters: [{ name: 'Log Files', extensions: ['log', 'txt', 'jsonl', 'csv'] }],
+      });
+      if (selected && typeof selected === 'string') {
+        destPath = selected;
+      }
+    }
+  }
+
   async function handleExport() {
     errorMsg = '';
     exportSummary = null;
@@ -109,7 +125,10 @@
         <div class="form-group">
           <div class="label-row">
             <label for="dest-path">Destination File Path</label>
-            <button type="button" class="btn-link" on:click={setDefaultName}>Reset Name</button>
+            <div style="display: flex; gap: 10px;">
+              <button type="button" class="btn-link" on:click={handleBrowseSavePath}>Browse...</button>
+              <button type="button" class="btn-link" on:click={setDefaultName}>Reset Name</button>
+            </div>
           </div>
           <input
             id="dest-path"

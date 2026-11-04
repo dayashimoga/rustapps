@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 //! Storage Analytics and Directory Statistics Engine
 
+use crate::crawler::strip_verbatim_prefix;
 use crate::models::{FileItem, FolderStats};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 use thiserror::Error;
 use walkdir::WalkDir;
 
@@ -27,13 +28,14 @@ impl StorageAnalytics {
         root_path: P,
         top_largest_limit: usize,
     ) -> Result<FolderStats, AnalyticsError> {
-        let root = root_path.as_ref();
-        if !root.exists() {
-            return Err(AnalyticsError::NotFound(root.to_path_buf()));
+        let root_raw = root_path.as_ref();
+        if !root_raw.exists() {
+            return Err(AnalyticsError::NotFound(root_raw.to_path_buf()));
         }
-        if !root.is_dir() {
-            return Err(AnalyticsError::NotADirectory(root.to_path_buf()));
+        if !root_raw.is_dir() {
+            return Err(AnalyticsError::NotADirectory(root_raw.to_path_buf()));
         }
+        let root = strip_verbatim_prefix(root_raw);
 
         let mut total_files = 0usize;
         let mut total_dirs = 0usize;
@@ -41,8 +43,16 @@ impl StorageAnalytics {
         let mut extension_counts: HashMap<String, usize> = HashMap::new();
         let mut extension_sizes: HashMap<String, u64> = HashMap::new();
         let mut all_files: Vec<FileItem> = Vec::new();
+        let started_at = Instant::now();
+        let max_entries = 12_000usize;
+        let mut visited_entries = 0usize;
 
-        for entry_res in WalkDir::new(root).follow_links(false) {
+        for entry_res in WalkDir::new(&root).max_depth(4).follow_links(false) {
+            visited_entries += 1;
+            if visited_entries > max_entries || started_at.elapsed() > Duration::from_millis(900) {
+                break;
+            }
+
             let entry = match entry_res {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -53,7 +63,7 @@ impl StorageAnalytics {
                 Err(_) => continue,
             };
 
-            let path = entry.path().to_path_buf();
+            let path = strip_verbatim_prefix(entry.path());
             let is_dir = metadata.is_dir();
 
             if is_dir {

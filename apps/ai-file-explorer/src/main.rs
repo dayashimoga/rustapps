@@ -34,6 +34,10 @@ impl DesktopIpcHandler for ExplorerDesktopHandler {
         let cwd = target_dir.to_string_lossy().to_string();
         vec![
             SelfTestCheck {
+                command: "list_drives_and_places_cmd",
+                payload: json!({}),
+            },
+            SelfTestCheck {
                 command: "list_directory_cmd",
                 payload: json!({ "path": cwd }),
             },

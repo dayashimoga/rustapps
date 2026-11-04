@@ -305,6 +305,241 @@ impl ImageDecoder {
 
         Ok(DecodedImage::new(width, height, pixels))
     }
+
+    /// Decode PNG or BMP file bytes into full-color RGBA8888 `(width, height, rgba_bytes)`
+    pub fn decode_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageDecodeError> {
+        if bytes.len() >= 8 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n" {
+            Self::decode_png_rgba(bytes)
+        } else if bytes.len() >= 2 && &bytes[0..2] == b"BM" {
+            Self::decode_bmp_rgba(bytes)
+        } else {
+            Err(ImageDecodeError::InvalidFormat)
+        }
+    }
+
+    /// Decode PNG into RGBA8888 buffer
+    pub fn decode_png_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageDecodeError> {
+        if bytes.len() < 8 || &bytes[0..8] != b"\x89PNG\r\n\x1a\n" {
+            return Err(ImageDecodeError::InvalidFormat);
+        }
+
+        let mut offset = 8;
+        let mut width = 0u32;
+        let mut height = 0u32;
+        let mut color_type = 0u8;
+        let mut idat_compressed = Vec::new();
+
+        while offset + 8 <= bytes.len() {
+            let chunk_len = u32::from_be_bytes([
+                bytes[offset],
+                bytes[offset + 1],
+                bytes[offset + 2],
+                bytes[offset + 3],
+            ]) as usize;
+            let chunk_type = &bytes[offset + 4..offset + 8];
+            offset += 8;
+
+            if offset + chunk_len + 4 > bytes.len() {
+                return Err(ImageDecodeError::CorruptPng);
+            }
+
+            let chunk_data = &bytes[offset..offset + chunk_len];
+            match chunk_type {
+                b"IHDR" => {
+                    if chunk_len < 13 {
+                        return Err(ImageDecodeError::CorruptPng);
+                    }
+                    width = u32::from_be_bytes([
+                        chunk_data[0],
+                        chunk_data[1],
+                        chunk_data[2],
+                        chunk_data[3],
+                    ]);
+                    height = u32::from_be_bytes([
+                        chunk_data[4],
+                        chunk_data[5],
+                        chunk_data[6],
+                        chunk_data[7],
+                    ]);
+                    let bit_depth = chunk_data[8];
+                    color_type = chunk_data[9];
+                    if bit_depth != 8 {
+                        return Err(ImageDecodeError::UnsupportedColorFormat(format!(
+                            "Only 8-bit depth supported, found {}",
+                            bit_depth
+                        )));
+                    }
+                }
+                b"IDAT" => idat_compressed.extend_from_slice(chunk_data),
+                b"IEND" => break,
+                _ => {}
+            }
+            offset += chunk_len + 4;
+        }
+
+        if width == 0 || height == 0 || idat_compressed.is_empty() {
+            return Err(ImageDecodeError::CorruptPng);
+        }
+
+        let mut decoder = ZlibDecoder::new(&idat_compressed[..]);
+        let mut decompressed = Vec::new();
+        decoder
+            .read_to_end(&mut decompressed)
+            .map_err(|e| ImageDecodeError::DecompressionFailed(e.to_string()))?;
+
+        let bytes_per_pixel = match color_type {
+            0 => 1,
+            2 => 3,
+            4 => 2,
+            6 => 4,
+            other => {
+                return Err(ImageDecodeError::UnsupportedColorFormat(format!(
+                    "Color type {} not supported",
+                    other
+                )));
+            }
+        };
+
+        let scanline_stride = 1 + (width as usize * bytes_per_pixel);
+        let expected_len = scanline_stride * height as usize;
+        if decompressed.len() < expected_len {
+            return Err(ImageDecodeError::CorruptPng);
+        }
+
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        let mut prev_row = vec![0u8; width as usize * bytes_per_pixel];
+        let mut curr_row = vec![0u8; width as usize * bytes_per_pixel];
+
+        for row in 0..height as usize {
+            let row_offset = row * scanline_stride;
+            let filter_type = decompressed[row_offset];
+            let row_data = &decompressed[row_offset + 1..row_offset + scanline_stride];
+
+            for i in 0..row_data.len() {
+                let x = row_data[i];
+                let a = if i >= bytes_per_pixel {
+                    curr_row[i - bytes_per_pixel]
+                } else {
+                    0
+                };
+                let b = prev_row[i];
+                let c = if i >= bytes_per_pixel {
+                    prev_row[i - bytes_per_pixel]
+                } else {
+                    0
+                };
+
+                curr_row[i] = match filter_type {
+                    0 => x,
+                    1 => x.wrapping_add(a),
+                    2 => x.wrapping_add(b),
+                    3 => x.wrapping_add(((a as u16 + b as u16) / 2) as u8),
+                    4 => x.wrapping_add(paeth_predictor(a, b, c)),
+                    _ => x,
+                };
+            }
+
+            for x in 0..width as usize {
+                let p_idx = x * bytes_per_pixel;
+                match bytes_per_pixel {
+                    1 => {
+                        let g = curr_row[p_idx];
+                        rgba.extend_from_slice(&[g, g, g, 255]);
+                    }
+                    2 => {
+                        let g = curr_row[p_idx];
+                        let a = curr_row[p_idx + 1];
+                        rgba.extend_from_slice(&[g, g, g, a]);
+                    }
+                    3 => {
+                        rgba.extend_from_slice(&[
+                            curr_row[p_idx],
+                            curr_row[p_idx + 1],
+                            curr_row[p_idx + 2],
+                            255,
+                        ]);
+                    }
+                    4 => {
+                        rgba.extend_from_slice(&[
+                            curr_row[p_idx],
+                            curr_row[p_idx + 1],
+                            curr_row[p_idx + 2],
+                            curr_row[p_idx + 3],
+                        ]);
+                    }
+                    _ => {}
+                }
+            }
+            prev_row.copy_from_slice(&curr_row);
+        }
+
+        Ok((width, height, rgba))
+    }
+
+    /// Decode BMP into RGBA8888 buffer
+    pub fn decode_bmp_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageDecodeError> {
+        if bytes.len() < 54 || &bytes[0..2] != b"BM" {
+            return Err(ImageDecodeError::InvalidFormat);
+        }
+
+        let data_offset = u32::from_le_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]) as usize;
+        let width = i32::from_le_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]) as u32;
+        let raw_height = i32::from_le_bytes([bytes[22], bytes[23], bytes[24], bytes[25]]);
+        let bpp = u16::from_le_bytes([bytes[28], bytes[29]]);
+
+        if width == 0 || raw_height == 0 {
+            return Err(ImageDecodeError::CorruptBmp);
+        }
+
+        let is_top_down = raw_height < 0;
+        let height = raw_height.unsigned_abs();
+
+        if bpp != 24 && bpp != 32 {
+            return Err(ImageDecodeError::UnsupportedColorFormat(format!(
+                "BMP bpp {} not supported (requires 24 or 32)",
+                bpp
+            )));
+        }
+
+        let bytes_per_pixel = (bpp / 8) as usize;
+        let row_stride = (width as usize * bytes_per_pixel).div_ceil(4) * 4;
+
+        if bytes.len() < data_offset + (row_stride * height as usize) {
+            return Err(ImageDecodeError::CorruptBmp);
+        }
+
+        let mut rgba = vec![0u8; (width * height * 4) as usize];
+
+        for row in 0..height as usize {
+            let dest_y = if is_top_down {
+                row
+            } else {
+                (height as usize - 1) - row
+            };
+
+            let row_start = data_offset + (row * row_stride);
+            let row_slice = &bytes[row_start..row_start + (width as usize * bytes_per_pixel)];
+
+            for col in 0..width as usize {
+                let px_offset = col * bytes_per_pixel;
+                let b = row_slice[px_offset];
+                let g = row_slice[px_offset + 1];
+                let r = row_slice[px_offset + 2];
+                let a = if bytes_per_pixel == 4 {
+                    row_slice[px_offset + 3]
+                } else {
+                    255
+                };
+                let dst_idx = (dest_y * width as usize + col) * 4;
+                rgba[dst_idx] = r;
+                rgba[dst_idx + 1] = g;
+                rgba[dst_idx + 2] = b;
+                rgba[dst_idx + 3] = a;
+            }
+        }
+
+        Ok((width, height, rgba))
+    }
 }
 
 fn paeth_predictor(a: u8, b: u8, c: u8) -> u8 {

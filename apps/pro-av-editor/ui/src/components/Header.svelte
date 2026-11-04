@@ -9,6 +9,8 @@
 
   const dispatch = createEventDispatcher<{
     newProject: void;
+    openProject: void;
+    importMedia: void;
     saveProject: void;
     undo: void;
     redo: void;
@@ -64,8 +66,35 @@
     </button>
   </nav>
 
-  <!-- Right Actions: Undo/Redo, AI Tools & Save -->
+  <!-- Right Actions: Project, Import, Undo/Redo, AI Tools & Save -->
   <div class="actions">
+    <div class="project-group">
+      <button
+        type="button"
+        class="file-btn"
+        on:click={() => dispatch('newProject')}
+        title="Create a clean empty timeline project"
+      >
+        📄 New
+      </button>
+      <button
+        type="button"
+        class="file-btn"
+        on:click={() => dispatch('openProject')}
+        title="Open an existing .avedproj project file"
+      >
+        📂 Open
+      </button>
+      <button
+        type="button"
+        class="import-btn"
+        on:click={() => dispatch('importMedia')}
+        title="Import real Video, Audio, or Image files into the Media Pool & Timeline"
+      >
+        📥 Import Media
+      </button>
+    </div>
+
     <div class="undo-group">
       <button
         class="icon-btn"
@@ -191,7 +220,48 @@
   .actions {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .project-group {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .file-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-main);
+    padding: 0.35rem 0.65rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.76rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .file-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.25);
+  }
+
+  .import-btn {
+    background: rgba(56, 189, 248, 0.16);
+    border: 1px solid rgba(56, 189, 248, 0.45);
+    color: #38bdf8;
+    padding: 0.35rem 0.75rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .import-btn:hover {
+    background: rgba(56, 189, 248, 0.28);
+    border-color: #7dd3fc;
   }
 
   .undo-group {

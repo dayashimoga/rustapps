@@ -297,6 +297,15 @@ impl VaultService {
         Ok(())
     }
 
+    /// Reset the vault database back to an uninitialized state, zeroizing keys and clearing stored records
+    pub async fn reset_vault(&self) -> Result<(), VaultError> {
+        self.lock().await?;
+        self.record_successful_unlock().await;
+        let _ = self.biometrics.clear_biometric_key();
+        self.storage.reset_all_data()?;
+        Ok(())
+    }
+
     /// Check if vault is currently locked
     pub async fn is_locked(&self) -> bool {
         let session_guard = self.session.read().await;
@@ -1066,5 +1075,24 @@ mod tests {
             current_sec1_after_overwrite.metadata.title,
             "DB Master Password"
         );
+    }
+
+    #[tokio::test]
+    async fn test_reset_vault_and_reinitialize() {
+        let storage = VaultStorage::open_in_memory().unwrap();
+        let service = VaultService::new(storage, Some(Argon2Params::fast_for_tests()));
+        service.initialize("InitialPassword123!").await.unwrap();
+        assert!(service.is_initialized().unwrap());
+        assert!(!service.is_locked().await);
+
+        // Reset vault back to uninitialized state
+        service.reset_vault().await.unwrap();
+        assert!(!service.is_initialized().unwrap());
+        assert!(service.is_locked().await);
+
+        // Re-initialize with a brand new master password
+        service.initialize("NewMasterPassphrase456!").await.unwrap();
+        assert!(service.is_initialized().unwrap());
+        assert!(!service.is_locked().await);
     }
 }

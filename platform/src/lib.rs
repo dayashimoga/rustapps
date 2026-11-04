@@ -16,7 +16,8 @@ pub mod power;
 pub mod theme;
 
 pub use desktop_host::{
-    run_desktop_app, DesktopIpcHandler, EmbeddedUiBundle, SelfTestCheck, SelfTestReport,
+    enumerate_drives_and_places, normalize_display_path, run_desktop_app, DesktopIpcHandler,
+    EmbeddedUiBundle, FsLocationEntry, SelfTestCheck, SelfTestReport,
 };
 pub use keyring::{
     InMemoryKeyring, KeyringItem, LinuxSecretServiceKeyring, MacOsKeychainKeyring, PlatformKeyring,

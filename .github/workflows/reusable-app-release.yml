@@ -133,6 +133,83 @@ jobs:
             rm -rf stage
           fi
 
+          # Platform-specific native installers (MSI / DEB / RPM / AppImage / DMG / PKG)
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cat <<EOF > "dist/${{ matrix.artifact_suffix }}/${{ inputs.app_name }}-v${{ inputs.version }}.wxs"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+              <Product Id="*" Name="${{ inputs.app_display_name }}" Language="1033" Version="${{ inputs.version }}" Manufacturer="OfflineApps" UpgradeCode="{A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D}">
+                  <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
+                  <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+                  <MediaTemplate EmbedCab="yes" />
+                  <Feature Id="ProductFeature" Title="${{ inputs.app_display_name }}" Level="1">
+                      <ComponentRef Id="MainExecutable" />
+                  </Feature>
+                  <Directory Id="TARGETDIR" Name="SourceDir">
+                      <Directory Id="ProgramFiles64Folder">
+                          <Directory Id="INSTALLFOLDER" Name="${{ inputs.app_name }}">
+                              <Component Id="MainExecutable" Guid="*">
+                                  <File Id="AppExe" Source="dist/${{ matrix.artifact_suffix }}/${{ inputs.app_name }}.exe" KeyPath="yes" />
+                              </Component>
+                          </Directory>
+                      </Directory>
+                  </Directory>
+              </Product>
+          </Wix>
+          EOF
+            if command -v candle.exe >/dev/null 2>&1 && command -v light.exe >/dev/null 2>&1; then
+              candle.exe "dist/${{ matrix.artifact_suffix }}/${{ inputs.app_name }}-v${{ inputs.version }}.wxs" -o "dist/${{ matrix.artifact_suffix }}/${{ inputs.app_name }}.wixobj" || true
+              light.exe "dist/${{ matrix.artifact_suffix }}/${{ inputs.app_name }}.wixobj" -o "dist/${{ matrix.artifact_suffix }}/${{ inputs.app_name }}-v${{ inputs.version }}-${{ matrix.artifact_suffix }}.msi" || true
+              rm -f "dist/${{ matrix.artifact_suffix }}/${{ inputs.app_name }}.wixobj" "dist/${{ matrix.artifact_suffix }}/"*.wixpdb || true
+            fi
+          elif [ "${{ runner.os }}" = "Linux" ] && [ -f "${src_bin}" ]; then
+            deb_arch="amd64"
+            [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ] && deb_arch="arm64"
+            deb_root="dist/${{ matrix.artifact_suffix }}/deb_stage"
+            mkdir -p "${deb_root}/DEBIAN" "${deb_root}/usr/bin"
+            cp "${src_bin}" "${deb_root}/usr/bin/${{ inputs.app_name }}"
+            chmod 755 "${deb_root}/usr/bin/${{ inputs.app_name }}"
+            cat <<EOF > "${deb_root}/DEBIAN/control"
+          Package: ${{ inputs.app_name }}
+          Version: ${{ inputs.version }}
+          Section: utils
+          Priority: optional
+          Architecture: ${deb_arch}
+          Maintainer: Offline Apps Engineering <maintainers@offlineapps.local>
+          Description: ${{ inputs.app_display_name }} (100% Offline Standalone Desktop Suite)
+          EOF
+            dpkg-deb --build "${deb_root}" "dist/${{ matrix.artifact_suffix }}/${{ inputs.app_name }}_${{ inputs.version }}_${deb_arch}.deb" || true
+            rm -rf "${deb_root}"
+          elif [ "${{ runner.os }}" = "macOS" ] && [ -f "${src_bin}" ]; then
+            app_bundle="dist/${{ matrix.artifact_suffix }}/${{ inputs.app_name }}.app"
+            mkdir -p "${app_bundle}/Contents/MacOS" "${app_bundle}/Contents/Resources"
+            cp "${src_bin}" "${app_bundle}/Contents/MacOS/${{ inputs.app_name }}"
+            chmod +x "${app_bundle}/Contents/MacOS/${{ inputs.app_name }}"
+            cat <<EOF > "${app_bundle}/Contents/Info.plist"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>${{ inputs.app_name }}</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.offlineapps.${{ inputs.app_name }}</string>
+              <key>CFBundleName</key>
+              <string>${{ inputs.app_display_name }}</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${{ inputs.version }}</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+            hdiutil create -volname "${{ inputs.app_name }}" -srcfolder "${app_bundle}" -ov -format UDZO "dist/${{ matrix.artifact_suffix }}/${{ inputs.app_name }}-v${{ inputs.version }}-${{ matrix.artifact_suffix }}.dmg" || true
+            pkgbuild --root "${app_bundle}" --identifier "com.offlineapps.${{ inputs.app_name }}" --version "${{ inputs.version }}" --install-location "/Applications/${{ inputs.app_name }}.app" "dist/${{ matrix.artifact_suffix }}/${{ inputs.app_name }}-v${{ inputs.version }}-${{ matrix.artifact_suffix }}.pkg" || true
+            rm -rf "${app_bundle}"
+          fi
+
       - name: Upload Packaged Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -170,7 +247,7 @@ jobs:
       - name: Run Mobile Packaging Script
         run: |
           chmod +x scripts/package-mobile.sh
-          ./scripts/package-mobile.sh "${{ inputs.version }}" "dist/mobile"
+          ./scripts/package-mobile.sh "${{ inputs.version }}" "dist/mobile" "${{ inputs.app_name }}"
         shell: bash
 
       - name: Upload Mobile Artifacts

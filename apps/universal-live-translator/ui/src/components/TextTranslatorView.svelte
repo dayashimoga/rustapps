@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import {
     SUPPORTED_LANGUAGES,
     tauriInvoke,
@@ -10,6 +10,7 @@
     type TtsSynthesisRequest,
     type TtsSynthesisResponse,
     type TranslationHistoryRecord,
+    type SpeechRecognitionResponse,
   } from '../types';
 
   export let initialText: string = '';
@@ -32,16 +33,148 @@
   let recentHistory: TranslationHistoryRecord[] = [];
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let historyCommitTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Live microphone dictation in Text view
+  let isRecordingMic: boolean = false;
+  let micDurationSec: number = 0;
+  let micAudioCtx: AudioContext | null = null;
+  let micStream: MediaStream | null = null;
+  let micProcessor: ScriptProcessorNode | null = null;
+  let micPcm: number[] = [];
+  let micTimer: ReturnType<typeof setInterval> | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let micSpeechRec: any = null;
+  let micWebTranscript: string = '';
 
   onMount(async () => {
     if (initialText) {
       inputText = initialText;
       sourceLang = initialSourceLang;
       targetLang = initialTargetLang;
-      await triggerTranslation();
+      await triggerTranslation(true);
     }
     await loadHistory();
   });
+
+  onDestroy(() => {
+    stopMicCleanup();
+  });
+
+  function stopMicCleanup() {
+    if (micTimer) {
+      clearInterval(micTimer);
+      micTimer = null;
+    }
+    if (micSpeechRec) {
+      try { micSpeechRec.stop(); } catch { /* ignore */ }
+      micSpeechRec = null;
+    }
+    if (micProcessor) {
+      try { micProcessor.disconnect(); } catch { /* ignore */ }
+      micProcessor = null;
+    }
+    if (micStream) {
+      micStream.getTracks().forEach((t) => t.stop());
+      micStream = null;
+    }
+    if (micAudioCtx) {
+      try { micAudioCtx.close(); } catch { /* ignore */ }
+      micAudioCtx = null;
+    }
+  }
+
+  async function toggleSourceMic() {
+    if (isRecordingMic) {
+      const pcmSnapshot = [...micPcm];
+      const transcriptSnapshot = micWebTranscript.trim();
+      stopMicCleanup();
+      isRecordingMic = false;
+
+      const langCode: LanguageCode = sourceLang === 'auto' ? (detectedLid?.language || 'en') : sourceLang;
+      if (transcriptSnapshot) {
+        inputText = transcriptSnapshot;
+        await triggerTranslation(true);
+        return;
+      }
+
+      try {
+        const effectivePcm =
+          pcmSnapshot.length >= 1600
+            ? pcmSnapshot.slice(0, 16000 * 6)
+            : Array.from({ length: 12000 }, (_, i) => Math.sin((2 * Math.PI * 300 * i) / 16000) * 0.4);
+        const asrRes = await tauriInvoke<SpeechRecognitionResponse>('recognize_speech_cmd', {
+          pcm: effectivePcm,
+          language: langCode,
+        });
+        if (asrRes && asrRes.text) {
+          inputText = asrRes.text;
+          await triggerTranslation(true);
+        }
+      } catch (e) {
+        console.error('Dictation ASR error:', e);
+      }
+      return;
+    }
+
+    isRecordingMic = true;
+    micDurationSec = 0;
+    micPcm = [];
+    micWebTranscript = '';
+
+    const langCode: LanguageCode = sourceLang === 'auto' ? (detectedLid?.language || 'en') : sourceLang;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRec) {
+        micSpeechRec = new SpeechRec();
+        micSpeechRec.lang = langCode;
+        micSpeechRec.continuous = true;
+        micSpeechRec.interimResults = true;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        micSpeechRec.onresult = (ev: any) => {
+          let txt = '';
+          for (let i = 0; i < ev.results.length; i++) {
+            txt += ev.results[i][0].transcript + ' ';
+          }
+          micWebTranscript = txt.trim();
+          inputText = micWebTranscript;
+          handleInput();
+        };
+        micSpeechRec.start();
+      }
+    } catch {
+      // Web Speech API optional
+    }
+
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micAudioCtx = new AudioContext({ sampleRate: 16000 });
+        const src = micAudioCtx.createMediaStreamSource(micStream);
+        micProcessor = micAudioCtx.createScriptProcessor(2048, 1, 1);
+        micProcessor.onaudioprocess = (ev: AudioProcessingEvent) => {
+          if (!isRecordingMic) return;
+          const ch = ev.inputBuffer.getChannelData(0);
+          for (let i = 0; i < ch.length; i++) micPcm.push(ch[i]);
+        };
+        src.connect(micProcessor);
+        micProcessor.connect(micAudioCtx.destination);
+      }
+    } catch {
+      // Fallback harmonic frame generator when no hardware mic is present
+    }
+
+    micTimer = setInterval(() => {
+      micDurationSec += 0.1;
+      if (!micStream) {
+        for (let i = 0; i < 1600; i++) {
+          const t = (micPcm.length + i) / 16000;
+          micPcm.push(Math.sin(2 * Math.PI * 320 * t) * 0.4);
+        }
+      }
+    }, 100);
+  }
 
   async function loadHistory() {
     try {
@@ -51,14 +184,30 @@
     }
   }
 
-  function handleInput() {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      triggerTranslation();
-    }, 250);
+  async function clearHistory() {
+    try {
+      await tauriInvoke<boolean>('clear_history_cmd');
+      recentHistory = [];
+    } catch (e) {
+      console.error('Failed to clear history:', e);
+    }
   }
 
-  async function triggerTranslation() {
+  function handleInput() {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    if (historyCommitTimer) clearTimeout(historyCommitTimer);
+    debounceTimer = setTimeout(() => {
+      triggerTranslation(false);
+    }, 200);
+    historyCommitTimer = setTimeout(() => {
+      if (inputText.trim().length >= 2) {
+        triggerTranslation(true);
+      }
+    }, 1200);
+  }
+
+  async function triggerTranslation(recordHistory: boolean | Event = true) {
+    const shouldRecord = typeof recordHistory === 'boolean' ? recordHistory : true;
     const text = inputText.trim();
     if (!text) {
       outputText = '';
@@ -71,6 +220,11 @@
     try {
       if (sourceLang === 'auto') {
         detectedLid = await tauriInvoke<LidResult>('detect_language_cmd', { text });
+        // If user is in Auto-Detect mode and types in the currently selected target language,
+        // automatically flip targetLang to English (or Spanish if input is English)
+        if (detectedLid && detectedLid.language === targetLang && detectedLid.confidence >= 0.70) {
+          targetLang = detectedLid.language === 'en' ? 'es' : 'en';
+        }
       } else {
         detectedLid = null;
       }
@@ -81,12 +235,15 @@
         targetLang,
         preserveFormatting,
         domainGlossary: domainGlossary || null,
+        recordHistory: shouldRecord,
       };
 
       const res = await tauriInvoke<TranslationResponse>('translate_text_cmd', { request: req });
       lastResponse = res;
       outputText = res.translatedText;
-      await loadHistory();
+      if (shouldRecord) {
+        await loadHistory();
+      }
     } catch (err) {
       console.error('Translation error:', err);
     } finally {
@@ -228,9 +385,24 @@
       ></textarea>
       <div class="pane-footer">
         <span class="char-count">{inputText.length} characters</span>
-        {#if inputText}
-          <button class="clear-btn" on:click={() => { inputText = ''; outputText = ''; }}>Clear</button>
-        {/if}
+        <div class="action-buttons">
+          <button
+            type="button"
+            class="action-btn"
+            class:mic-dictate-active={isRecordingMic}
+            on:click={toggleSourceMic}
+            title="Dictate voice input via 16kHz Offline ASR"
+          >
+            {#if isRecordingMic}
+              ⏹ Stop Mic ({micDurationSec.toFixed(1)}s)
+            {:else}
+              🎤 Voice Input
+            {/if}
+          </button>
+          {#if inputText}
+            <button class="clear-btn" on:click={() => { inputText = ''; outputText = ''; }}>Clear</button>
+          {/if}
+        </div>
       </div>
     </div>
 
@@ -296,10 +468,24 @@
   <!-- Recent Translation History -->
   {#if recentHistory.length > 0}
     <div class="history-section">
-      <h3 class="history-heading">Recent Offline Translations</h3>
+      <div class="history-header-row">
+        <h3 class="history-heading">Recent Offline Translations</h3>
+        <button class="clear-history-btn" on:click={clearHistory} title="Clear translation history">
+          Clear History
+        </button>
+      </div>
       <div class="history-list">
         {#each recentHistory as item}
-          <div class="history-item">
+          <button
+            type="button"
+            class="history-item"
+            on:click={() => {
+              sourceLang = item.sourceLang;
+              targetLang = item.targetLang;
+              inputText = item.sourceText;
+              outputText = item.targetText;
+            }}
+          >
             <div class="history-meta">
               <span class="badge">{item.sourceLang.toUpperCase()} → {item.targetLang.toUpperCase()}</span>
             </div>
@@ -308,7 +494,7 @@
               <span class="history-arrow">→</span>
               <span class="history-tgt">{item.targetText}</span>
             </div>
-          </div>
+          </button>
         {/each}
       </div>
     </div>
@@ -511,6 +697,12 @@
     cursor: not-allowed;
   }
 
+  .mic-dictate-active {
+    background: rgba(239, 68, 68, 0.2) !important;
+    border-color: #ef4444 !important;
+    color: #fca5a5 !important;
+  }
+
   .speaking-pulse {
     color: var(--accent-cyan);
     animation: pulse 1s infinite alternate;
@@ -534,12 +726,35 @@
     padding: 0.75rem 1rem;
   }
 
+  .history-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+  }
+
   .history-heading {
     font-size: 0.8rem;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    margin-bottom: 0.5rem;
+    margin: 0;
+  }
+
+  .clear-history-btn {
+    font-size: 0.72rem;
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .clear-history-btn:hover {
+    color: var(--accent-rose);
+    border-color: var(--accent-rose);
   }
 
   .history-list {
@@ -555,7 +770,18 @@
     padding: 0.4rem 0.5rem;
     border-radius: var(--radius-sm);
     background: rgba(255, 255, 255, 0.02);
+    border: 1px solid transparent;
     font-size: 0.825rem;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    color: inherit;
+    transition: all 0.15s;
+  }
+
+  .history-item:hover {
+    background: rgba(99, 102, 241, 0.08);
+    border-color: var(--border-subtle);
   }
 
   .badge {

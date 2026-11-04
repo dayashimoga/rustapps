@@ -5,12 +5,17 @@ set -euo pipefail
 
 VERSION="${1:-0.1.0}"
 OUTPUT_DIR="${2:-dist/macos}"
+FILTER_APP="${3:-}"
 
 echo "=========================================================="
 echo "  Packaging Monorepo Apps for macOS (Universal) v${VERSION}"
 echo "=========================================================="
 
-APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor")
+if [ -n "${FILTER_APP}" ]; then
+    APPS=("${FILTER_APP}")
+else
+    APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor")
+fi
 mkdir -p "${OUTPUT_DIR}"
 
 # 0. Build Embedded Svelte 5 Desktop UI Bundles
@@ -85,6 +90,10 @@ for app in "${APPS[@]}"; do
     if command -v hdiutil &>/dev/null && [ -d "${app_bundle}" ]; then
         hdiutil create -volname "${app}" -srcfolder "${app_bundle}" -ov -format UDZO "${dmg_path}"
         echo "  -> Created DMG: ${dmg_name}"
+        if command -v pkgbuild &>/dev/null; then
+            pkgbuild --root "${app_bundle}" --identifier "com.offlineapps.${app}" --version "${VERSION}" --install-location "/Applications/${app}.app" "${OUTPUT_DIR}/${app}_${VERSION}_macos_universal.pkg" || true
+            echo "  -> Created PKG installer: ${app}_${VERSION}_macos_universal.pkg"
+        fi
     else
         # Fallback to tar.gz on non-macOS host
         tar_name="${app}_${VERSION}_macos_app.tar.gz"

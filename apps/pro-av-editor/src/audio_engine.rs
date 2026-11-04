@@ -457,6 +457,26 @@ impl AudioEngine {
                     continue;
                 }
 
+                let decoded_wav = clip
+                    .source_id
+                    .as_ref()
+                    .and_then(|sid| {
+                        project
+                            .media_pool
+                            .iter()
+                            .find(|m| m.id == *sid)
+                            .map(|m| m.file_path.clone())
+                            .or_else(|| {
+                                if std::path::Path::new(sid).exists() {
+                                    Some(sid.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                    })
+                    .and_then(|path| std::fs::read(&path).ok())
+                    .and_then(|bytes| shared_media_core::PcmAudioBuffer::decode_wav(&bytes).ok());
+
                 // Constant-power panning law
                 // pan: -1.0 (Left) to +1.0 (Right), normalized to [0..PI/2]
                 let pan_angle = ((clip.pan.clamp(-1.0, 1.0) + 1.0) * 0.25) * PI;
@@ -487,7 +507,26 @@ impl AudioEngine {
 
                     let vol = clip.volume.evaluate_at(cur_ms).clamp(0.0, 2.0);
 
-                    // Generate clean audio tone sample (or source audio)
+                    if let Some(ref wav_buf) = decoded_wav {
+                        let src_ms = clip.map_timeline_to_source_ms(cur_ms);
+                        let src_frame = ((src_ms as f64 * wav_buf.sample_rate as f64) / 1000.0)
+                            .round() as usize;
+                        let ch = wav_buf.channels.max(1) as usize;
+                        let base = src_frame * ch;
+                        if base < wav_buf.samples.len() {
+                            let l_val = wav_buf.samples[base];
+                            let r_val = if ch >= 2 && base + 1 < wav_buf.samples.len() {
+                                wav_buf.samples[base + 1]
+                            } else {
+                                l_val
+                            };
+                            sample_slot.0 += l_val * vol * pan_l;
+                            sample_slot.1 += r_val * vol * pan_r;
+                            continue;
+                        }
+                    }
+
+                    // Reference studio tone when no external audio file is attached
                     let tone_freq = 440.0; // A4 reference tone
                     let t = cur_sample as f32 / self.sample_rate as f32;
                     let raw_sample = (2.0 * PI * tone_freq * t).sin() * 0.25;

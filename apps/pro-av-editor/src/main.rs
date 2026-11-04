@@ -68,6 +68,14 @@ impl DesktopIpcHandler for ProAvDesktopHandler {
                 command: "get_export_presets_cmd",
                 payload: json!({}),
             },
+            SelfTestCheck {
+                command: "add_track_cmd",
+                payload: json!({ "name": "B-Roll Overlay V2", "trackType": "Video" }),
+            },
+            SelfTestCheck {
+                command: "get_templates_cmd",
+                payload: json!({}),
+            },
         ]
     }
 }

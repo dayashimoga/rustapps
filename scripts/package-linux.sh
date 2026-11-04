@@ -6,12 +6,17 @@ set -euo pipefail
 TARGET="${1:-x86_64-unknown-linux-gnu}"
 VERSION="${2:-0.1.0}"
 OUTPUT_DIR="${3:-dist/linux}"
+FILTER_APP="${4:-}"
 
 echo "=========================================================="
 echo "  Packaging Monorepo Apps for Linux (${TARGET}) v${VERSION}"
 echo "=========================================================="
 
-APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor")
+if [ -n "${FILTER_APP}" ]; then
+    APPS=("${FILTER_APP}")
+else
+    APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor")
+fi
 mkdir -p "${OUTPUT_DIR}"
 
 # 0. Build Embedded Svelte 5 Desktop UI Bundles
@@ -110,7 +115,31 @@ EOF
         cp "${src_bin}" "${deb_dir}/usr/bin/${app}"
         chmod 755 "${deb_dir}/usr/bin/${app}"
     fi
+    if command -v dpkg-deb &>/dev/null; then
+        dpkg-deb --build "${deb_dir}" "${OUTPUT_DIR}/${app}_${VERSION}_amd64.deb" || true
+    fi
     echo "  -> Scaffolded Debian package layout: ${deb_dir}"
+done
+
+# 4b. Generate RPM Spec & Layout
+echo "[4b/5] Generating RPM spec files..."
+for app in "${APPS[@]}"; do
+    rpm_spec="${OUTPUT_DIR}/${app}_${VERSION}.spec"
+    cat > "${rpm_spec}" <<EOF
+Name:           ${app}
+Version:        ${VERSION}
+Release:        1%{?dist}
+Summary:        100% Offline Standalone Desktop Application (${app})
+License:        MIT OR Apache-2.0
+BuildArch:      x86_64
+
+%description
+Ultra-fast, offline-first production-grade application: ${app}.
+
+%files
+/usr/bin/${app}
+EOF
+    echo "  -> Generated RPM spec: ${rpm_spec}"
 done
 
 # 5. Compute Cryptographic Checksums (SHA-256)

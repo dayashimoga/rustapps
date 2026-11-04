@@ -120,33 +120,53 @@ impl TranslatorService {
         &self,
         request: &TranslationRequest,
     ) -> Result<TranslationResponse, ServiceError> {
+        self.translate_text_with_options(request, true)
+    }
+
+    /// Translate text with explicit control over whether to record in SQLite audit history
+    pub fn translate_text_with_options(
+        &self,
+        request: &TranslationRequest,
+        record_history: bool,
+    ) -> Result<TranslationResponse, ServiceError> {
         let response = self.nmt.translate(request)?;
 
-        // Record in translation history
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let clean_orig = response.original_text.trim();
+        let clean_trans = response.translated_text.trim();
 
-        let hist_rec = TranslationHistoryRecord {
-            id: blake3::hash(
-                format!(
-                    "{}:{}:{}",
-                    timestamp, request.text, response.translated_text
+        // Only record in translation history when explicitly requested and translation is non-trivial
+        if record_history
+            && clean_orig.len() >= 2
+            && !clean_trans.is_empty()
+            && clean_orig.to_lowercase() != clean_trans.to_lowercase()
+        {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            let hist_rec = TranslationHistoryRecord {
+                id: blake3::hash(
+                    format!(
+                        "{}:{}:{}",
+                        response.source_lang.as_str(),
+                        response.target_lang.as_str(),
+                        clean_orig.to_lowercase()
+                    )
+                    .as_bytes(),
                 )
-                .as_bytes(),
-            )
-            .to_hex()[..16]
-                .to_string(),
-            source_lang: response.source_lang,
-            target_lang: response.target_lang,
-            original_text: response.original_text.clone(),
-            translated_text: response.translated_text.clone(),
-            timestamp_secs: timestamp,
-            confidence: response.confidence,
-        };
+                .to_hex()[..16]
+                    .to_string(),
+                source_lang: response.source_lang,
+                target_lang: response.target_lang,
+                original_text: response.original_text.clone(),
+                translated_text: response.translated_text.clone(),
+                timestamp_secs: timestamp,
+                confidence: response.confidence,
+            };
 
-        let _ = self.phrasebook.add_history(&hist_rec);
+            let _ = self.phrasebook.add_history(&hist_rec);
+        }
 
         Ok(response)
     }

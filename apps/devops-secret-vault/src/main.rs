@@ -69,6 +69,34 @@ impl DesktopIpcHandler for VaultDesktopHandler {
                 command: "verify_audit_chain",
                 payload: json!({}),
             },
+            SelfTestCheck {
+                command: "reset_vault",
+                payload: json!({ "masterPassword": "SelfTest-Master-Key-2026!#Secure" }),
+            },
+            SelfTestCheck {
+                command: "create_secret",
+                payload: json!({
+                    "input": {
+                        "title": "Self-Test Production API Key",
+                        "tags": ["selftest", "prod"],
+                        "username": "svc-account",
+                        "url": "https://api.internal.local",
+                        "notes": "Verified during --self-test",
+                        "payload": {
+                            "type": "api_key",
+                            "data": {
+                                "api_key": "ak_live_selftest_9988776655",
+                                "api_secret": "sk_live_selftest_1122334455",
+                                "endpoint_url": "https://api.internal.local/v1"
+                            }
+                        }
+                    }
+                }),
+            },
+            SelfTestCheck {
+                command: "list_secrets",
+                payload: json!({}),
+            },
         ]
     }
 }
@@ -125,6 +153,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<(), Box<dyn std::error::Error>>(())
         })?;
         return Ok(());
+    }
+
+    if args.iter().any(|a| a == "--self-test") && std::env::var("VAULT_DB_PATH").is_err() {
+        let selftest_db = std::env::temp_dir().join("devops_secret_vault_selftest.db");
+        std::env::set_var("VAULT_DB_PATH", &selftest_db);
     }
 
     run_desktop_app(UI_BUNDLE, VaultDesktopHandler)?;

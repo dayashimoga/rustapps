@@ -1,14 +1,22 @@
 #![forbid(unsafe_code)]
 //! Tauri Desktop IPC Command Handlers for AI File Explorer
 
+use crate::analytics::StorageAnalytics;
+use crate::batch_rename::BatchRenamer;
+use crate::crawler::FileCrawler;
+use crate::dedup::DuplicateDetector;
+use crate::doc_extract::DocumentExtractor;
 use crate::models::{
     BatchRenameResult, BatchRenameRule, ContentSearchQuery, ContentSearchResult,
     DeduplicationSummary, DirectoryListing, ExtractedDocument, FileItem, FolderStats, OcrResult,
     RenamePreview, ScreenshotFingerprint, ScreenshotSearchResult, SearchMode, TreemapNode,
 };
 use crate::service::FileExplorerService;
+use crate::treemap::TreemapGenerator;
+use platform_common::{enumerate_drives_and_places, FsLocationEntry};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 
 static SERVICE: OnceLock<Arc<Mutex<FileExplorerService>>> = OnceLock::new();
@@ -23,11 +31,57 @@ pub fn get_service() -> Arc<Mutex<FileExplorerService>> {
         .clone()
 }
 
-/// List directory contents
+/// List directory contents (lock-free, never blocked by background indexing or scans)
 pub fn list_directory_cmd(path: String) -> Result<DirectoryListing, String> {
-    let service = get_service();
-    let svc = service.lock().map_err(|e| e.to_string())?;
-    svc.list_directory(&path).map_err(|e| e.to_string())
+    FileCrawler::list_directory(&path).map_err(|e| e.to_string())
+}
+
+/// Enumerate mounted drives (`C:\`, `H:\`, etc.) and user quick-access directories
+pub fn list_drives_and_places_cmd() -> Result<Vec<FsLocationEntry>, String> {
+    Ok(enumerate_drives_and_places())
+}
+
+/// Open a file or folder with the operating system's default handler
+pub fn open_in_os_cmd(path: String) -> Result<bool, String> {
+    let target = std::path::Path::new(&path);
+    if !target.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(&path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(true)
 }
 
 /// Search indexed files using Tantivy (<50ms SLA)
@@ -39,63 +93,48 @@ pub fn search_files_cmd(query: String, limit: usize) -> Result<Vec<FileItem>, St
 
 /// Index a target directory into Tantivy
 pub fn index_directory_cmd(path: String) -> Result<usize, String> {
+    let listing = FileCrawler::list_directory(&path).map_err(|e| e.to_string())?;
     let service = get_service();
     let svc = service.lock().map_err(|e| e.to_string())?;
-    let listing = svc.list_directory(&path).map_err(|e| e.to_string())?;
     svc.index_files(&listing.items).map_err(|e| e.to_string())
 }
 
-/// Scan for duplicate files using 3-tier filtration
+/// Scan for duplicate files using 3-tier filtration (lock-free)
 pub fn scan_duplicates_cmd(
     search_roots: Vec<String>,
     min_size_bytes: u64,
 ) -> Result<DeduplicationSummary, String> {
-    let service = get_service();
-    let svc = service.lock().map_err(|e| e.to_string())?;
     let roots: Vec<PathBuf> = search_roots.into_iter().map(PathBuf::from).collect();
-    svc.scan_duplicates(&roots, min_size_bytes)
-        .map_err(|e| e.to_string())
+    DuplicateDetector::scan_duplicates(&roots, min_size_bytes).map_err(|e| e.to_string())
 }
 
-/// Compute storage analytics
+/// Compute storage analytics (lock-free)
 pub fn analyze_storage_cmd(path: String, top_limit: usize) -> Result<FolderStats, String> {
-    let service = get_service();
-    let svc = service.lock().map_err(|e| e.to_string())?;
-    svc.analyze_storage(&path, top_limit)
-        .map_err(|e| e.to_string())
+    StorageAnalytics::analyze_directory(&path, top_limit).map_err(|e| e.to_string())
 }
 
-/// Generate squarified treemap bounding rectangles
+/// Generate squarified treemap bounding rectangles (lock-free)
 pub fn get_treemap_cmd(
     path: String,
     width: f64,
     height: f64,
     max_depth: usize,
 ) -> Result<TreemapNode, String> {
-    let service = get_service();
-    let svc = service.lock().map_err(|e| e.to_string())?;
-    svc.generate_treemap(&path, width, height, max_depth)
-        .map_err(|e| e.to_string())
+    TreemapGenerator::generate_treemap(&path, width, height, max_depth).map_err(|e| e.to_string())
 }
 
-/// Preview proposed batch rename
+/// Preview proposed batch rename (lock-free)
 pub fn preview_batch_rename_cmd(
     paths: Vec<String>,
     rule: BatchRenameRule,
 ) -> Result<Vec<RenamePreview>, String> {
-    let service = get_service();
-    let svc = service.lock().map_err(|e| e.to_string())?;
     let path_bufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-    svc.preview_batch_rename(&path_bufs, &rule)
-        .map_err(|e| e.to_string())
+    BatchRenamer::preview_renames(&path_bufs, &rule).map_err(|e| e.to_string())
 }
 
-/// Execute atomic batch rename with rollback
+/// Execute atomic batch rename with rollback (lock-free)
 pub fn execute_batch_rename_cmd(previews: Vec<RenamePreview>) -> Result<BatchRenameResult, String> {
-    let service = get_service();
-    let svc = service.lock().map_err(|e| e.to_string())?;
-    svc.execute_batch_rename(&previews)
-        .map_err(|e| e.to_string())
+    BatchRenamer::execute_batch_rename(&previews).map_err(|e| e.to_string())
 }
 
 /// Delete redundant or duplicate files permanently
@@ -110,18 +149,16 @@ pub fn delete_files_cmd(paths: Vec<String>) -> Result<crate::models::DeleteFiles
 // Phase 6 Command Endpoints
 // ---------------------------------------------------------------------------
 
-/// Extracts text and metadata from a document file
+/// Extracts text and metadata from a document file (lock-free)
 pub fn extract_document_cmd(path: String) -> Result<ExtractedDocument, String> {
-    let service = get_service();
-    let svc = service.lock().map_err(|e| e.to_string())?;
-    svc.extract_document(&path).map_err(|e| e.to_string())
+    DocumentExtractor::extract_file(&path).map_err(|e| e.to_string())
 }
 
 /// Indexes a document file into Tantivy and vector embeddings
 pub fn index_document_cmd(path: String) -> Result<ExtractedDocument, String> {
+    let doc = DocumentExtractor::extract_file(&path).map_err(|e| e.to_string())?;
     let service = get_service();
     let svc = service.lock().map_err(|e| e.to_string())?;
-    let doc = svc.extract_document(&path).map_err(|e| e.to_string())?;
     svc.index_extracted_document(&doc)
         .map_err(|e| e.to_string())?;
     Ok(doc)
@@ -237,6 +274,15 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let path = resolve_valid_path(args.get("path").and_then(|v| v.as_str()));
             let listing = list_directory_cmd(path)?;
             serde_json::to_value(listing).map_err(|e| e.to_string())
+        }
+        "list_drives_and_places_cmd" => {
+            let entries = list_drives_and_places_cmd()?;
+            serde_json::to_value(entries).map_err(|e| e.to_string())
+        }
+        "open_in_os_cmd" => {
+            let path = resolve_valid_path(args.get("path").and_then(|v| v.as_str()));
+            let ok = open_in_os_cmd(path)?;
+            Ok(json!({ "opened": ok }))
         }
         "search_files_cmd" => {
             let query = args
@@ -538,5 +584,17 @@ mod tests {
         let contents = std::fs::read_to_string(&out_csv).unwrap();
         assert!(contents.contains("AKIA"));
         assert!(contents.contains("PRIVATE KEY"));
+    }
+
+    #[test]
+    fn test_commands_drives_and_no_verbatim_prefix() {
+        let dir = tempdir().unwrap();
+        let path_str = dir.path().to_string_lossy().to_string();
+        let listing = list_directory_cmd(path_str).unwrap();
+        assert!(!listing.current_path.to_string_lossy().starts_with(r"\\?\"));
+
+        let places_val =
+            dispatch_ipc_command("list_drives_and_places_cmd", serde_json::json!({})).unwrap();
+        assert!(!places_val.as_array().unwrap().is_empty());
     }
 }

@@ -29,6 +29,41 @@
     exportPath = `vault_backup_${new Date().toISOString().slice(0, 10)}.vaultbackup`;
   }
 
+  async function browseExportPath() {
+    try {
+      const dialog = (window as any).__TAURI__?.dialog;
+      if (dialog?.save) {
+        const chosen = await dialog.save({
+          title: 'Export Encrypted Vault Backup (.vaultbackup)',
+          defaultName: exportPath || `vault_backup_${new Date().toISOString().slice(0, 10)}.vaultbackup`,
+          filters: 'Vault Backup (*.vaultbackup)|*.vaultbackup|All Files (*.*)|*.*',
+        });
+        if (chosen) {
+          exportPath = chosen;
+        }
+      }
+    } catch (err) {
+      console.error('Export browse error:', err);
+    }
+  }
+
+  async function browseImportPath() {
+    try {
+      const dialog = (window as any).__TAURI__?.dialog;
+      if (dialog?.open) {
+        const chosen = await dialog.open({
+          title: 'Select Encrypted Vault Backup Archive (.vaultbackup)',
+          filters: 'Vault Backup (*.vaultbackup)|*.vaultbackup|All Files (*.*)|*.*',
+        });
+        if (chosen) {
+          importPath = chosen;
+        }
+      }
+    } catch (err) {
+      console.error('Import browse error:', err);
+    }
+  }
+
   function formatBytes(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -181,7 +216,10 @@
           <div class="form-group">
             <div class="label-row">
               <label for="export-path">Destination File Path</label>
-              <button type="button" class="btn-link" on:click={setDefaultExportName}>Default Name</button>
+              <div class="label-actions">
+                <button type="button" class="btn-link" on:click={browseExportPath}>📂 Browse...</button>
+                <button type="button" class="btn-link" on:click={setDefaultExportName}>Default Name</button>
+              </div>
             </div>
             <input
               id="export-path"
@@ -277,7 +315,10 @@
           {/if}
 
           <div class="form-group">
-            <label for="import-path">Backup Archive File (.vaultbackup)</label>
+            <div class="label-row">
+              <label for="import-path">Backup Archive File (.vaultbackup)</label>
+              <button type="button" class="btn-link" on:click={browseImportPath}>📂 Browse Archive...</button>
+            </div>
             <input
               id="import-path"
               type="text"
@@ -518,6 +559,12 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 6px;
+  }
+
+  .label-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
   }
 
   label {

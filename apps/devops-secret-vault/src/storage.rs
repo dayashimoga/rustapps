@@ -126,6 +126,20 @@ impl VaultStorage {
             .map_err(VaultError::Storage)
     }
 
+    /// Wipe all vault metadata, encrypted secrets, and audit logs to reset the vault to an uninitialized state
+    pub fn reset_all_data(&self) -> Result<(), VaultError> {
+        self.db
+            .with_connection(|conn| {
+                conn.execute_batch(
+                    "DELETE FROM secrets;
+                     DELETE FROM audit_logs;
+                     DELETE FROM vault_metadata;",
+                )?;
+                Ok(())
+            })
+            .map_err(VaultError::Storage)
+    }
+
     /// Insert a newly created encrypted secret record with AES-256-GCM metadata encryption
     pub fn insert_secret_encrypted(
         &self,

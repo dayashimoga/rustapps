@@ -4,8 +4,12 @@
   export let doc: ExtractedDocument | null = null;
   export let isOpen = false;
   export let onClose: () => void = () => {};
+  export let onOpenInOs: (path: string) => void = () => {};
 
   let copySuccess = false;
+
+  $: isImageFile = doc && doc.extension && ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(doc.extension.toLowerCase());
+  $: imagePreviewUrl = doc && isImageFile ? `/__file?path=${encodeURIComponent(doc.path)}` : '';
 
   function copyToClipboard() {
     if (!doc) return;
@@ -62,15 +66,25 @@
       </div>
 
       <div class="modal-body">
+        {#if isImageFile && imagePreviewUrl}
+          <div class="image-preview-box">
+            <img src={imagePreviewUrl} alt={doc.file_name} class="preview-img" />
+          </div>
+        {/if}
         <div class="content-toolbar">
           <span class="toolbar-label">Extracted Plaintext Content:</span>
-          <button class="copy-btn" on:click={copyToClipboard}>
-            {#if copySuccess}
-              Copied!
-            {:else}
-              Copy Text
-            {/if}
-          </button>
+          <div style="display: flex; gap: 8px;">
+            <button class="copy-btn" on:click={() => doc && onOpenInOs(doc.path)}>
+              Open in OS Default App
+            </button>
+            <button class="copy-btn" on:click={copyToClipboard}>
+              {#if copySuccess}
+                Copied!
+              {:else}
+                Copy Text
+              {/if}
+            </button>
+          </div>
         </div>
         <pre class="content-display">{doc.content_text}</pre>
       </div>
@@ -255,5 +269,24 @@
 
   .primary-btn:hover {
     background: #0284c7;
+  }
+
+  .image-preview-box {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 12px;
+    max-height: 260px;
+    overflow: hidden;
+  }
+
+  .preview-img {
+    max-width: 100%;
+    max-height: 236px;
+    object-fit: contain;
+    border-radius: 4px;
   }
 </style>

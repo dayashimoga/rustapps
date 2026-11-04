@@ -183,7 +183,17 @@
     exportRunning = true;
     exportStatus = 'Rendering broadcast master offline...';
     try {
-      const outPath = `exports/master_${Date.now()}.wav`;
+      let outPath = `exports/master_${Date.now()}.wav`;
+      if (typeof window !== 'undefined' && window.__TAURI__?.dialog?.save) {
+        const picked = await window.__TAURI__.dialog.save({
+          title: 'Save Broadcast Master Mixdown (.wav)',
+          defaultName: `${(project?.name || 'master_mixdown').replace(/[^a-zA-Z0-9_-]/g, '_')}.wav`,
+          filter: '*.wav',
+        });
+        if (picked) {
+          outPath = picked;
+        }
+      }
       const res = await tauriInvoke<string>('render_audio_master_cmd', {
         outputPath: outPath,
       });

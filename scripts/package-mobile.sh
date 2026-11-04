@@ -5,12 +5,17 @@ set -euo pipefail
 
 VERSION="${1:-1.0.0}"
 OUTPUT_DIR="${2:-dist/mobile}"
+FILTER_APP="${3:-}"
 
 echo "=========================================================="
 echo "  Packaging Monorepo Mobile Apps (Android & iOS) v${VERSION}"
 echo "=========================================================="
 
-APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor")
+if [ -n "${FILTER_APP}" ]; then
+    APPS=("${FILTER_APP}")
+else
+    APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor")
+fi
 mkdir -p "${OUTPUT_DIR}"
 
 ANDROID_TARGETS=("aarch64-linux-android" "armv7-linux-androideabi" "x86_64-linux-android")
