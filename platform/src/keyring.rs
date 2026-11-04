@@ -441,7 +441,7 @@ impl PlatformKeyring for WindowsCredentialKeyring {
         }
     }
 
-    fn prompt_biometric_auth(&self, prompt_message: &str) -> Result<bool, PlatformError> {
+    fn prompt_biometric_auth(&self, _prompt_message: &str) -> Result<bool, PlatformError> {
         if !self.is_biometric_supported() {
             return Err(PlatformError::Unsupported(
                 "Windows Hello biometric verification is not available on this device".to_string(),
@@ -450,7 +450,7 @@ impl PlatformKeyring for WindowsCredentialKeyring {
 
         #[cfg(target_os = "windows")]
         {
-            let escaped_prompt = prompt_message.replace('\'', "''");
+            let escaped_prompt = _prompt_message.replace('\'', "''");
             let cmd = format!(
                 "try {{ [Windows.Security.Credentials.UI.UserConsentVerifier, Windows.Security.Credentials.UI, ContentType=WindowsRuntime]::RequestVerificationAsync('{}').GetAwaiter().GetResult().ToString() }} catch {{ 'Error' }}",
                 escaped_prompt

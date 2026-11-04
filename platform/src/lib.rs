@@ -272,6 +272,7 @@ impl ProcessResourceUsage {
     }
 
     fn query_os_metrics(pid: u32) -> (u64, u64) {
+        let _ = pid;
         #[cfg(target_os = "windows")]
         {
             // 1. Query working set memory via fast tasklist command

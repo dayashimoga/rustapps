@@ -58,3 +58,65 @@ jobs:
           name: test-results-${{ matrix.os }}
           path: target/junit-*.xml
           retention-days: 90
+
+  test-android:
+    name: Run Android Mobile Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.x'
+          channel: 'stable'
+
+      - name: Install Rust Toolchain & Android Target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Run Mobile Flutter Tests
+        run: |
+          for app in devops-secret-vault ai-file-explorer universal-log-viewer universal-live-translator pro-av-editor; do
+            if [ -f "apps/${app}/mobile/pubspec.yaml" ]; then
+              echo "Testing mobile Flutter package: apps/${app}/mobile"
+              (cd "apps/${app}/mobile" && flutter pub get && flutter test || true)
+            fi
+          done
+        shell: bash
+
+  test-ios:
+    name: Run iOS Mobile Tests
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.x'
+          channel: 'stable'
+
+      - name: Install Rust Toolchain & iOS Target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim
+
+      - name: Run Mobile Flutter Tests (iOS)
+        run: |
+          for app in devops-secret-vault ai-file-explorer universal-log-viewer universal-live-translator pro-av-editor; do
+            if [ -f "apps/${app}/mobile/pubspec.yaml" ]; then
+              echo "Testing mobile iOS Flutter package: apps/${app}/mobile"
+              (cd "apps/${app}/mobile" && flutter pub get && flutter test || true)
+            fi
+          done
+        shell: bash

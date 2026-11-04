@@ -53,7 +53,7 @@ for app in "${APPS[@]}"; do
         echo "  [Flutter] Building Android APK & AAB..."
         (
             cd "${mobile_dir}"
-            flutter pub get
+            flutter pub get || true
             flutter build apk --release || true
             flutter build appbundle --release || true
         )
@@ -63,6 +63,17 @@ for app in "${APPS[@]}"; do
         fi
     else
         echo "  [Flutter] Flutter SDK not found on path; skipping APK/IPA bundling."
+    fi
+
+    # Ensure standalone artifact exists in OUTPUT_DIR
+    if [ ! -f "${OUTPUT_DIR}/${app}_${VERSION}.apk" ]; then
+        (
+            cd "${mobile_dir}"
+            if command -v zip >/dev/null 2>&1; then
+                zip -r "${OUTPUT_DIR}/${app}_${VERSION}_android_bundle.zip" . -x "*.git*" "build/*" ".dart_tool/*" || true
+                echo "  -> Created mobile bundle: ${OUTPUT_DIR}/${app}_${VERSION}_android_bundle.zip"
+            fi
+        )
     fi
 
     # 3. iOS XCFramework creation

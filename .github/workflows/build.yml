@@ -16,21 +16,27 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            artifact_suffix: windows-x64
             use_cross: false
           - os: windows-latest
             target: aarch64-pc-windows-msvc
+            artifact_suffix: windows-arm64
             use_cross: false
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            artifact_suffix: linux-x64
             use_cross: false
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
+            artifact_suffix: linux-arm64
             use_cross: true
           - os: macos-13
             target: x86_64-apple-darwin
+            artifact_suffix: macos-x64
             use_cross: false
           - os: macos-latest
             target: aarch64-apple-darwin
+            artifact_suffix: macos-arm64
             use_cross: false
 
     steps:
@@ -62,6 +68,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libappindicator3-dev librsvg2-dev
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build Svelte Desktop UIs
+        run: |
+          for app in devops-secret-vault ai-file-explorer universal-log-viewer universal-live-translator pro-av-editor; do
+            if [ -d "apps/${app}/ui" ]; then
+              echo "Building UI for ${app}..."
+              (cd "apps/${app}/ui" && (npm ci || npm install) && npm run build)
+            fi
+          done
+        shell: bash
+
       - name: Check Formatting
         run: cargo fmt --all -- --check
 
@@ -80,9 +101,174 @@ jobs:
         if: matrix.use_cross
         run: cross build --workspace --release --target ${{ matrix.target }}
 
-      - name: Upload Build Artifacts
+      - name: Package Standalone Per-App ZIP Bundles
+        shell: bash
+        run: |
+          mkdir -p dist-packages
+          APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor")
+          for app in "${APPS[@]}"; do
+            mkdir -p "dist-packages/${app}"
+            bin_name="${app}"
+            [ "${{ runner.os }}" = "Windows" ] && bin_name="${app}.exe"
+            src_bin="target/${{ matrix.target }}/release/${bin_name}"
+            if [ -f "${src_bin}" ]; then
+              stage_dir="stage_${app}"
+              mkdir -p "${stage_dir}"
+              cp "${src_bin}" "${stage_dir}/"
+              touch "${stage_dir}/portable.flag"
+              [ -f "README.md" ] && cp "README.md" "${stage_dir}/"
+              [ -f "LICENSE" ] && cp "LICENSE" "${stage_dir}/"
+              zip_path="dist-packages/${app}/${app}-0.1.0-${{ matrix.artifact_suffix }}.zip"
+              if command -v 7z >/dev/null 2>&1; then
+                7z a -tzip "${zip_path}" "./${stage_dir}/*"
+              elif command -v zip >/dev/null 2>&1; then
+                (cd "${stage_dir}" && zip -r "../../${zip_path}" .)
+              elif command -v powershell >/dev/null 2>&1; then
+                powershell -Command "Compress-Archive -Path '${stage_dir}/*' -DestinationPath '${zip_path}' -Force"
+              fi
+              rm -rf "${stage_dir}"
+            fi
+          done
+
+      - name: Upload devops-secret-vault Artifact
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: binaries-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/
+          name: devops-secret-vault-${{ matrix.artifact_suffix }}
+          path: dist-packages/devops-secret-vault/
+          retention-days: 90
+
+      - name: Upload ai-file-explorer Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-file-explorer-${{ matrix.artifact_suffix }}
+          path: dist-packages/ai-file-explorer/
+          retention-days: 90
+
+      - name: Upload universal-log-viewer Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: universal-log-viewer-${{ matrix.artifact_suffix }}
+          path: dist-packages/universal-log-viewer/
+          retention-days: 90
+
+      - name: Upload universal-live-translator Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: universal-live-translator-${{ matrix.artifact_suffix }}
+          path: dist-packages/universal-live-translator/
+          retention-days: 90
+
+      - name: Upload pro-av-editor Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pro-av-editor-${{ matrix.artifact_suffix }}
+          path: dist-packages/pro-av-editor/
+          retention-days: 90
+
+  build-android:
+    name: Build Android Mobile (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - devops-secret-vault
+          - ai-file-explorer
+          - universal-log-viewer
+          - universal-live-translator
+          - pro-av-editor
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.x'
+          channel: 'stable'
+
+      - name: Install Rust Toolchain & Android Targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Package Standalone Android App
+        run: |
+          chmod +x scripts/package-mobile.sh
+          mkdir -p "dist/android/${{ matrix.app }}"
+          ./scripts/package-mobile.sh "0.1.0" "dist/android/${{ matrix.app }}" "${{ matrix.app }}"
+          mkdir -p "dist-packages/${{ matrix.app }}"
+          cd "dist/android/${{ matrix.app }}"
+          if command -v zip >/dev/null 2>&1; then
+            zip -r "../../../dist-packages/${{ matrix.app }}/${{ matrix.app }}-0.1.0-android.zip" .
+          fi
+        shell: bash
+
+      - name: Upload ${{ matrix.app }} Android Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.app }}-android
+          path: dist-packages/${{ matrix.app }}/
+          retention-days: 90
+
+  build-ios:
+    name: Build iOS Mobile (${{ matrix.app }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - devops-secret-vault
+          - ai-file-explorer
+          - universal-log-viewer
+          - universal-live-translator
+          - pro-av-editor
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.x'
+          channel: 'stable'
+
+      - name: Install Rust Toolchain & iOS Targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim, x86_64-apple-ios
+
+      - name: Package Standalone iOS Bundle
+        run: |
+          chmod +x scripts/package-mobile.sh
+          mkdir -p "dist/ios/${{ matrix.app }}"
+          ./scripts/package-mobile.sh "0.1.0" "dist/ios/${{ matrix.app }}" "${{ matrix.app }}"
+          mkdir -p "dist-packages/${{ matrix.app }}"
+          cd "dist/ios/${{ matrix.app }}"
+          if command -v zip >/dev/null 2>&1; then
+            zip -r "../../../dist-packages/${{ matrix.app }}/${{ matrix.app }}-0.1.0-ios.zip" .
+          fi
+        shell: bash
+
+      - name: Upload ${{ matrix.app }} iOS Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.app }}-ios
+          path: dist-packages/${{ matrix.app }}/
           retention-days: 90

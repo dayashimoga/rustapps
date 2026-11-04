@@ -11,7 +11,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -638,6 +640,7 @@ fn url_decode(input: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).to_string())
 }
 
+#[cfg(target_os = "windows")]
 fn build_windows_filter_string(opts: &Value) -> String {
     let mut parts = Vec::new();
     if let Some(filters) = opts.get("filters").and_then(|v| v.as_array()) {
@@ -673,6 +676,7 @@ fn build_windows_filter_string(opts: &Value) -> String {
 
 fn invoke_native_open_dialog(title: &str, is_dir: bool, multiple: bool, opts: &Value) -> Value {
     let safe_title = title.replace('\'', "''").replace('"', "");
+    let _ = &safe_title;
 
     #[cfg(target_os = "windows")]
     {
@@ -787,6 +791,7 @@ fn invoke_native_open_dialog(title: &str, is_dir: bool, multiple: bool, opts: &V
 fn invoke_native_save_dialog(title: &str, default_path: &str, opts: &Value) -> Value {
     let safe_title = title.replace('\'', "''").replace('"', "");
     let safe_default = default_path.replace('\'', "''").replace('"', "");
+    let _ = (&safe_title, &safe_default);
 
     #[cfg(target_os = "windows")]
     {
