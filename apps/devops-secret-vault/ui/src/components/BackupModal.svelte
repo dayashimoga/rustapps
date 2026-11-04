@@ -40,6 +40,25 @@
         });
         if (chosen) {
           exportPath = chosen;
+          return;
+        }
+      }
+      if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location?.protocol.startsWith('http')) {
+        const res = await fetch('/__dialog/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: 'Export Encrypted Vault Backup (.vaultbackup)',
+            defaultName: exportPath || `vault_backup_${new Date().toISOString().slice(0, 10)}.vaultbackup`,
+            filters: 'Vault Backup (*.vaultbackup)|*.vaultbackup|All Files (*.*)|*.*',
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.path) {
+            exportPath = data.path;
+            return;
+          }
         }
       }
     } catch (err) {
@@ -57,6 +76,24 @@
         });
         if (chosen) {
           importPath = chosen;
+          return;
+        }
+      }
+      if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location?.protocol.startsWith('http')) {
+        const res = await fetch('/__dialog/open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: 'Select Encrypted Vault Backup Archive (.vaultbackup)',
+            filters: 'Vault Backup (*.vaultbackup)|*.vaultbackup|All Files (*.*)|*.*',
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.path) {
+            importPath = data.path;
+            return;
+          }
         }
       }
     } catch (err) {

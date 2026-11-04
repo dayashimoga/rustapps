@@ -3,13 +3,47 @@
 
   export let items: FileItem[];
   export let selectedPaths: string[];
+  export let selectedItem: FileItem | null = null;
   export let onNavigateToFolder: (folderPath: string) => void;
   export let onNavigateUp: () => void;
   export let onToggleSelect: (path: string) => void;
   export let onSelectAll: () => void;
   export let onDeselectAll: () => void;
+  export let onSelectItem: (item: FileItem | null) => void = () => {};
   export let onInspectFile: (filePath: string) => void = () => {};
   export let onOpenInOs: (path: string) => void = () => {};
+
+  let sortColumn: 'name' | 'type' | 'size' | 'modified' = 'name';
+  let sortAsc = true;
+
+  function toggleSort(col: 'name' | 'type' | 'size' | 'modified') {
+    if (sortColumn === col) {
+      sortAsc = !sortAsc;
+    } else {
+      sortColumn = col;
+      sortAsc = true;
+    }
+  }
+
+  $: sortedItems = [...items].sort((a, b) => {
+    // Keep directories on top unless sorting by size
+    if (a.is_dir && !b.is_dir) return -1;
+    if (!a.is_dir && b.is_dir) return 1;
+
+    let res = 0;
+    if (sortColumn === 'name') {
+      res = a.file_name.localeCompare(b.file_name, undefined, { sensitivity: 'base', numeric: true });
+    } else if (sortColumn === 'type') {
+      const extA = a.extension || (a.is_dir ? 'folder' : '');
+      const extB = b.extension || (b.is_dir ? 'folder' : '');
+      res = extA.localeCompare(extB);
+    } else if (sortColumn === 'size') {
+      res = a.size_bytes - b.size_bytes;
+    } else if (sortColumn === 'modified') {
+      res = a.modified_timestamp_secs - b.modified_timestamp_secs;
+    }
+    return sortAsc ? res : -res;
+  });
 
   function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B';
@@ -50,6 +84,9 @@
       {#if selectedPaths.length > 0}
         <span class="selected-badge">{selectedPaths.length} selected</span>
       {/if}
+      {#if selectedItem}
+        <span class="active-preview-badge">Preview: {selectedItem.file_name}</span>
+      {/if}
     </div>
 
     <div class="selection-actions">
@@ -66,11 +103,19 @@
       <thead>
         <tr>
           <th style="width: 40px;"></th>
-          <th>Name</th>
-          <th style="width: 100px;">Type</th>
-          <th style="width: 120px;">Size</th>
-          <th style="width: 170px;">Modified</th>
-          <th style="width: 130px; text-align: right;">Actions</th>
+          <th class="sortable-th" on:click={() => toggleSort('name')}>
+            Name {sortColumn === 'name' ? (sortAsc ? '▲' : '▼') : ''}
+          </th>
+          <th style="width: 100px;" class="sortable-th" on:click={() => toggleSort('type')}>
+            Type {sortColumn === 'type' ? (sortAsc ? '▲' : '▼') : ''}
+          </th>
+          <th style="width: 120px;" class="sortable-th" on:click={() => toggleSort('size')}>
+            Size {sortColumn === 'size' ? (sortAsc ? '▲' : '▼') : ''}
+          </th>
+          <th style="width: 170px;" class="sortable-th" on:click={() => toggleSort('modified')}>
+            Modified {sortColumn === 'modified' ? (sortAsc ? '▲' : '▼') : ''}
+          </th>
+          <th style="width: 140px; text-align: right;">Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -92,29 +137,30 @@
             </td>
           </tr>
         {:else}
-          {#each items as item (item.path)}
-            {@const isSelected = selectedPaths.includes(item.path)}
+          {#each sortedItems as item (item.path)}
+            {@const isChecked = selectedPaths.includes(item.path)}
+            {@const isRowActive = selectedItem && selectedItem.path === item.path}
             <tr
-              class="row-clickable {isSelected ? 'row-selected' : ''}"
+              class="row-clickable {isChecked ? 'row-selected' : ''} {isRowActive ? 'row-active' : ''}"
               on:click={() => {
                 if (item.is_dir) {
                   onNavigateToFolder(item.path);
                 } else {
-                  onInspectFile(item.path);
+                  onSelectItem(item);
                 }
               }}
               on:dblclick={() => {
                 if (item.is_dir) {
                   onNavigateToFolder(item.path);
                 } else {
-                  onInspectFile(item.path);
+                  onOpenInOs(item.path);
                 }
               }}
             >
               <td class="checkbox-cell" on:click|stopPropagation>
                 <input
                   type="checkbox"
-                  checked={isSelected}
+                  checked={isChecked}
                   on:change={() => onToggleSelect(item.path)}
                 />
               </td>
@@ -130,14 +176,14 @@
                     <polyline points="13 2 13 9 20 9"></polyline>
                   </svg>
                 {/if}
-                <span class="file-name">{item.file_name}</span>
+                <span class="file-name" title={item.path}>{item.file_name}</span>
               </td>
 
               <td>
                 {#if item.is_dir}
                   <span class="type-tag folder-tag">Folder</span>
                 {:else if item.extension}
-                  <span class="badge {getExtensionBadgeClass(item.extension)}">{item.extension}</span>
+                  <span class="badge {getExtensionBadgeClass(item.extension)}">{item.extension.toUpperCase()}</span>
                 {:else}
                   <span class="type-tag file-tag">File</span>
                 {/if}
@@ -155,7 +201,8 @@
                 {#if item.is_dir}
                   <button class="mini-action-btn" on:click={() => onNavigateToFolder(item.path)}>Open</button>
                 {:else}
-                  <button class="mini-action-btn" on:click={() => onInspectFile(item.path)}>Preview</button>
+                  <button class="mini-action-btn primary" on:click={() => onSelectItem(item)}>Preview</button>
+                  <button class="mini-action-btn" on:click={() => onInspectFile(item.path)} title="Inspect Text & Metadata">Inspect</button>
                 {/if}
                 <button class="mini-action-btn secondary" on:click={() => onOpenInOs(item.path)} title="Open in OS Default Application">OS</button>
               </td>
@@ -254,6 +301,29 @@
   }
   .row-selected {
     background: rgba(6, 182, 212, 0.1) !important;
+  }
+  .row-active {
+    background: rgba(59, 130, 246, 0.16) !important;
+    border-left: 3px solid var(--accent-cyan);
+  }
+
+  .sortable-th {
+    cursor: pointer;
+    user-select: none;
+    transition: color 0.15s ease;
+  }
+  .sortable-th:hover {
+    color: var(--accent-cyan);
+  }
+
+  .active-preview-badge {
+    background: rgba(59, 130, 246, 0.2);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    border-radius: 9999px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-weight: 500;
   }
 
   .checkbox-cell {

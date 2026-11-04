@@ -57,6 +57,23 @@
           return;
         }
       }
+      if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location?.protocol.startsWith('http')) {
+        const res = await fetch('/__dialog/open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: 'Open or Select DevOps Secret Vault Database (.db)',
+            filters: [{ name: 'Vault Database', extensions: ['db', 'sqlite'] }],
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.path) {
+            dispatch('switchVault', { path: data.path });
+            return;
+          }
+        }
+      }
     } catch (e) {
       console.error('Vault file dialog error:', e);
     }

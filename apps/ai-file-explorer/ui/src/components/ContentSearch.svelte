@@ -23,7 +23,8 @@
   ];
 
   async function handleSearch() {
-    if (!searchQuery.trim()) {
+    const effectiveQuery = searchQuery.trim() || (selectedExtension ? '*' : '');
+    if (!effectiveQuery) {
       results = { items: [], total_matches: 0, execution_time_ms: 0 };
       return;
     }
@@ -31,9 +32,9 @@
     isSearching = true;
     try {
       const queryPayload: ContentSearchQuery = {
-        query: searchQuery,
+        query: effectiveQuery,
         mode: selectedMode,
-        limit: 25,
+        limit: 50,
         extension_filter: selectedExtension,
       };
       if ((window as any).__TAURI__?.invoke) {
@@ -47,7 +48,12 @@
           body: JSON.stringify({ query: queryPayload }),
         });
         if (res.ok) {
-          results = await res.json();
+          const payload = await res.json();
+          if (payload && '__ipc_data' in payload) {
+            results = payload.__ipc_data;
+          } else {
+            results = payload;
+          }
         }
       } else {
         // Mock offline demo results

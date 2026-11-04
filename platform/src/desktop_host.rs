@@ -48,7 +48,7 @@ pub fn enumerate_drives_and_places() -> Vec<FsLocationEntry> {
     {
         for letter in b'A'..=b'Z' {
             let root = format!("{}:\\", letter as char);
-            if Path::new(&root).exists() {
+            if Path::new(&root).exists() && std::fs::read_dir(&root).is_ok() {
                 entries.push(FsLocationEntry {
                     name: format!("Local Disk ({}:)", letter as char),
                     path: root,

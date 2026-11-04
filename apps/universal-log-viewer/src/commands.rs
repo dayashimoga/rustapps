@@ -590,8 +590,7 @@ impl LogViewerService {
     }
 }
 
-static DEFAULT_LOG_SERVICE: std::sync::OnceLock<(Arc<LogViewerService>, PathBuf)> =
-    std::sync::OnceLock::new();
+static DEFAULT_LOG_SERVICE: std::sync::OnceLock<Arc<LogViewerService>> = std::sync::OnceLock::new();
 
 fn ensure_sample_log_file(dir: &Path) -> PathBuf {
     let sample_path = dir.join("production_cluster_sample.log");
@@ -639,34 +638,26 @@ fn ensure_sample_log_file(dir: &Path) -> PathBuf {
     sample_path
 }
 
-pub fn get_default_log_service() -> Result<(Arc<LogViewerService>, PathBuf), String> {
-    if let Some((svc, sample_path)) = DEFAULT_LOG_SERVICE.get() {
-        return Ok((Arc::clone(svc), sample_path.clone()));
+pub fn get_default_log_service() -> Result<Arc<LogViewerService>, String> {
+    if let Some(svc) = DEFAULT_LOG_SERVICE.get() {
+        return Ok(Arc::clone(svc));
     }
-    let (ws_store, sample_path) =
+    let ws_store =
         if let Ok(paths) = platform_common::AppPaths::from_app_name("universal-log-viewer") {
             let _ = paths.ensure_directories();
             let db_path = paths.data_dir.join("workspaces.db");
             let ws = WorkspaceStore::open(&db_path)
                 .or_else(|_| WorkspaceStore::open_in_memory())
                 .map_err(|e| e.to_string())?;
-            let sp = ensure_sample_log_file(&paths.cache_dir);
-            (Arc::new(ws), sp)
+            Arc::new(ws)
         } else {
             let ws = WorkspaceStore::open_in_memory().map_err(|e| e.to_string())?;
-            let sp = ensure_sample_log_file(&std::env::temp_dir());
-            (Arc::new(ws), sp)
+            Arc::new(ws)
         };
 
     let svc = Arc::new(LogViewerService::new(ws_store, LocalTelemetry::new(true)));
-    if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        let _ = rt.block_on(svc.open_file(&sample_path));
-    }
-    let _ = DEFAULT_LOG_SERVICE.set((Arc::clone(&svc), sample_path.clone()));
-    Ok((svc, sample_path))
+    let _ = DEFAULT_LOG_SERVICE.set(Arc::clone(&svc));
+    Ok(svc)
 }
 
 /// Dispatch desktop IPC commands from the Svelte 5 Universal Log Viewer frontend
@@ -674,13 +665,8 @@ pub fn dispatch_ipc_command(
     cmd: &str,
     args: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let (svc, sample_path) = get_default_log_service()?;
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    rt.block_on(async move {
+    let svc = get_default_log_service()?;
+    let fut = async move {
         match cmd {
             "open_file" => {
                 let raw_path = args
@@ -689,7 +675,11 @@ pub fn dispatch_ipc_command(
                     .unwrap_or("default")
                     .trim();
                 let target_path = if raw_path.is_empty() || raw_path == "default" {
-                    sample_path
+                    let cache_dir =
+                        platform_common::AppPaths::from_app_name("universal-log-viewer")
+                            .map(|p| p.cache_dir)
+                            .unwrap_or_else(|_| std::env::temp_dir());
+                    ensure_sample_log_file(&cache_dir)
                 } else {
                     let p = PathBuf::from(raw_path);
                     if !p.exists() {
@@ -720,10 +710,9 @@ pub fn dispatch_ipc_command(
                         }
                     })
                     .collect();
-                let target_dir = sample_path
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(std::env::temp_dir);
+                let target_dir = platform_common::AppPaths::from_app_name("universal-log-viewer")
+                    .map(|p| p.cache_dir)
+                    .unwrap_or_else(|_| std::env::temp_dir());
                 let target_path = target_dir.join(if safe_name.is_empty() {
                     "imported.log".to_string()
                 } else {
@@ -927,9 +916,206 @@ pub fn dispatch_ipc_command(
                     "records_redacted": count,
                 }))
             }
+            "open_directory" | "scan_directory" => {
+                let raw_path = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+                if raw_path.is_empty() {
+                    return Err("Directory path cannot be empty".to_string());
+                }
+                let dir = PathBuf::from(raw_path);
+                if !dir.is_dir() {
+                    return Err(format!("Not a directory: {}", raw_path));
+                }
+
+                let mut entries = Vec::new();
+                if let Ok(read_dir) = std::fs::read_dir(&dir) {
+                    for entry in read_dir.flatten() {
+                        let path = entry.path();
+                        if path.is_file() {
+                            let ext = path
+                                .extension()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+                            if [
+                                "log", "txt", "json", "jsonl", "out", "err", "csv", "tsv", "audit",
+                                "trace",
+                            ]
+                            .contains(&ext.as_str())
+                            {
+                                let meta = entry.metadata().ok();
+                                let size_bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                                let modified_secs = meta
+                                    .and_then(|m| m.modified().ok())
+                                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                    .map(|d| d.as_secs())
+                                    .unwrap_or(0);
+                                let name = path
+                                    .file_name()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                entries.push(serde_json::json!({
+                                    "path": path.to_string_lossy(),
+                                    "name": name,
+                                    "size_bytes": size_bytes,
+                                    "modified_secs": modified_secs,
+                                }));
+                            }
+                        }
+                    }
+                }
+                entries.sort_by(|a, b| {
+                    let b_time = b.get("modified_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let a_time = a.get("modified_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+                    b_time.cmp(&a_time)
+                });
+                serde_json::to_value(entries).map_err(|e| e.to_string())
+            }
+            "list_system_logs" => {
+                let mut candidates = Vec::new();
+                #[cfg(target_os = "windows")]
+                {
+                    if let Ok(win_dir) = std::env::var("SystemRoot") {
+                        let logs_path = PathBuf::from(&win_dir).join("Logs");
+                        if logs_path.exists() {
+                            candidates.push(logs_path);
+                        }
+                    }
+                    if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
+                        let temp_logs = PathBuf::from(&local_app).join("Temp");
+                        if temp_logs.exists() {
+                            candidates.push(temp_logs);
+                        }
+                    }
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    let var_log = PathBuf::from("/var/log");
+                    if var_log.exists() {
+                        candidates.push(var_log);
+                    }
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    let lib_log = PathBuf::from("/Library/Logs");
+                    if lib_log.exists() {
+                        candidates.push(lib_log);
+                    }
+                }
+
+                let mut results = Vec::new();
+                for dir in candidates {
+                    if let Ok(read_dir) = std::fs::read_dir(&dir) {
+                        for entry in read_dir.flatten() {
+                            let path = entry.path();
+                            if path.is_file() {
+                                let ext = path
+                                    .extension()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("")
+                                    .to_lowercase();
+                                if ["log", "txt", "out"].contains(&ext.as_str()) {
+                                    if let Ok(meta) = entry.metadata() {
+                                        let size_bytes = meta.len();
+                                        if size_bytes > 0 && size_bytes < 500_000_000 {
+                                            let modified_secs = meta
+                                                .modified()
+                                                .ok()
+                                                .and_then(|t| {
+                                                    t.duration_since(std::time::UNIX_EPOCH).ok()
+                                                })
+                                                .map(|d| d.as_secs())
+                                                .unwrap_or(0);
+                                            let name = path
+                                                .file_name()
+                                                .and_then(|s| s.to_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            results.push(serde_json::json!({
+                                                "path": path.to_string_lossy(),
+                                                "name": name,
+                                                "size_bytes": size_bytes,
+                                                "modified_secs": modified_secs,
+                                            }));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                results.sort_by(|a, b| {
+                    let b_time = b.get("modified_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let a_time = a.get("modified_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+                    b_time.cmp(&a_time)
+                });
+                results.truncate(30);
+                serde_json::to_value(results).map_err(|e| e.to_string())
+            }
+            "export_filtered_logs" => {
+                let dest_path_str = args
+                    .get("destPath")
+                    .or_else(|| args.get("dest_path"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("filtered_export.log");
+                let line_numbers = args
+                    .get("lineNumbers")
+                    .or_else(|| args.get("line_numbers"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|val| val.as_u64().map(|n| n as usize))
+                            .collect::<Vec<usize>>()
+                    });
+
+                let lines = if let Some(indices) = line_numbers {
+                    svc.get_lines_by_indices(&indices)
+                        .await
+                        .map_err(|e| e.to_string())?
+                } else {
+                    svc.get_lines_slice(0, 50000)
+                        .await
+                        .map_err(|e| e.to_string())?
+                };
+
+                let mut out = String::new();
+                for l in &lines {
+                    out.push_str(&l.text);
+                    out.push('\n');
+                }
+                std::fs::write(dest_path_str, out.as_bytes()).map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
+                    "dest_path": dest_path_str,
+                    "exported_lines": lines.len(),
+                }))
+            }
             _ => Err(format!("Unknown Universal Log Viewer IPC command: {}", cmd)),
         }
-    })
+    };
+
+    if tokio::runtime::Handle::try_current().is_ok() {
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string())?;
+                rt.block_on(fut)
+            })
+            .join()
+            .unwrap_or_else(|_| Err("Thread execution failed".to_string()))
+        })
+    } else {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        rt.block_on(fut)
+    }
 }
 
 #[cfg(test)]
@@ -997,5 +1183,40 @@ mod tests {
         let redacted_count = service.export_redacted(&export_path, &gate).await.unwrap();
         assert_eq!(redacted_count, 3);
         assert!(export_path.exists());
+
+        // Dispatch IPC open_directory
+        let dir_val = dispatch_ipc_command(
+            "open_directory",
+            serde_json::json!({ "path": temp.path().to_str().unwrap() }),
+        )
+        .unwrap();
+        assert!(!dir_val.as_array().unwrap().is_empty());
+
+        // Dispatch IPC list_system_logs
+        let sys_val = dispatch_ipc_command("list_system_logs", serde_json::json!({})).unwrap();
+        assert!(sys_val.is_array());
+
+        // Dispatch IPC open_file on default service
+        dispatch_ipc_command(
+            "open_file",
+            serde_json::json!({ "path": log_path.to_str().unwrap() }),
+        )
+        .unwrap();
+
+        // Dispatch IPC export_filtered_logs
+        let filter_export = temp.path().join("filtered_out.log");
+        let export_val = dispatch_ipc_command(
+            "export_filtered_logs",
+            serde_json::json!({
+                "destPath": filter_export.to_str().unwrap(),
+                "lineNumbers": [0, 2]
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            export_val.get("exported_lines").unwrap().as_u64().unwrap(),
+            2
+        );
+        assert!(filter_export.exists());
     }
 }

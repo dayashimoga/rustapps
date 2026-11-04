@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import Header from './components/Header.svelte';
   import FileBrowser from './components/FileBrowser.svelte';
+  import FilePreviewPane from './components/FilePreviewPane.svelte';
   import DuplicateFinder from './components/DuplicateFinder.svelte';
   import TreemapView from './components/TreemapView.svelte';
   import BatchRenameModal from './components/BatchRenameModal.svelte';
@@ -35,6 +36,7 @@
   let activeTab: ActiveTab = 'browser';
   let showStatsDrawer = false;
   let navError = '';
+  let previewItem: FileItem | null = null;
 
   // Drives & Quick Access Places
   let drivesAndPlaces: FsLocationEntry[] = [];
@@ -90,8 +92,17 @@
           if (payload && '__ipc_data' in payload) {
             return payload.__ipc_data as T;
           }
+        } else {
+          const errPayload = await response.json().catch(() => null);
+          if (errPayload && errPayload.__ipc_error) {
+            throw new Error(errPayload.__ipc_error);
+          }
+          throw new Error(`Command "${cmd}" failed with status ${response.status}`);
         }
-      } catch {
+      } catch (e: any) {
+        if (e && e.message && !e.message.includes('Failed to fetch')) {
+          throw e;
+        }
         // Fallback for headless unit test environments
       }
     }
@@ -454,9 +465,13 @@
       return;
     }
 
-    // Immediate local substring match on current folder
+    // Strip leading wildcard or dot if searching for extension e.g. "*.pdf" or ".pdf"
+    const extSearch = trimmed.startsWith('*.') ? trimmed.slice(2) : trimmed.startsWith('.') ? trimmed.slice(1) : trimmed;
+
+    // Immediate local substring match on current folder (checking both file_name and extension)
     const localHits = currentFolderItems.filter((item) =>
-      item.file_name.toLowerCase().includes(trimmed)
+      item.file_name.toLowerCase().includes(trimmed) ||
+      (item.extension && item.extension.toLowerCase() === extSearch)
     );
 
     try {
@@ -712,17 +727,35 @@
     <div class="main-content-view">
       <!-- Active Tab View Surface -->
       {#if activeTab === 'browser'}
-        <FileBrowser
-          items={listing.items}
-          {selectedPaths}
-          onNavigateToFolder={loadDirectory}
-          onNavigateUp={handleNavigateUp}
-          onToggleSelect={handleToggleSelect}
-          onSelectAll={handleSelectAll}
-          onDeselectAll={handleDeselectAll}
-          onInspectFile={handleInspectDoc}
-          onOpenInOs={handleOpenInOs}
-        />
+        <div class="browser-split-layout">
+          <FileBrowser
+            items={listing.items}
+            {selectedPaths}
+            selectedItem={previewItem}
+            onSelectItem={(item) => (previewItem = item)}
+            onNavigateToFolder={(p) => {
+              previewItem = null;
+              loadDirectory(p);
+            }}
+            onNavigateUp={() => {
+              previewItem = null;
+              handleNavigateUp();
+            }}
+            onToggleSelect={handleToggleSelect}
+            onSelectAll={handleSelectAll}
+            onDeselectAll={handleDeselectAll}
+            onInspectFile={handleInspectDoc}
+            onOpenInOs={handleOpenInOs}
+          />
+          {#if previewItem}
+            <FilePreviewPane
+              item={previewItem}
+              onClose={() => (previewItem = null)}
+              onOpenInOs={handleOpenInOs}
+              onInspectDoc={handleInspectDoc}
+            />
+          {/if}
+        </div>
       {:else if activeTab === 'content_search'}
         <ContentSearch
           onInspectDoc={handleInspectDoc}
@@ -948,5 +981,13 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+  }
+
+  .browser-split-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    gap: 12px;
+    height: 100%;
   }
 </style>

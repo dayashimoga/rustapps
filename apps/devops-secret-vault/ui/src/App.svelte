@@ -8,6 +8,8 @@
   import HealthDashboard from './components/HealthDashboard.svelte';
   import BackupModal from './components/BackupModal.svelte';
   import ShamirModal from './components/ShamirModal.svelte';
+  import LeakScannerModal from './components/LeakScannerModal.svelte';
+  import PasswordGeneratorModal from './components/PasswordGeneratorModal.svelte';
   import type {
     BackupExportSummary,
     BackupImportSummary,
@@ -40,8 +42,10 @@
   let isHealthDashboardOpen = false;
   let isBackupModalOpen = false;
   let isShamirModalOpen = false;
+  let isLeakScannerOpen = false;
+  let isGeneratorOpen = false;
   let shamirModalMode: 'split' | 'unlock' = 'split';
-  let biometricAvailable = true;
+  let biometricAvailable = false;
   let clipboardSeconds: number | null = null;
   let clipboardTimer: number | null = null;
 
@@ -55,82 +59,42 @@
     toastTimeout = window.setTimeout(() => { toastMessage = ''; }, 3500);
   }
 
-  // --- Tauri IPC or Browser Mock Bridge ---
-  const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
-
-  // Mock in-memory state for development / preview
-  let mockSecrets: DecryptedSecret[] = [
-    {
-      metadata: {
-        id: 'mock-1',
-        title: 'Production AWS Root Account',
-        secret_type: 'api_key',
-        tags: ['aws', 'prod', 'infra'],
-        username: 'devops-root',
-        url: 'https://aws.amazon.com',
-        notes: 'Master credentials for cloud infrastructure provisioning.',
-        version: 1,
-        created_at: Math.floor(Date.now() / 1000) - 86400,
-        updated_at: Math.floor(Date.now() / 1000) - 3600,
-      },
-      payload: {
-        type: 'api_key',
-        data: {
-          api_key: 'AKIAIOSFODNN7EXAMPLE',
-          api_secret: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
-          endpoint_url: 'https://iam.amazonaws.com',
-        },
-      },
-    },
-    {
-      metadata: {
-        id: 'mock-2',
-        title: 'Bastion SSH Private Key',
-        secret_type: 'ssh_key',
-        tags: ['ssh', 'k8s', 'bastion'],
-        username: 'ubuntu',
-        url: 'ssh://bastion.cloud.internal:2222',
-        notes: 'Access key for Kubernetes cluster nodes.',
-        version: 2,
-        created_at: Math.floor(Date.now() / 1000) - 172800,
-        updated_at: Math.floor(Date.now() / 1000) - 7200,
-      },
-      payload: {
-        type: 'ssh_key',
-        data: {
-          private_key: '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAACFwAAAAdzc2gtcn\nNhAAAAAwEAAQAAAgEA3q1...\n-----END OPENSSH PRIVATE KEY-----',
-          public_key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICl+...',
-          passphrase: 'secure-passphrase-2026',
-        },
-      },
-    },
-    {
-      metadata: {
-        id: 'mock-3',
-        title: 'PostgreSQL Analytics Replica',
-        secret_type: 'database_credential',
-        tags: ['db', 'postgres', 'analytics'],
-        username: 'analytics_ro',
-        url: 'postgres://analytics.db.internal:5432/dw',
-        notes: 'Read-only connection for Data Warehouse ingestion.',
-        version: 1,
-        created_at: Math.floor(Date.now() / 1000) - 300000,
-        updated_at: Math.floor(Date.now() / 1000) - 10000,
-      },
-      payload: {
-        type: 'database_credential',
-        data: {
-          engine: 'postgresql',
-          host: 'analytics.db.internal',
-          port: 5432,
-          database: 'dw',
-          username: 'analytics_ro',
-          password: 'Analytics-P@ssword-2026!',
-          connection_string: 'postgresql://analytics_ro:Analytics-P@ssword-2026!@analytics.db.internal:5432/dw',
-        },
-      },
-    },
-  ];
+  // --- Universal Loopback & Tauri IPC Bridge ---
+  async function invokeTauri<T>(cmd: string, args: Record<string, any> = {}): Promise<T> {
+    const tauri = (window as unknown as {
+      __TAURI__?: {
+        invoke?: (cmd: string, args: Record<string, unknown>) => Promise<T>;
+        core?: { invoke: (cmd: string, args: Record<string, unknown>) => Promise<T> };
+      };
+    }).__TAURI__;
+    if (tauri?.core?.invoke) {
+      return await tauri.core.invoke(cmd, args);
+    }
+    if (tauri?.invoke) {
+      return await tauri.invoke(cmd, args);
+    }
+    if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
+      const response = await fetch('/__ipc/' + encodeURIComponent(cmd), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(args || {}),
+      });
+      if (response.ok) {
+        const payload = await response.json();
+        if (payload && '__ipc_data' in payload) {
+          return payload.__ipc_data as T;
+        }
+        return payload as T;
+      } else {
+        const errPayload = await response.json().catch(() => null);
+        if (errPayload && errPayload.__ipc_error) {
+          throw new Error(errPayload.__ipc_error);
+        }
+        throw new Error(`Command "${cmd}" failed with status ${response.status}`);
+      }
+    }
+    throw new Error(`No IPC transport available for "${cmd}"`);
+  }
 
   onMount(async () => {
     await checkStatus();
@@ -142,30 +106,26 @@
   });
 
   async function checkStatus() {
-    if (isTauri) {
-      try {
-        const res: any = await (window as any).__TAURI__.invoke('get_vault_status');
-        isInitialized = res.is_initialized;
-        isLocked = res.is_locked;
-        if (res.vault_path) {
-          vaultPath = res.vault_path;
-        }
-        try {
-          biometricAvailable = await (window as any).__TAURI__.invoke('is_biometric_available');
-        } catch (_) {
-          biometricAvailable = false;
-        }
-        if (!isLocked) {
-          await loadSecrets();
-        }
-      } catch (err: any) {
-        console.error('Status check error:', err);
+    try {
+      const res: any = await invokeTauri('get_vault_status');
+      isInitialized = Boolean(res.is_initialized);
+      isLocked = res.is_locked ?? true;
+      if (res.vault_path) {
+        vaultPath = res.vault_path;
       }
-    } else {
-      // Mock mode default: initialized but locked
-      isInitialized = true;
+      try {
+        biometricAvailable = await invokeTauri('is_biometric_available');
+      } catch (_) {
+        biometricAvailable = false;
+      }
+      if (!isLocked) {
+        await loadSecrets();
+      }
+    } catch (err: any) {
+      console.warn('Status check fallback to local uninitialized state:', err);
+      isInitialized = false;
       isLocked = true;
-      biometricAvailable = true;
+      biometricAvailable = false;
     }
   }
 
@@ -175,20 +135,12 @@
     const { password } = event.detail;
 
     try {
-      if (isTauri) {
-        await (window as any).__TAURI__.invoke('unlock_vault', { masterPassword: password });
-      } else {
-        // Mock unlock check
-        await new Promise(r => setTimeout(r, 400));
-        if (password.length < 4) {
-          throw new Error('Invalid master passphrase or token');
-        }
-      }
+      await invokeTauri('unlock_vault', { masterPassword: password });
       isLocked = false;
       await loadSecrets();
       showToast('Vault unlocked. Ephemeral Tantivy index loaded into RAM.');
     } catch (err: any) {
-      errorMessage = err.toString() || 'Authentication failed';
+      errorMessage = err?.message || err?.toString() || 'Authentication failed';
     } finally {
       isLoading = false;
     }
@@ -200,17 +152,13 @@
     const { password } = event.detail;
 
     try {
-      if (isTauri) {
-        await (window as any).__TAURI__.invoke('initialize_vault', { masterPassword: password });
-      } else {
-        await new Promise(r => setTimeout(r, 500));
-      }
+      await invokeTauri('initialize_vault', { masterPassword: password });
       isInitialized = true;
       isLocked = false;
       await loadSecrets();
       showToast('Vault initialized with Argon2id master key.');
     } catch (err: any) {
-      errorMessage = err.toString() || 'Initialization failed';
+      errorMessage = err?.message || err?.toString() || 'Initialization failed';
     } finally {
       isLoading = false;
     }
@@ -220,16 +168,12 @@
     isLoading = true;
     errorMessage = '';
     try {
-      if (isTauri) {
-        await (window as any).__TAURI__.invoke('unlock_with_biometrics');
-      } else {
-        await new Promise(r => setTimeout(r, 600));
-      }
+      await invokeTauri('unlock_with_biometrics');
       isLocked = false;
       await loadSecrets();
       showToast('Unlocked via Windows Hello / Hardware Biometrics.');
     } catch (err: any) {
-      errorMessage = err?.toString() || 'Biometric verification failed.';
+      errorMessage = err?.message || err?.toString() || 'Biometric verification failed.';
     } finally {
       isLoading = false;
     }
@@ -238,20 +182,16 @@
   async function handleToggleBiometricEnrollment() {
     try {
       if (biometricAvailable) {
-        if (isTauri) {
-          await (window as any).__TAURI__.invoke('disable_biometric_unlock');
-        }
+        await invokeTauri('disable_biometric_unlock');
         biometricAvailable = false;
         showToast('Biometric unlock disabled and key purged from OS Keyring.');
       } else {
-        if (isTauri) {
-          await (window as any).__TAURI__.invoke('enable_biometric_unlock');
-        }
+        await invokeTauri('enable_biometric_unlock');
         biometricAvailable = true;
         showToast('Windows Hello / OS Biometric unlock enabled for this vault.');
       }
     } catch (err: any) {
-      showToast('Biometric enrollment failed: ' + (err?.toString() || 'Unknown error'));
+      showToast('Biometric enrollment failed: ' + (err?.message || err?.toString() || 'Unknown error'));
     }
   }
 
@@ -259,21 +199,16 @@
     isLoading = true;
     errorMessage = '';
     try {
-      if (isTauri) {
-        const status: any = await (window as any).__TAURI__.invoke('reset_vault', {});
-        isInitialized = Boolean(status?.is_initialized);
-        isLocked = status?.is_locked ?? true;
-        if (status?.vault_path) vaultPath = status.vault_path;
-      } else {
-        isInitialized = false;
-        isLocked = true;
-      }
+      const status: any = await invokeTauri('reset_vault', {});
+      isInitialized = Boolean(status?.is_initialized);
+      isLocked = status?.is_locked ?? true;
+      if (status?.vault_path) vaultPath = status.vault_path;
       secrets = [];
       selectedSecretId = null;
       selectedSecret = null;
       showToast('Vault reset to uninitialized state. Set your new Master Passphrase.');
     } catch (err: any) {
-      errorMessage = err?.toString() || 'Failed to reset vault';
+      errorMessage = err?.message || err?.toString() || 'Failed to reset vault';
     } finally {
       isLoading = false;
     }
@@ -284,28 +219,26 @@
     errorMessage = '';
     try {
       const targetPath = event.detail.path;
-      if (isTauri) {
-        const status: any = await (window as any).__TAURI__.invoke('switch_vault_db', { path: targetPath });
-        isInitialized = Boolean(status?.is_initialized);
-        isLocked = status?.is_locked ?? true;
-        if (status?.vault_path) vaultPath = status.vault_path;
-      } else {
-        vaultPath = targetPath;
-      }
+      const status: any = await invokeTauri('switch_vault_db', { path: targetPath });
+      isInitialized = Boolean(status?.is_initialized);
+      isLocked = status?.is_locked ?? true;
+      if (status?.vault_path) vaultPath = status.vault_path;
       secrets = [];
       selectedSecretId = null;
       selectedSecret = null;
       showToast(`Switched active vault database to: ${targetPath}`);
     } catch (err: any) {
-      errorMessage = err?.toString() || 'Failed to switch vault file';
+      errorMessage = err?.message || err?.toString() || 'Failed to switch vault file';
     } finally {
       isLoading = false;
     }
   }
 
   async function handleLock() {
-    if (isTauri) {
-      await (window as any).__TAURI__.invoke('lock_vault');
+    try {
+      await invokeTauri('lock_vault');
+    } catch (err) {
+      console.warn('Lock vault error:', err);
     }
     isLocked = true;
     selectedSecretId = null;
@@ -316,10 +249,11 @@
   }
 
   async function loadSecrets() {
-    if (isTauri) {
-      secrets = await (window as any).__TAURI__.invoke('list_secrets');
-    } else {
-      secrets = mockSecrets.map(s => s.metadata);
+    try {
+      secrets = await invokeTauri<SecretMetadata[]>('list_secrets');
+    } catch (err) {
+      console.warn('Failed to list secrets:', err);
+      secrets = [];
     }
     if (secrets.length > 0 && !selectedSecretId) {
       selectSecret(secrets[0].id);
@@ -328,15 +262,13 @@
 
   async function selectSecret(id: string) {
     selectedSecretId = id;
-    if (isTauri) {
-      selectedSecret = await (window as any).__TAURI__.invoke('get_secret', { id });
-      activeAuditLogs = await (window as any).__TAURI__.invoke('get_audit_logs', { secretId: id, limit: 20 });
-    } else {
-      selectedSecret = mockSecrets.find(s => s.metadata.id === id) || null;
-      activeAuditLogs = [
-        { id: '1', secret_id: id, action: 'created', timestamp: Math.floor(Date.now() / 1000) - 3600, client: 'desktop-tauri' },
-        { id: '2', secret_id: id, action: 'read', timestamp: Math.floor(Date.now() / 1000) - 60, client: 'desktop-tauri' },
-      ];
+    try {
+      selectedSecret = await invokeTauri<DecryptedSecret>('get_secret', { id });
+      activeAuditLogs = await invokeTauri<SecretAuditEntry[]>('get_audit_logs', { secretId: id, limit: 20 });
+    } catch (err) {
+      console.error('Failed to get secret details:', err);
+      selectedSecret = null;
+      activeAuditLogs = [];
     }
   }
 
@@ -347,8 +279,8 @@
       return;
     }
 
-    if (isTauri) {
-      const hits: any[] = await (window as any).__TAURI__.invoke('search_secrets', { query, limit: 50 });
+    try {
+      const hits: any[] = await invokeTauri('search_secrets', { query, limit: 50 });
       secrets = hits.map(h => ({
         id: h.id,
         title: h.title,
@@ -359,15 +291,8 @@
         created_at: 0,
         updated_at: 0,
       }));
-    } else {
-      const q = query.toLowerCase();
-      secrets = mockSecrets
-        .filter(s =>
-          s.metadata.title.toLowerCase().includes(q) ||
-          s.metadata.tags.some(t => t.includes(q)) ||
-          (s.metadata.username && s.metadata.username.toLowerCase().includes(q))
-        )
-        .map(s => s.metadata);
+    } catch (err) {
+      console.warn('Search secrets failed:', err);
     }
   }
 
@@ -414,9 +339,9 @@
       }
     }
 
-    if (isTauri && id) {
+    if (id) {
       try {
-        await (window as any).__TAURI__.invoke('copy_to_clipboard', { id, ttlSecs: 30 });
+        await invokeTauri('copy_to_clipboard', { id, ttlSecs: 30 });
       } catch (e) {
         console.warn('Backend clipboard audit warning:', e);
       }
@@ -433,8 +358,10 @@
         // ignore
       }
     }
-    if (isTauri) {
-      await (window as any).__TAURI__.invoke('clear_clipboard');
+    try {
+      await invokeTauri('clear_clipboard');
+    } catch (err) {
+      console.warn('Clear clipboard error:', err);
     }
     clipboardSeconds = null;
     showToast('Clipboard zeroized and cleared.');
@@ -459,36 +386,15 @@
     isLoading = true;
     try {
       const input = event.detail;
-      if (isTauri) {
-        const meta = await (window as any).__TAURI__.invoke('create_secret', { input });
-        secrets = [meta, ...secrets];
-        selectSecret(meta.id);
-      } else {
-        const newSec: DecryptedSecret = {
-          metadata: {
-            id: `mock-${Date.now()}`,
-            title: input.title,
-            secret_type: input.payload.type,
-            tags: input.tags,
-            username: input.username,
-            url: input.url,
-            notes: input.notes,
-            version: 1,
-            created_at: Math.floor(Date.now() / 1000),
-            updated_at: Math.floor(Date.now() / 1000),
-          },
-          payload: input.payload,
-        };
-        mockSecrets.unshift(newSec);
-        await loadSecrets();
-        selectSecret(newSec.metadata.id);
-      }
+      const meta = await invokeTauri<SecretMetadata>('create_secret', { input });
+      secrets = [meta, ...secrets];
+      selectSecret(meta.id);
 
       isNewSecretModalOpen = false;
       editingSecret = null;
       showToast('Encrypted secret stored with AES-256-GCM.');
     } catch (err: any) {
-      showToast('Error saving secret: ' + err.toString());
+      showToast('Error saving secret: ' + (err?.message || err?.toString()));
     } finally {
       isLoading = false;
     }
@@ -498,39 +404,14 @@
     isLoading = true;
     try {
       const { id, input } = event.detail;
-      if (isTauri) {
-        const meta = await (window as any).__TAURI__.invoke('update_secret', { id, input });
-        secrets = secrets.map(s => (s.id === id ? meta : s));
-        await selectSecret(id);
-        showToast(`Encrypted secret updated (v${meta.version}).`);
-      } else {
-        const idx = mockSecrets.findIndex(s => s.metadata.id === id);
-        if (idx !== -1) {
-          const prev = mockSecrets[idx];
-          const updated: DecryptedSecret = {
-            metadata: {
-              ...prev.metadata,
-              title: input.title ?? prev.metadata.title,
-              tags: input.tags ?? prev.metadata.tags,
-              username: input.username ?? prev.metadata.username,
-              url: input.url ?? prev.metadata.url,
-              notes: input.notes ?? prev.metadata.notes,
-              secret_type: input.payload?.type ?? prev.metadata.secret_type,
-              version: prev.metadata.version + 1,
-              updated_at: Math.floor(Date.now() / 1000),
-            },
-            payload: input.payload ?? prev.payload,
-          };
-          mockSecrets[idx] = updated;
-          await loadSecrets();
-          await selectSecret(id);
-          showToast(`Encrypted secret updated (v${updated.metadata.version}).`);
-        }
-      }
+      const meta = await invokeTauri<SecretMetadata>('update_secret', { id, input });
+      secrets = secrets.map(s => (s.id === id ? meta : s));
+      await selectSecret(id);
+      showToast(`Encrypted secret updated (v${meta.version}).`);
       isNewSecretModalOpen = false;
       editingSecret = null;
     } catch (err: any) {
-      showToast('Error updating secret: ' + err.toString());
+      showToast('Error updating secret: ' + (err?.message || err?.toString()));
     } finally {
       isLoading = false;
     }
@@ -540,99 +421,102 @@
     const id = event.detail;
     if (!confirm('Are you sure you want to permanently delete this secret?')) return;
 
-    if (isTauri) {
-      await (window as any).__TAURI__.invoke('delete_secret', { id });
-    } else {
-      mockSecrets = mockSecrets.filter(s => s.metadata.id !== id);
+    try {
+      await invokeTauri('delete_secret', { id });
+      showToast('Secret permanently removed from database.');
+      selectedSecret = null;
+      selectedSecretId = null;
+      await loadSecrets();
+    } catch (err: any) {
+      showToast('Failed to delete secret: ' + (err?.message || err?.toString()));
     }
-
-    showToast('Secret permanently removed from database.');
-    selectedSecret = null;
-    selectedSecretId = null;
-    await loadSecrets();
   }
 
   async function handleFetchHealthReport(): Promise<VaultHealthReport> {
-    if (isTauri) {
-      return await (window as any).__TAURI__.invoke('get_health_report');
-    }
-    return {
-      overall_score: 92,
-      grade: 'A',
-      total_secrets: mockSecrets.length,
-      compromised_count: 0,
-      reused_count: 0,
-      weak_count: 0,
-      stale_count: 0,
-      cert_issues_count: 0,
-      recommendations: [],
-    };
+    return await invokeTauri<VaultHealthReport>('get_health_report');
   }
 
   async function handleVerifyAuditChain(): Promise<boolean> {
-    if (isTauri) {
-      return await (window as any).__TAURI__.invoke('verify_audit_chain');
-    }
-    return true;
+    return await invokeTauri<boolean>('verify_audit_chain');
   }
 
   async function handleGenerateTotp(secretId: string): Promise<TotpCodeResponse> {
-    if (isTauri) {
-      return await (window as any).__TAURI__.invoke('generate_totp_code', { secretId });
-    }
-    const elapsed = Math.floor(Date.now() / 1000) % 30;
-    return {
-      code: '849201',
-      remaining_seconds: 30 - elapsed,
-      total_step_seconds: 30,
-      progress_ratio: elapsed / 30,
-    };
+    return await invokeTauri<TotpCodeResponse>('generate_totp_code', { secretId });
   }
 
   async function handleInspectCert(secretId: string): Promise<CertInspectionReport> {
-    if (isTauri) {
-      return await (window as any).__TAURI__.invoke('inspect_certificate', { secretId });
-    }
-    return {
-      subject_cn: 'api.vault.internal',
-      issuer_cn: 'DigiCert Global Root CA',
-      not_before_epoch: Math.floor(Date.now() / 1000) - 86400 * 30,
-      not_after_epoch: Math.floor(Date.now() / 1000) + 86400 * 335,
-      days_until_expiration: 335,
-      status: 'valid',
-      is_self_signed: false,
-      signature_algorithm: 'SHA256withRSA',
-      is_weak_signature: false,
-      public_key_algorithm: 'RSA',
-      key_size_bits: 2048,
-      is_weak_key: false,
-      subject_alt_names: ['api.vault.internal', 'gateway.vault.internal'],
-      serial_number: '12:34:56:78:9A:BC:DE:F0',
-    };
+    return await invokeTauri<CertInspectionReport>('inspect_certificate', { secretId });
   }
 
   async function handleExportBackup(passphrase: string, outputPath: string): Promise<BackupExportSummary> {
-    if (isTauri) {
-      return await (window as any).__TAURI__.invoke('export_backup', { passphrase, outputPath });
-    }
-    return {
-      output_path: outputPath,
-      total_secrets: mockSecrets.length,
-      file_size_bytes: 4096,
-      exported_at: Math.floor(Date.now() / 1000),
-    };
+    return await invokeTauri<BackupExportSummary>('export_backup', { passphrase, outputPath });
   }
 
   async function handleImportBackup(passphrase: string, inputPath: string, overwrite: boolean): Promise<BackupImportSummary> {
-    if (isTauri) {
-      return await (window as any).__TAURI__.invoke('import_backup', { passphrase, inputPath, overwrite });
+    return await invokeTauri<BackupImportSummary>('import_backup', { passphrase, inputPath, overwrite });
+  }
+
+  // --- DevOps Special Features ---
+  async function handleScanDirectory(dirPath: string): Promise<any[]> {
+    return await invokeTauri<any[]>('scan_directory_for_leaks', { dirPath });
+  }
+
+  async function handleGeneratePassword(params: {
+    length: number;
+    includeUppercase: boolean;
+    includeLowercase: boolean;
+    includeNumbers: boolean;
+    includeSymbols: boolean;
+    mode: 'password' | 'passphrase';
+    wordCount: number;
+  }): Promise<{ password: string; entropy_bits: number; strength_label: string }> {
+    return await invokeTauri('generate_secure_password', params);
+  }
+
+  async function handleExportDotenv() {
+    try {
+      const dotenvContent = await invokeTauri<string>('export_dotenv');
+      if (!dotenvContent || !dotenvContent.trim()) {
+        showToast('No secrets available to export.');
+        return;
+      }
+      const blob = new Blob([dotenvContent], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = '.env.vault';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('Exported decrypted keys as .env.vault');
+    } catch (err: any) {
+      showToast('Failed to export .env: ' + (err?.message || err?.toString()));
     }
-    return {
-      total_imported: 3,
-      total_skipped: 0,
-      total_overwritten: 0,
-      original_exported_at: Math.floor(Date.now() / 1000) - 86400,
+  }
+
+  function handleSaveLeakedSecret(event: CustomEvent<{ title: string; type: string; value: string }>) {
+    const { title, type, value } = event.detail;
+    isLeakScannerOpen = false;
+    editingSecret = {
+      metadata: {
+        id: '',
+        title,
+        secret_type: type as SecretType,
+        tags: ['scanned-leak'],
+        username: '',
+        url: '',
+        notes: `Imported from Secret Leak Scanner`,
+        version: 1,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000),
+      },
+      payload: {
+        type: (type === 'api_key' ? 'api_key' : 'password') as any,
+        data: type === 'api_key' ? { api_key: value } : { password: value },
+      },
     };
+    isNewSecretModalOpen = true;
   }
 </script>
 
@@ -650,6 +534,9 @@
     on:openHealthDashboard={() => { isHealthDashboardOpen = true; }}
     on:openBackupModal={() => { isBackupModalOpen = true; }}
     on:openShamirModal={() => { shamirModalMode = 'split'; isShamirModalOpen = true; }}
+    on:openLeakScanner={() => { isLeakScannerOpen = true; }}
+    on:openGenerator={() => { isGeneratorOpen = true; }}
+    on:openDotenv={handleExportDotenv}
     on:toggleBiometricEnrollment={handleToggleBiometricEnrollment}
     on:lockVault={handleLock}
     on:clearClipboard={handleClearClipboard}
@@ -744,6 +631,27 @@
       isShamirModalOpen = false;
       await loadSecrets();
       showToast('Vault master key reconstructed via Shamir threshold shares.');
+    }}
+  />
+
+  <!-- DevOps Offline Secret Leak Scanner Modal -->
+  <LeakScannerModal
+    isOpen={isLeakScannerOpen}
+    onScanDirectory={handleScanDirectory}
+    on:close={() => { isLeakScannerOpen = false; }}
+    on:saveSecret={handleSaveLeakedSecret}
+  />
+
+  <!-- DevOps Cryptographic Password & Passphrase Generator Modal -->
+  <PasswordGeneratorModal
+    isOpen={isGeneratorOpen}
+    onGenerate={handleGeneratePassword}
+    on:close={() => { isGeneratorOpen = false; }}
+    on:usePassword={(e) => {
+      navigator.clipboard?.writeText(e.detail.password);
+      clipboardSeconds = 30;
+      showToast('Copied generated password to clipboard (auto-wiping in 30s).');
+      isGeneratorOpen = false;
     }}
   />
 

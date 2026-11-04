@@ -16,6 +16,8 @@
 
   const dispatch = createEventDispatcher<{
     openFile: void;
+    openFolder: void;
+    openSystemLogs: void;
     openPath: string;
     toggleTail: void;
     search: { query: string; isRegex: boolean; caseSensitive: boolean };
@@ -82,11 +84,28 @@
       {/if}
     </div>
 
-    <button class="btn btn-primary" on:click={() => dispatch('openFile')} id="btn-open-file">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <button class="btn btn-primary" on:click={() => dispatch('openFile')} id="btn-open-file" title="Open Log File (Ctrl+O)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+        <polyline points="14 2 14 8 20 8"></polyline>
+      </svg>
+      File
+    </button>
+
+    <button class="btn btn-secondary header-btn" on:click={() => dispatch('openFolder')} id="btn-open-folder" title="Open Folder with Multiple Logs">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
       </svg>
-      Open Log
+      Folder
+    </button>
+
+    <button class="btn btn-secondary header-btn" on:click={() => dispatch('openSystemLogs')} id="btn-system-logs" title="Explore Local System Logs">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+        <line x1="8" y1="21" x2="16" y2="21"></line>
+        <line x1="12" y1="17" x2="12" y2="21"></line>
+      </svg>
+      System
     </button>
 
     <form class="direct-path-form" on:submit|preventDefault={handleDirectPathSubmit}>

@@ -203,3 +203,21 @@ export interface FsLocationEntry {
   available: boolean;
 }
 
+export interface FilePreviewData {
+  path: string;
+  file_name: string;
+  extension: string;
+  size_bytes: number;
+  is_text: boolean;
+  is_image: boolean;
+  is_pdf: boolean;
+  is_media: boolean;
+  text_content?: string | null;
+  total_lines?: number | null;
+  pdf_pages?: number | null;
+  pdf_title?: string | null;
+  pdf_author?: string | null;
+  blake3_hash?: string | null;
+  modified_timestamp_secs: number;
+}
+

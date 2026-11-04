@@ -175,6 +175,8 @@ impl DocumentExtractor {
             extract_pdf_text_operators(&pdf_str, &mut content);
         }
 
+        content = normalize_extracted_text(&content);
+
         let word_count = content.split_whitespace().count();
 
         Ok(ExtractedDocument {
@@ -540,29 +542,220 @@ fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, ()> {
 }
 
 fn extract_pdf_text_operators(raw: &str, content: &mut String) {
-    let mut chars = raw.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '(' {
+    let mut i = 0;
+    let bytes = raw.as_bytes();
+    let len = bytes.len();
+
+    let mut in_array = false;
+    let mut last_was_space =
+        content.is_empty() || content.ends_with(' ') || content.ends_with('\n');
+
+    while i < len {
+        let b = bytes[i];
+
+        if b == b'[' {
+            in_array = true;
+            i += 1;
+            continue;
+        } else if b == b']' {
+            in_array = false;
+            i += 1;
+            continue;
+        }
+
+        // Parenthesized literal string: (text)
+        if b == b'(' {
+            i += 1;
             let mut text = String::new();
             let mut escape = false;
-            for ch in chars.by_ref() {
+            let mut depth = 1;
+
+            while i < len && depth > 0 {
+                let ch = bytes[i];
                 if escape {
-                    text.push(ch);
+                    match ch {
+                        b'n' => text.push('\n'),
+                        b'r' => text.push('\r'),
+                        b't' => text.push('\t'),
+                        b'b' => text.push('\x08'),
+                        b'f' => text.push('\x0C'),
+                        b'(' => text.push('('),
+                        b')' => text.push(')'),
+                        b'\\' => text.push('\\'),
+                        // Octal escapes: \ddd
+                        b'0'..=b'7' => {
+                            let mut oct = (ch - b'0') as u32;
+                            if i + 1 < len && bytes[i + 1].is_ascii_digit() && bytes[i + 1] <= b'7'
+                            {
+                                i += 1;
+                                oct = oct * 8 + (bytes[i] - b'0') as u32;
+                                if i + 1 < len
+                                    && bytes[i + 1].is_ascii_digit()
+                                    && bytes[i + 1] <= b'7'
+                                {
+                                    i += 1;
+                                    oct = oct * 8 + (bytes[i] - b'0') as u32;
+                                }
+                            }
+                            if let Some(c) = char::from_u32(oct) {
+                                text.push(c);
+                            }
+                        }
+                        _ => text.push(ch as char),
+                    }
                     escape = false;
-                } else if ch == '\\' {
+                } else if ch == b'\\' {
                     escape = true;
-                } else if ch == ')' {
-                    break;
+                } else if ch == b'(' {
+                    depth += 1;
+                    text.push('(');
+                } else if ch == b')' {
+                    depth -= 1;
+                    if depth > 0 {
+                        text.push(')');
+                    }
                 } else {
-                    text.push(ch);
+                    text.push(ch as char);
+                }
+                i += 1;
+            }
+
+            if !text.is_empty() {
+                let text_starts_space = text.starts_with(' ');
+                let text_ends_space = text.ends_with(' ');
+
+                if !last_was_space && !in_array && !text_starts_space {
+                    content.push(' ');
+                }
+
+                content.push_str(&text);
+                last_was_space = text_ends_space;
+            }
+            continue;
+        }
+
+        // Hex string: <48656c6c6f>
+        if b == b'<' && i + 1 < len && bytes[i + 1] != b'<' {
+            i += 1;
+            let mut hex_buf = String::new();
+            while i < len && bytes[i] != b'>' {
+                if !bytes[i].is_ascii_whitespace() {
+                    hex_buf.push(bytes[i] as char);
+                }
+                i += 1;
+            }
+            if i < len && bytes[i] == b'>' {
+                i += 1;
+            }
+            if hex_buf.len() % 2 == 1 {
+                hex_buf.push('0');
+            }
+            let mut decoded = String::new();
+            for chunk in hex_buf.as_bytes().chunks(2) {
+                if let Ok(s) = std::str::from_utf8(chunk) {
+                    if let Ok(byte_val) = u8::from_str_radix(s, 16) {
+                        if byte_val.is_ascii_graphic() || byte_val == b' ' {
+                            decoded.push(byte_val as char);
+                        }
+                    }
                 }
             }
-            if !text.is_empty() {
-                content.push_str(&text);
-                content.push(' ');
+            if !decoded.is_empty() {
+                if !last_was_space && !in_array {
+                    content.push(' ');
+                }
+                content.push_str(&decoded);
+                last_was_space = decoded.ends_with(' ');
+            }
+            continue;
+        }
+
+        // Inside TJ array: check for kerning numbers e.g. -250 (word break)
+        if in_array && (b == b'-' || b.is_ascii_digit()) {
+            let start = i;
+            if b == b'-' {
+                i += 1;
+            }
+            while i < len && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                i += 1;
+            }
+            if let Ok(num_str) = std::str::from_utf8(&bytes[start..i]) {
+                if let Ok(val) = num_str.parse::<f32>() {
+                    if val < -120.0 && !last_was_space {
+                        content.push(' ');
+                        last_was_space = true;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Text positioning / newline operators: T*, ', "
+        if b == b'T' && i + 1 < len && bytes[i + 1] == b'*' {
+            if !content.ends_with('\n') {
+                content.push('\n');
+                last_was_space = true;
+            }
+            i += 2;
+            continue;
+        }
+        if b == b'\'' || b == b'"' {
+            if !content.ends_with('\n') {
+                content.push('\n');
+                last_was_space = true;
+            }
+            i += 1;
+            continue;
+        }
+
+        i += 1;
+    }
+}
+
+fn normalize_extracted_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let words: Vec<&str> = trimmed.split_whitespace().collect();
+        let mut normalized_line = String::new();
+        let mut single_char_buf = String::new();
+
+        for w in words {
+            if w.len() == 1
+                && w.chars()
+                    .next()
+                    .map(|c| c.is_alphanumeric())
+                    .unwrap_or(false)
+            {
+                single_char_buf.push_str(w);
+            } else {
+                if !single_char_buf.is_empty() {
+                    if !normalized_line.is_empty() {
+                        normalized_line.push(' ');
+                    }
+                    normalized_line.push_str(&single_char_buf);
+                    single_char_buf.clear();
+                }
+                if !normalized_line.is_empty() {
+                    normalized_line.push(' ');
+                }
+                normalized_line.push_str(w);
             }
         }
+        if !single_char_buf.is_empty() {
+            if !normalized_line.is_empty() {
+                normalized_line.push(' ');
+            }
+            normalized_line.push_str(&single_char_buf);
+        }
+
+        out.push_str(&normalized_line);
+        out.push('\n');
     }
+    out
 }
 
 fn decompress_zlib(bytes: &[u8]) -> Result<Vec<u8>, std::io::Error> {

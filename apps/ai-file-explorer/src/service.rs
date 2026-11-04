@@ -278,6 +278,34 @@ impl FileExplorerService {
                         combined.push(item);
                     }
                 }
+
+                // If query is an extension name like "pdf", also include all matching files by extension
+                let q_trim = query
+                    .query
+                    .trim()
+                    .trim_start_matches("*.")
+                    .trim_start_matches('.');
+                if !q_trim.is_empty()
+                    && ["pdf", "docx", "doc", "md", "rs", "log", "txt", "png", "jpg"]
+                        .contains(&q_trim.to_lowercase().as_str())
+                {
+                    let ext_target = q_trim.to_lowercase();
+                    if let Ok(all_docs) = self.indexer.search_content("*", query.limit * 2) {
+                        for doc in all_docs {
+                            if doc
+                                .path
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .map(|e| e.eq_ignore_ascii_case(&ext_target))
+                                .unwrap_or(false)
+                                && seen_paths.insert(doc.path.clone())
+                            {
+                                combined.push(doc);
+                            }
+                        }
+                    }
+                }
+
                 combined.truncate(query.limit);
                 combined
             }

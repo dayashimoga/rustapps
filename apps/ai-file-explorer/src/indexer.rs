@@ -326,21 +326,36 @@ impl FileSearchIndexer {
                 self.field_doc_author,
                 self.field_ocr_tokens,
                 self.field_file_name,
+                self.field_extension,
             ],
         );
 
-        let query = match query_parser.parse_query(query_str) {
-            Ok(q) => q,
-            Err(e) => {
-                let escaped = query_str.replace(':', " ").replace('\\', "/");
-                query_parser.parse_query(&escaped).map_err(|err| {
-                    IndexerError::QueryParseFailed {
-                        query: query_str.to_string(),
-                        reason: format!("{} ({})", err, e),
-                    }
-                })?
+        let clean_query = if let Some(stripped) = query_str.strip_prefix("*.") {
+            stripped
+        } else if let Some(stripped) = query_str.strip_prefix('.') {
+            if stripped.is_empty() {
+                query_str
+            } else {
+                stripped
             }
+        } else {
+            query_str
         };
+
+        let query: Box<dyn tantivy::query::Query> =
+            if clean_query.trim().is_empty() || clean_query.trim() == "*" {
+                Box::new(tantivy::query::AllQuery)
+            } else {
+                match query_parser.parse_query(clean_query) {
+                    Ok(q) => q,
+                    Err(_e) => {
+                        let escaped = clean_query.replace(':', " ").replace('\\', "/");
+                        query_parser
+                            .parse_query(&escaped)
+                            .unwrap_or_else(|_| Box::new(tantivy::query::AllQuery))
+                    }
+                }
+            };
 
         let top_docs = searcher.search(&query, &TopDocs::with_limit(limit))?;
         let mut results = Vec::with_capacity(top_docs.len());

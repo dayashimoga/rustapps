@@ -30,6 +30,24 @@
   let visibleCount = 50;
   let activeLine = 0;
 
+  // Tabs for multi-file log viewing
+  let openTabs: Array<{ path: string; name: string; size: number }> = [];
+
+  // Folder Explorer Sidebar
+  let folderPath = '';
+  let folderFiles: Array<{ path: string; name: string; size_bytes: number; modified_secs: number }> = [];
+  let isFolderSidebarOpen = false;
+
+  // System Logs Modal
+  let systemLogs: Array<{ path: string; name: string; size_bytes: number; modified_secs: number }> = [];
+  let isSystemLogsOpen = false;
+
+  // Recent Logs
+  let recentLogs: string[] = [];
+
+  // Severity Level Filter
+  let activeSeverityFilter = 'ALL';
+
   let searchQuery = '';
   let isRegex = false;
   let caseSensitive = false;
@@ -62,48 +80,168 @@
   let openFileError = '';
   let hiddenFileInput: HTMLInputElement;
 
-  // In-memory mock database for standalone browser preview / testing
-  let mockFileLines: string[] = [];
+  async function tauriInvoke<T>(cmd: string, args: Record<string, any> = {}): Promise<T> {
+    const tauri = (window as unknown as {
+      __TAURI__?: {
+        invoke?: (cmd: string, args: Record<string, unknown>) => Promise<T>;
+        core?: { invoke: (cmd: string, args: Record<string, unknown>) => Promise<T> };
+      };
+    }).__TAURI__;
+    if (tauri?.core?.invoke) {
+      return await tauri.core.invoke(cmd, args);
+    }
+    if (tauri?.invoke) {
+      return await tauri.invoke(cmd, args);
+    }
+    if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
+      const response = await fetch('/__ipc/' + encodeURIComponent(cmd), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(args || {}),
+      });
+      if (response.ok) {
+        const payload = await response.json();
+        if (payload && '__ipc_data' in payload) {
+          return payload.__ipc_data as T;
+        }
+        return payload as T;
+      } else {
+        const errPayload = await response.json().catch(() => null);
+        if (errPayload && errPayload.__ipc_error) {
+          throw new Error(errPayload.__ipc_error);
+        }
+        throw new Error(`Command "${cmd}" failed with status ${response.status}`);
+      }
+    }
+    throw new Error(`No IPC transport available for "${cmd}"`);
+  }
 
-  const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI__;
-
-  async function tauriInvoke<T>(cmd: string, args?: Record<string, any>): Promise<T | null> {
-    if (isTauri && (window as any).__TAURI__?.invoke) {
+  async function pickNativeFileOrFolder(directory: boolean = false): Promise<string | null> {
+    const tauriDialog = (window as any).__TAURI__?.dialog;
+    if (tauriDialog?.open) {
+      const res = await tauriDialog.open({
+        directory,
+        multiple: false,
+        title: directory ? 'Select Folder with Log Files' : 'Open Log File',
+        filters: directory ? undefined : [{ name: 'Log Files', extensions: ['log', 'txt', 'jsonl', 'json', 'csv', 'tsv', 'out', 'err'] }],
+      });
+      if (typeof res === 'string' && res.trim()) return res.trim();
+    }
+    if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location?.protocol.startsWith('http')) {
       try {
-        return await (window as any).__TAURI__.invoke(cmd, args);
-      } catch (err) {
-        console.error(`Tauri IPC error for ${cmd}:`, err);
-        throw err;
+        const res = await fetch('/__dialog/open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            directory,
+            title: directory ? 'Select Folder with Log Files' : 'Open Log File',
+            filters: directory ? undefined : [{ name: 'Log Files', extensions: ['log', 'txt', 'jsonl', 'json', 'csv', 'tsv', 'out', 'err'] }],
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.path) return data.path;
+        }
+      } catch (e) {
+        console.warn('Native dialog error:', e);
       }
     }
     return null;
   }
 
+  function addRecent(path: string) {
+    recentLogs = [path, ...recentLogs.filter((p) => p !== path)].slice(0, 8);
+    try {
+      localStorage.setItem('ulv_recent_logs', JSON.stringify(recentLogs));
+    } catch (_) {}
+  }
+
   async function openRealFile(path: string) {
     openFileError = '';
-    if (isTauri) {
-      try {
-        const info = await tauriInvoke<OpenedFileInfo>('open_file', { path });
-        if (info) {
-          filePath = info.path;
-          originalTotalLines = info.total_lines;
-          totalLines = info.total_lines;
-          filteredLineIndices = null;
-          selectedRange = null;
-          fileSizeBytes = info.file_size_bytes;
-          await fetchSlice(0, 60);
-          await loadAiInsights();
-          return;
+    try {
+      const info = await tauriInvoke<OpenedFileInfo>('open_file', { path });
+      if (info) {
+        filePath = info.path;
+        originalTotalLines = info.total_lines;
+        totalLines = info.total_lines;
+        filteredLineIndices = null;
+        selectedRange = null;
+        fileSizeBytes = info.file_size_bytes;
+        activeSeverityFilter = 'ALL';
+
+        const fileName = info.path.split(/[/\\]/).pop() || info.path;
+        if (!openTabs.some((t) => t.path === info.path)) {
+          openTabs = [...openTabs, { path: info.path, name: fileName, size: info.file_size_bytes }];
         }
-      } catch (e) {
-        openFileError = e instanceof Error ? e.message : String(e);
-        console.error('Failed to open file via Tauri:', e);
-        return;
+        addRecent(info.path);
+
+        await fetchSlice(0, 60);
+        await loadAiInsights();
+      }
+    } catch (e: any) {
+      openFileError = e?.message || String(e);
+      console.error('Failed to open log file:', e);
+    }
+  }
+
+  function closeTab(path: string) {
+    openTabs = openTabs.filter((t) => t.path !== path);
+    if (filePath === path) {
+      if (openTabs.length > 0) {
+        openRealFile(openTabs[openTabs.length - 1].path);
+      } else {
+        filePath = '';
+        totalLines = 0;
+        lines = [];
       }
     }
-    if (path === 'default') {
-      generateSampleLogs(100000);
+  }
+
+  async function openFolder(dirPath: string) {
+    openFileError = '';
+    try {
+      const files = await tauriInvoke<Array<{ path: string; name: string; size_bytes: number; modified_secs: number }>>('open_directory', { path: dirPath });
+      folderPath = dirPath;
+      folderFiles = files || [];
+      isFolderSidebarOpen = true;
+      if (folderFiles.length > 0) {
+        await openRealFile(folderFiles[0].path);
+      }
+    } catch (e: any) {
+      openFileError = e?.message || String(e);
     }
+  }
+
+  async function openSystemLogsModal() {
+    openFileError = '';
+    try {
+      const logs = await tauriInvoke<Array<{ path: string; name: string; size_bytes: number; modified_secs: number }>>('list_system_logs', {});
+      systemLogs = logs || [];
+      isSystemLogsOpen = true;
+    } catch (e: any) {
+      openFileError = e?.message || String(e);
+    }
+  }
+
+  async function exportCurrentFilteredLogs() {
+    try {
+      const defaultName = `filtered_${Date.now()}.log`;
+      const result = await tauriInvoke<any>('export_filtered_logs', {
+        destPath: defaultName,
+        lineNumbers: filteredLineIndices,
+      });
+      alert(`Exported ${result.exported_lines} lines to ${result.dest_path}`);
+    } catch (e: any) {
+      alert(`Export failed: ${e?.message || e}`);
+    }
+  }
+
+  function formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 
   async function handleBrowserFileChosen(e: Event) {
@@ -117,34 +255,30 @@
     openFileError = '';
     try {
       const content = await file.text();
-      if (isTauri) {
-        const info = await tauriInvoke<OpenedFileInfo>('open_raw_log_content', {
-          fileName: file.name,
-          content,
-        });
-        if (info) {
-          filePath = info.path;
-          originalTotalLines = info.total_lines;
-          totalLines = info.total_lines;
-          filteredLineIndices = null;
-          selectedRange = null;
-          fileSizeBytes = info.file_size_bytes;
-          await fetchSlice(0, 60);
-          await loadAiInsights();
-          return;
+      const info = await tauriInvoke<OpenedFileInfo>('open_raw_log_content', {
+        fileName: file.name,
+        content,
+      });
+      if (info) {
+        filePath = info.path;
+        originalTotalLines = info.total_lines;
+        totalLines = info.total_lines;
+        filteredLineIndices = null;
+        selectedRange = null;
+        fileSizeBytes = info.file_size_bytes;
+        activeSeverityFilter = 'ALL';
+
+        const fileName = info.path.split(/[/\\]/).pop() || info.path;
+        if (!openTabs.some((t) => t.path === info.path)) {
+          openTabs = [...openTabs, { path: info.path, name: fileName, size: info.file_size_bytes }];
         }
+        addRecent(info.path);
+
+        await fetchSlice(0, 60);
+        await loadAiInsights();
       }
-      const splitLines = content.split(/\r?\n/);
-      mockFileLines = splitLines;
-      filePath = file.name;
-      originalTotalLines = splitLines.length;
-      totalLines = splitLines.length;
-      filteredLineIndices = null;
-      selectedRange = null;
-      fileSizeBytes = file.size;
-      await fetchSlice(0, 60);
-    } catch (err) {
-      openFileError = err instanceof Error ? err.message : String(err);
+    } catch (err: any) {
+      openFileError = err?.message || String(err);
     }
   }
 
@@ -158,49 +292,42 @@
 
   async function handleOpenFilePrompt() {
     openFileError = '';
-    if (isTauri && (window as any).__TAURI__?.dialog?.open) {
-      try {
-        const selected = await (window as any).__TAURI__.dialog.open({
-          multiple: false,
-          title: 'Open Log File in Universal Log Viewer',
-          filters: [{ name: 'Log Files', extensions: ['log', 'txt', 'jsonl', 'json', 'csv', 'tsv', 'out', 'err'] }],
-        });
-        if (typeof selected === 'string' && selected.trim()) {
-          await openRealFile(selected.trim());
-          return;
-        }
-        // User cancelled the native dialog — keep existing log open
-        return;
-      } catch (err) {
-        console.warn('Native open dialog failed:', err);
-      }
+    const picked = await pickNativeFileOrFolder(false);
+    if (picked) {
+      await openRealFile(picked);
+      return;
     }
     if (hiddenFileInput) {
       hiddenFileInput.click();
     }
   }
 
+  async function handleOpenFolderPrompt() {
+    openFileError = '';
+    const picked = await pickNativeFileOrFolder(true);
+    if (picked) {
+      await openFolder(picked);
+    }
+  }
+
   async function loadAiInsights() {
+    if (!filePath) return;
     isAiAnalyzing = true;
     try {
-      if (isTauri && filePath) {
-        const [hist, templates, anomalies, errors] = await Promise.all([
-          tauriInvoke<TimelineHistogramUi>('get_timeline_histogram', { targetBuckets: 60 }),
-          tauriInvoke<TemplateClusterUi[]>('mine_templates', { maxRecords: 50000 }),
-          tauriInvoke<AnomalySpikeUi[]>('detect_anomalies', { targetBuckets: 60, zThreshold: 2.5 }),
-          tauriInvoke<ErrorClusterUi[]>('cluster_errors', { maxRecords: 50000 }),
-        ]);
-        if (hist) {
-          timelineBuckets = hist.buckets;
-          minEpochMs = hist.min_epoch_ms;
-          maxEpochMs = hist.max_epoch_ms;
-        }
-        if (templates) minedTemplates = templates;
-        if (anomalies) detectedAnomalies = anomalies;
-        if (errors) detectedErrorClusters = errors;
-      } else {
-        await new Promise((r) => setTimeout(r, 350));
+      const [hist, templates, anomalies, errors] = await Promise.all([
+        tauriInvoke<TimelineHistogramUi>('get_timeline_histogram', { targetBuckets: 60 }),
+        tauriInvoke<TemplateClusterUi[]>('mine_templates', { maxRecords: 50000 }),
+        tauriInvoke<AnomalySpikeUi[]>('detect_anomalies', { targetBuckets: 60, zThreshold: 2.5 }),
+        tauriInvoke<ErrorClusterUi[]>('cluster_errors', { maxRecords: 50000 }),
+      ]);
+      if (hist) {
+        timelineBuckets = hist.buckets;
+        minEpochMs = hist.min_epoch_ms;
+        maxEpochMs = hist.max_epoch_ms;
       }
+      if (templates) minedTemplates = templates;
+      if (anomalies) detectedAnomalies = anomalies;
+      if (errors) detectedErrorClusters = errors;
     } catch (e) {
       console.warn('Failed to load AI insights from backend:', e);
     } finally {
@@ -659,29 +786,27 @@
   let metricsInterval: number | null = null;
 
   async function updateMetrics() {
-    if (isTauri) {
-      try {
-        const sampled = await tauriInvoke<ProcessResourceUsage>('get_system_metrics');
-        if (sampled) {
-          systemMetrics = sampled;
-        }
-      } catch {
-        // ignore
+    try {
+      const sampled = await tauriInvoke<ProcessResourceUsage>('get_system_metrics');
+      if (sampled) {
+        systemMetrics = sampled;
       }
+    } catch {
+      // ignore
     }
   }
 
   onMount(() => {
     window.addEventListener('keydown', handleKeyDown);
 
-    if (isTauri) {
-      openRealFile('default');
-      updateMetrics();
-    } else {
-      // Auto-load sample logs on initial browser preview
-      generateSampleLogs(50000);
-    }
+    try {
+      const saved = localStorage.getItem('ulv_recent_logs');
+      if (saved) {
+        recentLogs = JSON.parse(saved);
+      }
+    } catch (_) {}
 
+    updateMetrics();
     metricsInterval = window.setInterval(updateMetrics, 2500);
 
     return () => {
@@ -716,6 +841,8 @@
     {showAiInsights}
     bookmarksCount={bookmarks.length}
     on:openFile={handleOpenFilePrompt}
+    on:openFolder={handleOpenFolderPrompt}
+    on:openSystemLogs={openSystemLogsModal}
     on:openPath={(e) => openRealFile(e.detail)}
     on:toggleTail={toggleTailMode}
     on:search={handleSearch}
@@ -725,6 +852,71 @@
     on:toggleAiInsights={() => (showAiInsights = !showAiInsights)}
     on:openRedactModal={() => (isRedactModalOpen = true)}
   />
+
+  <!-- Multi-File Tabs Bar -->
+  {#if openTabs.length > 0}
+    <div class="tabs-bar">
+      {#each openTabs as tab (tab.path)}
+        <button
+          class="tab-pill {tab.path === filePath ? 'active' : ''}"
+          on:click={() => openRealFile(tab.path)}
+          title={tab.path}
+        >
+          <span class="tab-icon">📄</span>
+          <span class="tab-title">{tab.name}</span>
+          <span class="tab-size">({formatBytes(tab.size)})</span>
+          <button
+            type="button"
+            class="tab-close"
+            on:click|stopPropagation={() => closeTab(tab.path)}
+          >
+            ✕
+          </button>
+        </button>
+      {/each}
+    </div>
+  {/if}
+
+  {#if filePath}
+    <!-- Fast Log Level Filter Bar & Sub-toolbar -->
+    <div class="sub-toolbar glass-panel">
+      <div class="severity-pills">
+        <span class="filter-label">Level:</span>
+        {#each ['ALL', 'ERROR', 'WARN', 'INFO', 'DEBUG'] as lvl}
+          <button
+            class="severity-pill {activeSeverityFilter === lvl ? 'active' : ''} {lvl.toLowerCase()}"
+            on:click={() => {
+              activeSeverityFilter = lvl;
+              if (lvl === 'ALL') {
+                handleSearch(new CustomEvent('search', { detail: { query: '', isRegex: false, caseSensitive: false } }));
+              } else {
+                handleSearch(new CustomEvent('search', { detail: { query: lvl, isRegex: false, caseSensitive: false } }));
+              }
+            }}
+          >
+            {lvl}
+          </button>
+        {/each}
+      </div>
+
+      <div class="toolbar-actions">
+        {#if folderFiles.length > 0}
+          <button
+            class="btn btn-secondary btn-sm"
+            on:click={() => (isFolderSidebarOpen = !isFolderSidebarOpen)}
+          >
+            📁 {isFolderSidebarOpen ? 'Hide Folder' : `Folder (${folderFiles.length})`}
+          </button>
+        {/if}
+        <button class="btn btn-secondary btn-sm" on:click={exportCurrentFilteredLogs} title="Export filtered or all log lines">
+          💾 Export Filtered
+        </button>
+        <button class="btn btn-secondary btn-sm" on:click={() => (isRedactModalOpen = true)} title="PII Redacted Export">
+          🛡️ Redact &amp; Export
+        </button>
+      </div>
+    </div>
+  {/if}
 
   {#if openFileError}
     <div class="open-error-banner">
@@ -747,37 +939,128 @@
 
   <!-- Main Viewport Area -->
   <main class="main-content">
-    {#if totalLines === 0}
-      <!-- Empty State Hero -->
-      <div class="hero-container">
-        <div class="hero-card glass-panel">
-          <div class="hero-icon">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
-            </svg>
-          </div>
-          <h2>Open Massive Logs Instantaneously</h2>
-          <p>Zero-copy memory mapping processes 500GB+ logs within a 300MB RAM budget.</p>
+    {#if !filePath || totalLines === 0}
+      <!-- Welcome Hub when no log is loaded -->
+      <div class="welcome-hub-container">
+        <div class="welcome-card glass-panel">
+          <div class="welcome-badge">100% OFFLINE • AIR-GAP GUARANTEED</div>
+          <h2>Universal Log Viewer</h2>
+          <p class="welcome-desc">
+            Ultra-fast zero-copy memory-mapped log analysis engine. Instant sub-millisecond search, 64-bit microsecond timeline histograms, and offline AI Drain3 template clustering.
+          </p>
 
-          <button class="btn btn-primary hero-btn" on:click={handleOpenFilePrompt}>
-            Open Log File
-          </button>
+          <!-- svelte-ignore a11y-click-events-have-key-events -->
+          <!-- svelte-ignore a11y-no-static-element-interactions -->
+          <div
+            class="drop-target-box"
+            on:click={handleOpenFilePrompt}
+          >
+            <div class="drop-icon">📂</div>
+            <h3>Drop Any Log File Here</h3>
+            <p>Supports .log, .txt, .jsonl, .json, .out, .err, .csv, and compressed streams up to 500GB+</p>
+          </div>
+
+          <div class="quick-actions-row">
+            <button class="btn btn-primary btn-lg" on:click={handleOpenFilePrompt}>
+              📄 Open Log File
+            </button>
+            <button class="btn btn-secondary btn-lg" on:click={handleOpenFolderPrompt}>
+              📁 Open Folder
+            </button>
+            <button class="btn btn-secondary btn-lg" on:click={openSystemLogsModal}>
+              💻 System Event Logs
+            </button>
+          </div>
+
+          {#if recentLogs.length > 0}
+            <div class="recents-panel">
+              <span class="recents-header">Recent Files:</span>
+              <div class="recents-grid">
+                {#each recentLogs as recent}
+                  <button class="recent-pill" on:click={() => openRealFile(recent)} title={recent}>
+                    <span class="recent-name">{recent.split(/[/\\]/).pop()}</span>
+                    <span class="recent-path">{recent}</span>
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/if}
         </div>
       </div>
     {:else}
-      <!-- Virtualized 60FPS Log Viewport -->
-      <VirtualizedViewport
-        bind:this={viewportComponent}
-        {lines}
-        {totalLines}
-        {activeLine}
-        {searchQuery}
-        on:scrollChange={handleScrollChange}
-        on:bookmarkLine={handleBookmarkLine}
-      />
+      <div class="workspace-viewport-row">
+        {#if isFolderSidebarOpen}
+          <aside class="folder-sidebar glass-panel">
+            <div class="folder-sidebar-header">
+              <span class="folder-title" title={folderPath}>📁 {folderPath.split(/[/\\]/).pop()}</span>
+              <button class="close-sidebar-btn" on:click={() => (isFolderSidebarOpen = false)}>✕</button>
+            </div>
+            <div class="folder-file-list">
+              {#each folderFiles as f (f.path)}
+                <button
+                  class="folder-file-btn {f.path === filePath ? 'active' : ''}"
+                  on:click={() => openRealFile(f.path)}
+                >
+                  <span class="file-icon">📄</span>
+                  <div class="file-info">
+                    <span class="file-name" title={f.path}>{f.name}</span>
+                    <span class="file-size">{formatBytes(f.size_bytes)}</span>
+                  </div>
+                </button>
+              {/each}
+            </div>
+          </aside>
+        {/if}
+
+        <div class="viewport-wrapper">
+          <VirtualizedViewport
+            bind:this={viewportComponent}
+            {lines}
+            {totalLines}
+            {activeLine}
+            {searchQuery}
+            on:scrollChange={handleScrollChange}
+            on:bookmarkLine={handleBookmarkLine}
+          />
+        </div>
+      </div>
     {/if}
   </main>
+
+  {#if isSystemLogsOpen}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <!-- svelte-ignore a11y-no-static-element-interactions -->
+    <div class="modal-backdrop" on:click={() => (isSystemLogsOpen = false)}>
+      <div class="system-logs-dialog glass-panel" on:click|stopPropagation>
+        <div class="dialog-header">
+          <h3>💻 Local System Event Logs</h3>
+          <button class="dialog-close" on:click={() => (isSystemLogsOpen = false)}>✕</button>
+        </div>
+        <p class="dialog-sub">Discovered operational logs on your machine:</p>
+        <div class="system-logs-list">
+          {#if systemLogs.length === 0}
+            <p class="empty-state">No accessible system logs found in default OS paths.</p>
+          {:else}
+            {#each systemLogs as item}
+              <button
+                class="syslog-row"
+                on:click={() => {
+                  isSystemLogsOpen = false;
+                  openRealFile(item.path);
+                }}
+              >
+                <div class="syslog-details">
+                  <span class="syslog-title">{item.name}</span>
+                  <span class="syslog-location">{item.path}</span>
+                </div>
+                <span class="syslog-size">{formatBytes(item.size_bytes)}</span>
+              </button>
+            {/each}
+          {/if}
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <!-- Slide-out Bookmarks Drawer -->
   <BookmarksDrawer
@@ -905,22 +1188,468 @@
     box-shadow: 0 8px 30px -5px hsla(217, 91%, 60%, 0.4);
   }
 
-  .hero-card h2 {
-    font-size: 20px;
-    font-weight: 700;
-    margin-bottom: 10px;
-    letter-spacing: -0.3px;
+  .hero-btn {
+    padding: 10px 24px;
+    font-size: 14px;
   }
 
-  .hero-card p {
+  /* Multi-File Tabs Bar */
+  .tabs-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    background: hsla(222, 24%, 6%, 0.85);
+    border-bottom: 1px solid var(--border-color);
+    overflow-x: auto;
+  }
+
+  .tab-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s ease;
+  }
+
+  .tab-pill:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-primary);
+  }
+
+  .tab-pill.active {
+    background: hsla(217, 91%, 60%, 0.18);
+    border-color: hsla(217, 91%, 60%, 0.45);
+    color: var(--accent-blue);
+    font-weight: 600;
+  }
+
+  .tab-close {
+    margin-left: 4px;
+    font-size: 11px;
+    opacity: 0.6;
+    border-radius: 50%;
+    padding: 0 4px;
+  }
+  .tab-close:hover {
+    opacity: 1;
+    background: rgba(239, 68, 68, 0.25);
+    color: #fca5a5;
+  }
+
+  /* Sub-toolbar & Severity Filters */
+  .sub-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .severity-pills {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .filter-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+  }
+
+  .severity-pill {
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-secondary);
+    transition: all 0.15s ease;
+  }
+
+  .severity-pill.active {
+    background: hsla(217, 91%, 60%, 0.25);
+    border-color: var(--accent-blue);
+    color: #fff;
+  }
+
+  .severity-pill.error.active {
+    background: rgba(239, 68, 68, 0.3);
+    border-color: #ef4444;
+    color: #fca5a5;
+  }
+
+  .severity-pill.warn.active {
+    background: rgba(245, 158, 11, 0.3);
+    border-color: #f59e0b;
+    color: #fde68a;
+  }
+
+  .toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn-sm {
+    padding: 4px 10px;
+    font-size: 11px;
+  }
+
+  /* Workspace Viewport Row & Folder Sidebar */
+  .workspace-viewport-row {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
+  }
+
+  .folder-sidebar {
+    width: 240px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border-color);
+    background: hsla(222, 24%, 7%, 0.95);
+  }
+
+  .folder-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .folder-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .close-sidebar-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .folder-file-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .folder-file-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: transparent;
+    border: 1px solid transparent;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .folder-file-btn:hover {
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .folder-file-btn.active {
+    background: hsla(217, 91%, 60%, 0.16);
+    border-color: hsla(217, 91%, 60%, 0.4);
+  }
+
+  .folder-file-btn .file-info {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .folder-file-btn .file-name {
+    font-size: 12px;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .folder-file-btn .file-size {
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  .viewport-wrapper {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Welcome Hub Container */
+  .welcome-hub-container {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 30px;
+  }
+
+  .welcome-card {
+    max-width: 680px;
+    width: 100%;
+    padding: 36px;
+    border-radius: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .welcome-badge {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 3px 10px;
+    border-radius: 9999px;
+    background: rgba(6, 182, 212, 0.16);
+    border: 1px solid rgba(6, 182, 212, 0.4);
+    color: #67e8f9;
+    margin-bottom: 12px;
+  }
+
+  .welcome-card h2 {
+    font-size: 26px;
+    font-weight: 800;
+    margin-bottom: 8px;
+  }
+
+  .welcome-desc {
     font-size: 13.5px;
     color: var(--text-secondary);
     line-height: 1.5;
     margin-bottom: 24px;
+    max-width: 540px;
   }
 
-  .hero-btn {
-    padding: 10px 24px;
-    font-size: 14px;
+  .drop-target-box {
+    width: 100%;
+    padding: 32px 20px;
+    border: 2px dashed rgba(59, 130, 246, 0.4);
+    border-radius: 12px;
+    background: rgba(59, 130, 246, 0.04);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-bottom: 24px;
+  }
+
+  .drop-target-box:hover {
+    border-color: var(--accent-blue);
+    background: rgba(59, 130, 246, 0.08);
+  }
+
+  .drop-icon {
+    font-size: 36px;
+    margin-bottom: 8px;
+  }
+
+  .drop-target-box h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .drop-target-box p {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .quick-actions-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .btn-lg {
+    padding: 10px 18px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .recents-panel {
+    width: 100%;
+    text-align: left;
+    border-top: 1px solid var(--border-color);
+    padding-top: 18px;
+  }
+
+  .recents-header {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    display: block;
+  }
+
+  .recents-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 8px;
+  }
+
+  .recent-pill {
+    display: flex;
+    flex-direction: column;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .recent-pill:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--accent-blue);
+  }
+
+  .recent-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .recent-path {
+    font-size: 10.5px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Modal Backdrop & Dialog */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(6px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+
+  .system-logs-dialog {
+    width: 620px;
+    max-height: 80vh;
+    padding: 24px;
+    border-radius: 14px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dialog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+
+  .dialog-header h3 {
+    font-size: 18px;
+    font-weight: 700;
+  }
+
+  .dialog-close {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 16px;
+    cursor: pointer;
+  }
+
+  .dialog-sub {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+  }
+
+  .system-logs-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .syslog-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.15s ease;
+  }
+
+  .syslog-row:hover {
+    background: rgba(59, 130, 246, 0.14);
+    border-color: var(--accent-blue);
+  }
+
+  .syslog-details {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .syslog-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .syslog-location {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .syslog-size {
+    font-size: 12px;
+    color: var(--accent-cyan);
+    font-family: var(--font-mono);
+    margin-left: 12px;
+    flex-shrink: 0;
   }
 </style>

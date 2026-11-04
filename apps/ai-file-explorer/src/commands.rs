@@ -224,6 +224,147 @@ pub fn scan_compliance_cmd(
         .map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FilePreviewData {
+    pub path: String,
+    pub file_name: String,
+    pub extension: String,
+    pub size_bytes: u64,
+    pub is_text: bool,
+    pub is_image: bool,
+    pub is_pdf: bool,
+    pub is_media: bool,
+    pub text_content: Option<String>,
+    pub total_lines: Option<usize>,
+    pub pdf_pages: Option<usize>,
+    pub pdf_title: Option<String>,
+    pub pdf_author: Option<String>,
+    pub blake3_hash: Option<String>,
+    pub modified_timestamp_secs: u64,
+}
+
+/// Instant file preview inspector (text, PDF, image, media, hash, metadata)
+pub fn get_file_preview_cmd(path: String) -> Result<FilePreviewData, String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() || !p.is_file() {
+        return Err(format!("File does not exist: {}", path));
+    }
+
+    let meta = std::fs::metadata(p).map_err(|e| e.to_string())?;
+    let size_bytes = meta.len();
+    let modified_timestamp_secs = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let file_name = p
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let ext = p
+        .extension()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    let image_exts = [
+        "png", "jpg", "jpeg", "webp", "gif", "svg", "bmp", "ico", "tiff",
+    ];
+    let media_exts = [
+        "mp4", "webm", "mov", "mkv", "avi", "mp3", "wav", "flac", "ogg", "m4a",
+    ];
+    let text_exts = [
+        "rs",
+        "ts",
+        "js",
+        "py",
+        "json",
+        "toml",
+        "yaml",
+        "yml",
+        "md",
+        "txt",
+        "log",
+        "csv",
+        "tsv",
+        "sh",
+        "bat",
+        "ps1",
+        "html",
+        "css",
+        "svelte",
+        "c",
+        "cpp",
+        "h",
+        "go",
+        "java",
+        "sql",
+        "xml",
+        "lock",
+        "ini",
+        "env",
+        "dockerfile",
+        "gitignore",
+    ];
+
+    let is_image = image_exts.contains(&ext.as_str());
+    let is_media = media_exts.contains(&ext.as_str());
+    let is_pdf = ext == "pdf";
+    let is_text = text_exts.contains(&ext.as_str())
+        || (!is_image && !is_media && !is_pdf && size_bytes < 256 * 1024);
+
+    let mut text_content = None;
+    let mut total_lines = None;
+    let mut pdf_pages = None;
+    let mut pdf_title = None;
+    let mut pdf_author = None;
+
+    if is_pdf {
+        if let Ok(extracted) = crate::doc_extract::DocumentExtractor::extract_file(p) {
+            pdf_pages = extracted.metadata.page_count;
+            pdf_title = extracted.metadata.title;
+            pdf_author = extracted.metadata.author;
+            let preview_chars: String = extracted.content_text.chars().take(8000).collect();
+            text_content = Some(preview_chars);
+            total_lines = Some(extracted.content_text.lines().count());
+        }
+    } else if is_text && size_bytes < 5 * 1024 * 1024 {
+        if let Ok(bytes) = std::fs::read(p) {
+            let sample_len = bytes.len().min(128 * 1024);
+            let s = String::from_utf8_lossy(&bytes[..sample_len]).to_string();
+            total_lines = Some(s.lines().count());
+            text_content = Some(s);
+        }
+    }
+
+    let blake3_hash = if size_bytes < 100 * 1024 * 1024 {
+        std::fs::read(p)
+            .ok()
+            .map(|b| blake3::hash(&b).to_hex().to_string())
+    } else {
+        None
+    };
+
+    Ok(FilePreviewData {
+        path,
+        file_name,
+        extension: ext,
+        size_bytes,
+        is_text,
+        is_image,
+        is_pdf,
+        is_media,
+        text_content,
+        total_lines,
+        pdf_pages,
+        pdf_title,
+        pdf_author,
+        blake3_hash,
+        modified_timestamp_secs,
+    })
+}
+
 /// Export compliance findings to CSV or JSON file
 pub fn export_compliance_report_cmd(
     target_dir: String,
@@ -274,6 +415,15 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let path = resolve_valid_path(args.get("path").and_then(|v| v.as_str()));
             let listing = list_directory_cmd(path)?;
             serde_json::to_value(listing).map_err(|e| e.to_string())
+        }
+        "get_file_preview_cmd" => {
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing path parameter".to_string())?
+                .to_string();
+            let preview = get_file_preview_cmd(path)?;
+            serde_json::to_value(preview).map_err(|e| e.to_string())
         }
         "list_drives_and_places_cmd" => {
             let entries = list_drives_and_places_cmd()?;
@@ -492,8 +642,18 @@ mod tests {
         let stats = analyze_storage_cmd(path_str.clone(), 5).unwrap();
         assert_eq!(stats.total_files, 0);
 
-        let treemap = get_treemap_cmd(path_str, 800.0, 600.0, 1).unwrap();
+        let treemap = get_treemap_cmd(path_str.clone(), 800.0, 600.0, 1).unwrap();
         assert_eq!(treemap.bounds.width, 800.0);
+
+        // Test get_file_preview_cmd
+        let test_file = dir.path().join("test_sample.rs");
+        std::fs::write(&test_file, b"pub fn sample() { println!(\"Hello\"); }\n").unwrap();
+        let preview = get_file_preview_cmd(test_file.to_string_lossy().to_string()).unwrap();
+        assert!(preview.is_text);
+        assert_eq!(preview.file_name, "test_sample.rs");
+        assert_eq!(preview.extension, "rs");
+        assert!(preview.text_content.unwrap().contains("pub fn sample"));
+        assert!(preview.blake3_hash.is_some());
     }
 
     #[test]

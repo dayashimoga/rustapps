@@ -620,7 +620,263 @@ pub fn dispatch_ipc_command(
                 let vars = parse_terraform_vars(content);
                 serde_json::to_value(vars).map_err(|e| e.to_string())
             }
+            "scan_directory_for_leaks" => {
+                let dir_str = args
+                    .get("dirPath")
+                    .or_else(|| args.get("dir_path"))
+                    .or_else(|| args.get("path"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(".");
+                let dir = std::path::Path::new(dir_str);
+                let findings = scan_dir_for_leaks(dir);
+                serde_json::to_value(findings).map_err(|e| e.to_string())
+            }
+            "generate_secure_password" => {
+                let length = args.get("length").and_then(|v| v.as_u64()).unwrap_or(24) as usize;
+                let use_upper = args.get("includeUppercase").or_else(|| args.get("use_upper")).and_then(|v| v.as_bool()).unwrap_or(true);
+                let use_lower = args.get("includeLowercase").or_else(|| args.get("use_lower")).and_then(|v| v.as_bool()).unwrap_or(true);
+                let use_nums = args.get("includeNumbers").or_else(|| args.get("use_nums")).and_then(|v| v.as_bool()).unwrap_or(true);
+                let use_syms = args.get("includeSymbols").or_else(|| args.get("use_syms")).and_then(|v| v.as_bool()).unwrap_or(true);
+                let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("password");
+                let word_count = args.get("wordCount").or_else(|| args.get("word_count")).and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+                let is_passphrase = mode == "passphrase";
+
+                let (pw, entropy, label) = generate_password_or_passphrase(length, use_upper, use_lower, use_nums, use_syms, is_passphrase, word_count);
+                Ok(serde_json::json!({
+                    "password": pw,
+                    "entropy_bits": entropy,
+                    "strength_label": label,
+                }))
+            }
+            "export_dotenv" => {
+                let secrets = list_secrets(&svc).await?;
+                let mut env_lines = Vec::new();
+                for meta in secrets {
+                    if let Ok(sec) = get_secret(&svc, &meta.id).await {
+                        let key_name = meta.title.to_uppercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect::<String>();
+                        let val = match &sec.payload {
+                            crate::models::SecretPayload::Password { password } => password.clone(),
+                            crate::models::SecretPayload::ApiKey { api_key, .. } => api_key.clone(),
+                            crate::models::SecretPayload::DatabaseCredential { password, connection_string, .. } => connection_string.clone().unwrap_or_else(|| password.clone()),
+                            crate::models::SecretPayload::AwsCredential { secret_access_key, .. } => secret_access_key.clone(),
+                            _ => continue,
+                        };
+                        env_lines.push(format!("{}=\"{}\"", key_name, val));
+                    }
+                }
+                let content = env_lines.join("\n");
+                if let Some(dest) = args.get("destPath").or_else(|| args.get("dest_path")).and_then(|v| v.as_str()) {
+                    let _ = std::fs::write(dest, content.as_bytes());
+                }
+                Ok(serde_json::json!({
+                    "dotenv_content": content,
+                    "exported_count": env_lines.len(),
+                }))
+            }
             _ => Err(format!("Unknown DevOps Secret Vault IPC command: {}", cmd)),
         }
     })
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct LeakFinding {
+    pub file_path: String,
+    pub line_number: usize,
+    pub leak_type: String,
+    pub severity: String,
+    pub snippet: String,
+}
+
+pub fn scan_dir_for_leaks(root: &std::path::Path) -> Vec<LeakFinding> {
+    let mut findings = Vec::new();
+    if !root.exists() {
+        return findings;
+    }
+
+    fn recurse_scan(dir: &std::path::Path, findings: &mut Vec<LeakFinding>, depth: usize) {
+        if depth > 8 || findings.len() >= 100 {
+            return;
+        }
+        let read_dir = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(_) => return,
+        };
+
+        for entry in read_dir.flatten() {
+            if findings.len() >= 100 {
+                return;
+            }
+            let path = entry.path();
+            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name.starts_with(".git")
+                || name == "node_modules"
+                || name == "target"
+                || name == "vendor"
+                || name == "dist"
+            {
+                continue;
+            }
+
+            if path.is_dir() {
+                recurse_scan(&path, findings, depth + 1);
+            } else if path.is_file() {
+                if let Ok(meta) = entry.metadata() {
+                    if meta.len() > 1_500_000 {
+                        continue;
+                    }
+                }
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    for (idx, line) in content.lines().enumerate() {
+                        let line_num = idx + 1;
+                        if line.contains("BEGIN RSA PRIVATE KEY")
+                            || line.contains("BEGIN OPENSSH PRIVATE KEY")
+                            || line.contains("BEGIN EC PRIVATE KEY")
+                            || line.contains("BEGIN PRIVATE KEY")
+                        {
+                            findings.push(LeakFinding {
+                                file_path: path.to_string_lossy().to_string(),
+                                line_number: line_num,
+                                leak_type: "Private Key".to_string(),
+                                severity: "CRITICAL".to_string(),
+                                snippet: "-----BEGIN PRIVATE KEY----- [REDACTED]".to_string(),
+                            });
+                        } else if let Some(pos) = line.find("AKIA") {
+                            if line[pos..].len() >= 20 {
+                                let potential = &line[pos..pos + 20];
+                                if potential.chars().all(|c| c.is_ascii_alphanumeric()) {
+                                    findings.push(LeakFinding {
+                                        file_path: path.to_string_lossy().to_string(),
+                                        line_number: line_num,
+                                        leak_type: "AWS Access Key".to_string(),
+                                        severity: "HIGH".to_string(),
+                                        snippet: format!("{}****", &potential[..8]),
+                                    });
+                                }
+                            }
+                        } else if let Some(pos) = line.find("ghp_") {
+                            if line[pos..].len() >= 36 {
+                                findings.push(LeakFinding {
+                                    file_path: path.to_string_lossy().to_string(),
+                                    line_number: line_num,
+                                    leak_type: "GitHub PAT".to_string(),
+                                    severity: "HIGH".to_string(),
+                                    snippet: "ghp_************************".to_string(),
+                                });
+                            }
+                        } else if line.contains("postgres://")
+                            || line.contains("mysql://")
+                            || line.contains("mongodb://")
+                        {
+                            if line.contains('@') && line.contains(':') {
+                                findings.push(LeakFinding {
+                                    file_path: path.to_string_lossy().to_string(),
+                                    line_number: line_num,
+                                    leak_type: "Database Connection String".to_string(),
+                                    severity: "CRITICAL".to_string(),
+                                    snippet: line.chars().take(30).collect::<String>()
+                                        + " [REDACTED]",
+                                });
+                            }
+                        } else if (name == ".env"
+                            || path.extension().and_then(|s| s.to_str()).unwrap_or("") == "env")
+                            && (line.contains("SECRET")
+                                || line.contains("PASSWORD")
+                                || line.contains("KEY")
+                                || line.contains("TOKEN"))
+                            && line.contains('=')
+                        {
+                            let parts: Vec<&str> = line.splitn(2, '=').collect();
+                            if parts.len() == 2 && !parts[1].trim().is_empty() {
+                                findings.push(LeakFinding {
+                                    file_path: path.to_string_lossy().to_string(),
+                                    line_number: line_num,
+                                    leak_type: "Unencrypted Environment Secret".to_string(),
+                                    severity: "MEDIUM".to_string(),
+                                    snippet: format!("{}=********", parts[0].trim()),
+                                });
+                            }
+                        }
+                        if findings.len() >= 100 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    recurse_scan(root, &mut findings, 0);
+    findings
+}
+
+pub fn generate_password_or_passphrase(
+    length: usize,
+    use_upper: bool,
+    use_lower: bool,
+    use_nums: bool,
+    use_syms: bool,
+    is_passphrase: bool,
+    word_count: usize,
+) -> (String, f64, String) {
+    use rand::Rng;
+    let mut rng = rand::rngs::OsRng;
+    if is_passphrase {
+        let words = [
+            "correct", "horse", "battery", "staple", "cipher", "matrix", "falcon", "orbital",
+            "quantum", "beacon", "crypto", "shield", "kernel", "aurora", "glacier", "phoenix",
+            "shadow", "timber", "vertex", "zenith", "hazard", "nebula", "titan", "vector",
+            "cascade", "dynamo", "echo", "fusion", "granite", "hyper", "iron", "jupiter",
+            "krypton", "lunar", "magnet", "nitrogen", "oxygen", "plasma", "quasar", "radar",
+            "siren", "torus",
+        ];
+        let count = word_count.clamp(3, 8);
+        let mut chosen = Vec::with_capacity(count);
+        for _ in 0..count {
+            let idx = rng.gen_range(0..words.len());
+            chosen.push(words[idx]);
+        }
+        let pass = chosen.join("-");
+        let entropy = (count as f64) * (words.len() as f64).log2();
+        (
+            pass,
+            entropy,
+            "Very Strong (Diceware Passphrase)".to_string(),
+        )
+    } else {
+        let len = length.clamp(8, 128);
+        let mut charset: Vec<u8> = Vec::new();
+        if use_lower {
+            charset.extend(b"abcdefghijklmnopqrstuvwxyz");
+        }
+        if use_upper {
+            charset.extend(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+        }
+        if use_nums {
+            charset.extend(b"0123456789");
+        }
+        if use_syms {
+            charset.extend(b"!@#$%^&*()-_=+[]{}|;:,.<>?");
+        }
+        if charset.is_empty() {
+            charset
+                .extend(b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*");
+        }
+
+        let mut pass = String::with_capacity(len);
+        for _ in 0..len {
+            let idx = rng.gen_range(0..charset.len());
+            pass.push(charset[idx] as char);
+        }
+        let entropy = (len as f64) * (charset.len() as f64).log2();
+        let label = if entropy >= 100.0 {
+            "Exceptional (Military Grade)"
+        } else if entropy >= 70.0 {
+            "Very Strong"
+        } else if entropy >= 50.0 {
+            "Strong"
+        } else {
+            "Moderate"
+        };
+        (pass, entropy, label.to_string())
+    }
 }
