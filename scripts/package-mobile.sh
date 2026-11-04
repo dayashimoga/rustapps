@@ -3,20 +3,22 @@
 # Compiles Rust C-ABI native libraries and packages Flutter Android & iOS mobile apps
 set -euo pipefail
 
-VERSION="${1:-1.0.0}"
-OUTPUT_DIR="${2:-dist/mobile}"
+VERSION="${1:-0.1.0}"
+RAW_OUTPUT_DIR="${2:-dist/mobile}"
 FILTER_APP="${3:-}"
 
 echo "=========================================================="
 echo "  Packaging Monorepo Mobile Apps (Android & iOS) v${VERSION}"
 echo "=========================================================="
 
+mkdir -p "${RAW_OUTPUT_DIR}"
+OUTPUT_DIR="$(cd "${RAW_OUTPUT_DIR}" && pwd)"
+
 if [ -n "${FILTER_APP}" ]; then
     APPS=("${FILTER_APP}")
 else
     APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor")
 fi
-mkdir -p "${OUTPUT_DIR}"
 
 ANDROID_TARGETS=("aarch64-linux-android" "armv7-linux-androideabi" "x86_64-linux-android")
 IOS_TARGETS=("aarch64-apple-ios" "x86_64-apple-ios" "aarch64-apple-ios-sim")
@@ -32,8 +34,24 @@ for app in "${APPS[@]}"; do
     echo "Processing mobile app: ${app}"
     echo "----------------------------------------------------------"
 
+    # Always generate metadata manifest in output directory
+    cat <<EOF > "${OUTPUT_DIR}/metadata.json"
+{
+  "application": "${app}",
+  "version": "${VERSION}",
+  "offline_autonomous": true,
+  "telemetry_free": true
+}
+EOF
+
+    # Detect platform intent from output directory name or host
+    is_ios=false
+    if [[ "${OUTPUT_DIR}" == *"ios"* ]] || [ "$(uname -s)" = "Darwin" ]; then
+        is_ios=true
+    fi
+
     # 1. Android JNI Libraries compilation
-    if command -v cargo-ndk &>/dev/null; then
+    if ! ${is_ios} && command -v cargo-ndk &>/dev/null; then
         echo "  [Android] Building native JNI shared libraries with cargo-ndk..."
         for target in "${ANDROID_TARGETS[@]}"; do
             jni_arch="arm64-v8a"
@@ -42,61 +60,86 @@ for app in "${APPS[@]}"; do
 
             jni_dest="${mobile_dir}/android/app/src/main/jniLibs/${jni_arch}"
             mkdir -p "${jni_dest}"
-            cargo ndk --target "${target}" -o "${mobile_dir}/android/app/src/main/jniLibs" build --release -p "${app}" || true
+            echo "    Compiling --lib for ${target} -> ${jni_arch}..."
+            cargo ndk --target "${target}" -o "${mobile_dir}/android/app/src/main/jniLibs" build --release -p "${app}" --lib || true
         done
-    else
+    elif ! ${is_ios}; then
         echo "  [Android] cargo-ndk not installed; skipping JNI shared object build."
     fi
 
-    # 2. Android APK / AAB packaging
+    # 2. iOS Native Libraries compilation
+    if ${is_ios} && [ "$(uname -s)" = "Darwin" ]; then
+        echo "  [iOS] Building static / C-ABI libraries for iOS targets..."
+        for target in "${IOS_TARGETS[@]}"; do
+            echo "    Compiling --lib for ${target}..."
+            cargo build --release --target "${target}" -p "${app}" --lib || true
+        done
+    fi
+
+    # 3. Flutter Scaffolding & Packaging
     if command -v flutter &>/dev/null; then
-        echo "  [Flutter] Building Android APK & AAB..."
+        echo "  [Flutter] Preparing Flutter project and dependencies..."
         (
             cd "${mobile_dir}"
+            flutter create --platforms=android,ios --org com.offlineapps . || true
             flutter pub get || true
-            flutter build apk --release || true
-            flutter build appbundle --release || true
+            if ! ${is_ios}; then
+                echo "  [Flutter] Building Android APK & AAB..."
+                flutter build apk --release || true
+                flutter build appbundle --release || true
+            fi
         )
-        if [ -f "${mobile_dir}/build/app/outputs/flutter-apk/app-release.apk" ]; then
-            cp "${mobile_dir}/build/app/outputs/flutter-apk/app-release.apk" "${OUTPUT_DIR}/${app}_${VERSION}.apk"
-            echo "  -> Created APK: ${OUTPUT_DIR}/${app}_${VERSION}.apk"
+
+        # Check for generated Android artifacts
+        apk_src="${mobile_dir}/build/app/outputs/flutter-apk/app-release.apk"
+        if [ -f "${apk_src}" ]; then
+            cp "${apk_src}" "${OUTPUT_DIR}/${app}-${VERSION}.apk"
+            echo "  -> Created APK: ${OUTPUT_DIR}/${app}-${VERSION}.apk"
+        fi
+        aab_src="${mobile_dir}/build/app/outputs/bundle/release/app-release.aab"
+        if [ -f "${aab_src}" ]; then
+            cp "${aab_src}" "${OUTPUT_DIR}/${app}-${VERSION}.aab"
+            echo "  -> Created AAB: ${OUTPUT_DIR}/${app}-${VERSION}.aab"
         fi
     else
         echo "  [Flutter] Flutter SDK not found on path; skipping APK/IPA bundling."
     fi
 
-    # Ensure standalone artifact exists in OUTPUT_DIR
-    if [ ! -f "${OUTPUT_DIR}/${app}_${VERSION}.apk" ]; then
-        (
-            cd "${mobile_dir}"
-            if command -v zip >/dev/null 2>&1; then
-                zip -r "${OUTPUT_DIR}/${app}_${VERSION}_android_bundle.zip" . -x "*.git*" "build/*" ".dart_tool/*" || true
-                echo "  -> Created mobile bundle: ${OUTPUT_DIR}/${app}_${VERSION}_android_bundle.zip"
-            fi
-        )
-    fi
-
-    # 3. iOS XCFramework creation
-    if [ "$(uname -s)" = "Darwin" ] && command -v lipo &>/dev/null; then
-        echo "  [iOS] Building static libraries for iOS device and simulator..."
-        for target in "${IOS_TARGETS[@]}"; do
-            cargo build --release --target "${target}" -p "${app}" || true
-        done
+    # 4. Create Standalone Platform Bundle ZIP
+    if command -v zip >/dev/null 2>&1; then
+        if ${is_ios}; then
+            bundle_name="${app}-${VERSION}-ios.zip"
+            echo "  [iOS] Creating standalone iOS bundle: ${OUTPUT_DIR}/${bundle_name}..."
+            (
+                cd "${mobile_dir}"
+                zip -r "${OUTPUT_DIR}/${bundle_name}" . -x "*.git*" "build/*" ".dart_tool/*" || true
+            )
+        else
+            bundle_name="${app}-${VERSION}-android.zip"
+            echo "  [Android] Creating standalone Android bundle: ${OUTPUT_DIR}/${bundle_name}..."
+            (
+                cd "${mobile_dir}"
+                zip -r "${OUTPUT_DIR}/${bundle_name}" . -x "*.git*" "build/*" ".dart_tool/*" || true
+            )
+        fi
     fi
 done
 
-# Compute checksums
+# 5. Compute SHA-256 Checksums
 if [ -d "${OUTPUT_DIR}" ]; then
     echo "Computing SHA-256 checksums..."
     (
         cd "${OUTPUT_DIR}"
         for f in *; do
             if [ -f "$f" ] && [[ "$f" != *.sha256 ]]; then
-                sha256sum "$f" > "$f.sha256"
+                if command -v sha256sum >/dev/null 2>&1; then
+                    sha256sum "$f" > "$f.sha256"
+                elif command -v shasum >/dev/null 2>&1; then
+                    shasum -a 256 "$f" > "$f.sha256"
+                fi
             fi
         done
     )
 fi
 
-echo "Mobile packaging stage completed successfully!"
-
+echo "Mobile packaging stage completed successfully for: ${OUTPUT_DIR}"

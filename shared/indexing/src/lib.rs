@@ -203,6 +203,11 @@ impl DirectorySnapshot {
                 Err(_) => continue,
             };
 
+            // Only track regular files in the directory snapshot
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
             let path = entry.path().to_path_buf();
             let metadata = match entry.metadata() {
                 Ok(m) => m,
@@ -354,7 +359,7 @@ mod tests {
         std::fs::write(&file_c, "deep file").unwrap();
 
         let mut detector = RecursiveChangeDetector::new(temp.path(), false).unwrap();
-        assert_eq!(detector.current_snapshot().files.len(), 6); // root, sub1, sub2, file_a, file_b, file_c
+        assert_eq!(detector.current_snapshot().files.len(), 3); // file_a, file_b, file_c
 
         // First poll with no changes should be empty
         let initial_delta = detector.poll_changes().unwrap();

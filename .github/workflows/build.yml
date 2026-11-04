@@ -17,27 +17,21 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_suffix: windows-x64
-            use_cross: false
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             artifact_suffix: windows-arm64
-            use_cross: false
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_suffix: linux-x64
-            use_cross: false
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             artifact_suffix: linux-arm64
-            use_cross: true
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             artifact_suffix: macos-x64
-            use_cross: false
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_suffix: macos-arm64
-            use_cross: false
 
     steps:
       - name: Checkout Repository
@@ -58,8 +52,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-build-${{ matrix.target }}-
             ${{ runner.os }}-cargo-build-
 
       - name: Install System Dependencies (Linux)
@@ -67,6 +62,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libappindicator3-dev librsvg2-dev
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -89,17 +90,8 @@ jobs:
       - name: Clippy Linter
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Install cross-rs (for containerized cross-compilation)
-        if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Compile Release Workspace (Standard)
-        if: "!matrix.use_cross"
+      - name: Compile Release Workspace
         run: cargo build --workspace --release --target ${{ matrix.target }}
-
-      - name: Compile Release Workspace (Cross)
-        if: matrix.use_cross
-        run: cross build --workspace --release --target ${{ matrix.target }}
 
       - name: Package Standalone Per-App ZIP Bundles
         shell: bash
@@ -125,6 +117,13 @@ jobs:
                 (cd "${stage_dir}" && zip -r "../../${zip_path}" .)
               elif command -v powershell >/dev/null 2>&1; then
                 powershell -Command "Compress-Archive -Path '${stage_dir}/*' -DestinationPath '${zip_path}' -Force"
+              fi
+              if [ -f "${zip_path}" ]; then
+                if command -v sha256sum >/dev/null 2>&1; then
+                  (cd "dist-packages/${app}" && sha256sum "$(basename "${zip_path}")" > "$(basename "${zip_path}").sha256")
+                elif command -v shasum >/dev/null 2>&1; then
+                  (cd "dist-packages/${app}" && shasum -a 256 "$(basename "${zip_path}")" > "$(basename "${zip_path}").sha256")
+                fi
               fi
               rm -rf "${stage_dir}"
             fi
@@ -212,10 +211,7 @@ jobs:
           mkdir -p "dist/android/${{ matrix.app }}"
           ./scripts/package-mobile.sh "0.1.0" "dist/android/${{ matrix.app }}" "${{ matrix.app }}"
           mkdir -p "dist-packages/${{ matrix.app }}"
-          cd "dist/android/${{ matrix.app }}"
-          if command -v zip >/dev/null 2>&1; then
-            zip -r "../../../dist-packages/${{ matrix.app }}/${{ matrix.app }}-0.1.0-android.zip" .
-          fi
+          cp -f dist/android/${{ matrix.app }}/* "dist-packages/${{ matrix.app }}/" 2>/dev/null || true
         shell: bash
 
       - name: Upload ${{ matrix.app }} Android Artifact
@@ -259,10 +255,7 @@ jobs:
           mkdir -p "dist/ios/${{ matrix.app }}"
           ./scripts/package-mobile.sh "0.1.0" "dist/ios/${{ matrix.app }}" "${{ matrix.app }}"
           mkdir -p "dist-packages/${{ matrix.app }}"
-          cd "dist/ios/${{ matrix.app }}"
-          if command -v zip >/dev/null 2>&1; then
-            zip -r "../../../dist-packages/${{ matrix.app }}/${{ matrix.app }}-0.1.0-ios.zip" .
-          fi
+          cp -f dist/ios/${{ matrix.app }}/* "dist-packages/${{ matrix.app }}/" 2>/dev/null || true
         shell: bash
 
       - name: Upload ${{ matrix.app }} iOS Artifact
