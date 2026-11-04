@@ -215,18 +215,19 @@ jobs:
         shell: bash
         run: |
           mkdir -p "dist-packages/${{ matrix.app }}"
+          abs_pkg_dir="$(cd "dist-packages/${{ matrix.app }}" && pwd)"
+          abs_zip="${abs_pkg_dir}/${{ matrix.app }}-0.1.0-linux-x64.zip"
           stage_dir="stage_${{ matrix.app }}"
           mkdir -p "${stage_dir}"
           cp "target/release/${{ matrix.app }}" "${stage_dir}/"
           touch "${stage_dir}/portable.flag"
           [ -f "README.md" ] && cp "README.md" "${stage_dir}/"
           [ -f "LICENSE" ] && cp "LICENSE" "${stage_dir}/"
-          zip_path="dist-packages/${{ matrix.app }}/${{ matrix.app }}-0.1.0-linux-x64.zip"
           if command -v zip >/dev/null 2>&1; then
-            (cd "${stage_dir}" && zip -r "../../${zip_path}" .)
+            (cd "${stage_dir}" && zip -r "${abs_zip}" .)
           fi
-          if [ -f "${zip_path}" ]; then
-            (cd "dist-packages/${{ matrix.app }}" && sha256sum "$(basename "${zip_path}")" > "$(basename "${zip_path}").sha256")
+          if [ -f "${abs_zip}" ]; then
+            (cd "${abs_pkg_dir}" && sha256sum "$(basename "${abs_zip}")" > "$(basename "${abs_zip}").sha256")
           fi
           rm -rf "${stage_dir}"
 
@@ -311,18 +312,19 @@ jobs:
         shell: bash
         run: |
           mkdir -p "dist-packages/${{ matrix.app }}"
+          abs_pkg_dir="$(cd "dist-packages/${{ matrix.app }}" && pwd)"
+          abs_zip="${abs_pkg_dir}/${{ matrix.app }}-0.1.0-macos-universal.zip"
           stage_dir="stage_${{ matrix.app }}"
           mkdir -p "${stage_dir}"
           cp "target/universal/${{ matrix.app }}" "${stage_dir}/"
           touch "${stage_dir}/portable.flag"
           [ -f "README.md" ] && cp "README.md" "${stage_dir}/"
           [ -f "LICENSE" ] && cp "LICENSE" "${stage_dir}/"
-          zip_path="dist-packages/${{ matrix.app }}/${{ matrix.app }}-0.1.0-macos-universal.zip"
           if command -v zip >/dev/null 2>&1; then
-            (cd "${stage_dir}" && zip -r "../../${zip_path}" .)
+            (cd "${stage_dir}" && zip -r "${abs_zip}" .)
           fi
-          if [ -f "${zip_path}" ]; then
-            (cd "dist-packages/${{ matrix.app }}" && shasum -a 256 "$(basename "${zip_path}")" > "$(basename "${zip_path}").sha256")
+          if [ -f "${abs_zip}" ]; then
+            (cd "${abs_pkg_dir}" && shasum -a 256 "$(basename "${abs_zip}")" > "$(basename "${abs_zip}").sha256")
           fi
           rm -rf "${stage_dir}"
 
