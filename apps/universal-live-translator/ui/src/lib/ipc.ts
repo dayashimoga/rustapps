@@ -231,3 +231,4 @@ export function getLocalFileUrl(localPath: string): string {
   const token = typeof window !== 'undefined' ? window.__ANTIGRAVITY_TOKEN__ || '' : '';
   return `/__file?path=${encodeURIComponent(localPath)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
 }
+

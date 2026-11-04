@@ -203,6 +203,12 @@ export interface FsLocationEntry {
   available: boolean;
 }
 
+export interface ArchiveEntryInfo {
+  name: string;
+  size_bytes: number;
+  is_dir: boolean;
+}
+
 export interface FilePreviewData {
   path: string;
   file_name: string;
@@ -212,6 +218,8 @@ export interface FilePreviewData {
   is_image: boolean;
   is_pdf: boolean;
   is_media: boolean;
+  is_archive?: boolean;
+  archive_entries?: ArchiveEntryInfo[];
   text_content?: string | null;
   total_lines?: number | null;
   pdf_pages?: number | null;

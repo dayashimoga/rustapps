@@ -15,6 +15,7 @@
   let copiedPath = false;
   let copiedContent = false;
   let isZoomed = false;
+  let isHashing = false;
 
   $: if (item && item.path) {
     loadPreview(item.path);
@@ -24,12 +25,28 @@
     isLoading = true;
     loadError = '';
     preview = null;
+    isHashing = false;
     try {
       preview = await invokeIpc<FilePreviewData>('get_file_preview_cmd', { path });
     } catch (e: any) {
       loadError = e?.message || String(e);
     } finally {
       isLoading = false;
+    }
+  }
+
+  async function computeHash() {
+    if (!preview || isHashing) return;
+    isHashing = true;
+    try {
+      const hash = await invokeIpc<string>('compute_file_hash_cmd', { path: preview.path });
+      if (preview && hash) {
+        preview.blake3_hash = hash;
+      }
+    } catch (err) {
+      console.error('Failed to compute hash:', err);
+    } finally {
+      isHashing = false;
     }
   }
 
@@ -180,6 +197,45 @@
           </div>
         </div>
 
+      <!-- Archive Viewer (.zip, .tar, .gz) -->
+      {:else if preview.is_archive}
+        <div class="archive-viewer-box">
+          <div class="archive-header">
+            <span class="archive-icon">🗜️</span>
+            <div>
+              <h4>Archive Package Contents</h4>
+              <p class="archive-sub">
+                {preview.archive_entries ? preview.archive_entries.length : 0} items listed
+              </p>
+            </div>
+          </div>
+          {#if preview.archive_entries && preview.archive_entries.length > 0}
+            <div class="archive-table-container">
+              <table class="archive-table">
+                <thead>
+                  <tr>
+                    <th>Entry Name</th>
+                    <th style="text-align: right;">Size</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each preview.archive_entries as entry}
+                    <tr>
+                      <td class="entry-name-cell">
+                        <span class="entry-icon">{entry.is_dir ? '📁' : '📄'}</span>
+                        <span class="entry-name" title={entry.name}>{entry.name}</span>
+                      </td>
+                      <td class="entry-size-cell">{entry.is_dir ? '—' : formatBytes(entry.size_bytes)}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {:else}
+            <div class="archive-empty">No entries or unreadable archive header.</div>
+          {/if}
+        </div>
+
       <!-- Binary / Fallback File -->
       {:else}
         <div class="binary-viewer-box">
@@ -209,17 +265,21 @@
             <span class="meta-label">Location:</span>
             <span class="meta-value path-val" title={preview.path}>{preview.path}</span>
           </div>
-          {#if preview.blake3_hash}
-            <div class="meta-item full-width">
-              <span class="meta-label">BLAKE3 Hash:</span>
-              <div class="hash-row">
+          <div class="meta-item full-width">
+            <span class="meta-label">BLAKE3 Hash:</span>
+            <div class="hash-row">
+              {#if preview.blake3_hash}
                 <code class="hash-code">{preview.blake3_hash}</code>
                 <button class="hash-copy-btn" on:click={() => copyToClipboard(preview?.blake3_hash || '', 'hash')}>
                   {copiedHash ? '✓' : 'Copy'}
                 </button>
-              </div>
+              {:else if isHashing}
+                <span class="hash-computing">Computing 256-bit hash...</span>
+              {:else}
+                <button class="compute-hash-btn" on:click={computeHash}>Compute BLAKE3 Hash</button>
+              {/if}
             </div>
-          {/if}
+          </div>
         </div>
       </div>
     {/if}
@@ -616,8 +676,121 @@
   }
 
   .hash-copy-btn:hover,
-  .chip-sm:hover {
+  .chip-sm:hover,
+  .compute-hash-btn:hover {
     background: rgba(255, 255, 255, 0.16);
     color: white;
+  }
+
+  .compute-hash-btn {
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    color: #93c5fd;
+    font-size: 0.72rem;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .hash-computing {
+    font-size: 0.72rem;
+    color: #94a3b8;
+    font-style: italic;
+  }
+
+  .archive-viewer-box {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 12px;
+  }
+
+  .archive-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .archive-icon {
+    font-size: 24px;
+  }
+
+  .archive-header h4 {
+    margin: 0;
+    font-size: 0.88rem;
+    color: #f1f5f9;
+  }
+
+  .archive-sub {
+    margin: 2px 0 0 0;
+    font-size: 0.72rem;
+    color: #94a3b8;
+  }
+
+  .archive-table-container {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 6px;
+  }
+
+  .archive-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.75rem;
+  }
+
+  .archive-table th {
+    position: sticky;
+    top: 0;
+    background: #0d1322;
+    padding: 6px 10px;
+    color: #94a3b8;
+    font-weight: 500;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    text-align: left;
+  }
+
+  .archive-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  }
+
+  .entry-name-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #e2e8f0;
+    max-width: 200px;
+  }
+
+  .entry-icon {
+    font-size: 13px;
+  }
+
+  .entry-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.72rem;
+  }
+
+  .entry-size-cell {
+    color: #94a3b8;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.72rem;
+    text-align: right;
+  }
+
+  .archive-empty {
+    padding: 16px;
+    text-align: center;
+    font-size: 0.75rem;
+    color: #64748b;
   }
 </style>

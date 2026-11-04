@@ -225,6 +225,13 @@ pub fn scan_compliance_cmd(
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ArchiveEntryInfo {
+    pub name: String,
+    pub size_bytes: u64,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FilePreviewData {
     pub path: String,
     pub file_name: String,
@@ -234,6 +241,8 @@ pub struct FilePreviewData {
     pub is_image: bool,
     pub is_pdf: bool,
     pub is_media: bool,
+    pub is_archive: bool,
+    pub archive_entries: Vec<ArchiveEntryInfo>,
     pub text_content: Option<String>,
     pub total_lines: Option<usize>,
     pub pdf_pages: Option<usize>,
@@ -241,6 +250,107 @@ pub struct FilePreviewData {
     pub pdf_author: Option<String>,
     pub blake3_hash: Option<String>,
     pub modified_timestamp_secs: u64,
+}
+
+/// Compute 256-bit BLAKE3 hash via a 64KB stack buffer stream (O(1) memory for any size)
+pub fn compute_file_hash_cmd(path: String) -> Result<String, String> {
+    use std::io::Read;
+    let p = std::path::Path::new(&path);
+    if !p.exists() || !p.is_file() {
+        return Err(format!("File does not exist: {}", path));
+    }
+    let mut file = std::fs::File::open(p).map_err(|e| e.to_string())?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Fast streaming extraction of archive entries without extracting contents to disk
+pub fn inspect_archive_cmd(path: String) -> Result<Vec<ArchiveEntryInfo>, String> {
+    use std::io::Read;
+    let p = std::path::Path::new(&path);
+    if !p.exists() || !p.is_file() {
+        return Err(format!("Archive file does not exist: {}", path));
+    }
+    let ext = p
+        .extension()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let mut entries = Vec::new();
+
+    if ext == "zip" {
+        if let Ok(mut file) = std::fs::File::open(p) {
+            let mut buf = Vec::new();
+            let meta = std::fs::metadata(p).map_err(|e| e.to_string())?;
+            if meta.len() <= 20 * 1024 * 1024 {
+                let _ = file.read_to_end(&mut buf);
+            } else {
+                let sample_len = 2 * 1024 * 1024;
+                buf.resize(sample_len, 0);
+                if let Ok(n) = file.read(&mut buf) {
+                    buf.truncate(n);
+                }
+            }
+            if let Ok(zip_entries) = crate::doc_extract::parse_zip_entries(&buf) {
+                for e in zip_entries.into_iter().take(200) {
+                    let is_dir = e.name.ends_with('/');
+                    entries.push(ArchiveEntryInfo {
+                        size_bytes: e.data.len() as u64,
+                        is_dir,
+                        name: e.name,
+                    });
+                }
+            }
+        }
+    } else if ext == "tar" || ext == "gz" || ext == "tgz" {
+        if let Ok(mut file) = std::fs::File::open(p) {
+            let mut sample_buf = Vec::new();
+            if ext == "tar" {
+                sample_buf.resize(512 * 120, 0);
+                if let Ok(n) = file.read(&mut sample_buf) {
+                    sample_buf.truncate(n);
+                }
+            } else {
+                let gz = flate2::read::GzDecoder::new(file);
+                let mut limited = gz.take(512 * 120);
+                let _ = limited.read_to_end(&mut sample_buf);
+            }
+            let mut cursor = 0;
+            while cursor + 512 <= sample_buf.len() && entries.len() < 200 {
+                let header = &sample_buf[cursor..cursor + 512];
+                if header.iter().all(|&b| b == 0) {
+                    break;
+                }
+                let name_end = header[..100].iter().position(|&b| b == 0).unwrap_or(100);
+                let name = String::from_utf8_lossy(&header[..name_end])
+                    .trim()
+                    .to_string();
+                let size_str = String::from_utf8_lossy(&header[124..136])
+                    .trim()
+                    .to_string();
+                let size = u64::from_str_radix(size_str.trim_matches('\0'), 8).unwrap_or(0);
+                let is_dir = name.ends_with('/') || header[156] == b'5';
+                if !name.is_empty() {
+                    entries.push(ArchiveEntryInfo {
+                        name,
+                        size_bytes: size,
+                        is_dir,
+                    });
+                }
+                let blocks = size.div_ceil(512);
+                cursor += 512 + (blocks as usize * 512);
+            }
+        }
+    }
+
+    Ok(entries)
 }
 
 /// Instant file preview inspector (text, PDF, image, media, hash, metadata)
@@ -274,6 +384,7 @@ pub fn get_file_preview_cmd(path: String) -> Result<FilePreviewData, String> {
     let media_exts = [
         "mp4", "webm", "mov", "mkv", "avi", "mp3", "wav", "flac", "ogg", "m4a",
     ];
+    let archive_exts = ["zip", "tar", "gz", "tgz", "bz2", "7z", "rar"];
     let text_exts = [
         "rs",
         "ts",
@@ -310,9 +421,10 @@ pub fn get_file_preview_cmd(path: String) -> Result<FilePreviewData, String> {
 
     let is_image = image_exts.contains(&ext.as_str());
     let is_media = media_exts.contains(&ext.as_str());
+    let is_archive = archive_exts.contains(&ext.as_str());
     let is_pdf = ext == "pdf";
     let is_text = text_exts.contains(&ext.as_str())
-        || (!is_image && !is_media && !is_pdf && size_bytes < 256 * 1024);
+        || (!is_image && !is_media && !is_pdf && !is_archive && size_bytes < 256 * 1024);
 
     let mut text_content = None;
     let mut total_lines = None;
@@ -338,7 +450,15 @@ pub fn get_file_preview_cmd(path: String) -> Result<FilePreviewData, String> {
         }
     }
 
-    let blake3_hash = if size_bytes < 100 * 1024 * 1024 {
+    let archive_entries = if is_archive {
+        inspect_archive_cmd(path.clone()).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    // Synchronously hash only small files <= 512KB for sub-5ms instant preview;
+    // larger files compute hash on-demand via compute_file_hash_cmd
+    let blake3_hash = if size_bytes <= 512 * 1024 {
         std::fs::read(p)
             .ok()
             .map(|b| blake3::hash(&b).to_hex().to_string())
@@ -355,6 +475,8 @@ pub fn get_file_preview_cmd(path: String) -> Result<FilePreviewData, String> {
         is_image,
         is_pdf,
         is_media,
+        is_archive,
+        archive_entries,
         text_content,
         total_lines,
         pdf_pages,
@@ -424,6 +546,24 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
                 .to_string();
             let preview = get_file_preview_cmd(path)?;
             serde_json::to_value(preview).map_err(|e| e.to_string())
+        }
+        "compute_file_hash_cmd" => {
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing path parameter".to_string())?
+                .to_string();
+            let hash = compute_file_hash_cmd(path)?;
+            serde_json::to_value(hash).map_err(|e| e.to_string())
+        }
+        "inspect_archive_cmd" => {
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing path parameter".to_string())?
+                .to_string();
+            let entries = inspect_archive_cmd(path)?;
+            serde_json::to_value(entries).map_err(|e| e.to_string())
         }
         "list_drives_and_places_cmd" => {
             let entries = list_drives_and_places_cmd()?;
@@ -756,5 +896,55 @@ mod tests {
         let places_val =
             dispatch_ipc_command("list_drives_and_places_cmd", serde_json::json!({})).unwrap();
         assert!(!places_val.as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_commands_hash_and_archive_inspection() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("hash_sample.bin");
+        std::fs::write(&file_path, b"abcdefghijklmnopqrstuvwxyz0123456789").unwrap();
+        let file_str = file_path.to_string_lossy().to_string();
+
+        // 1. compute_file_hash_cmd
+        let hash = compute_file_hash_cmd(file_str.clone()).expect("Hashing should succeed");
+        assert_eq!(hash.len(), 64);
+
+        // IPC dispatch check
+        let hash_val = dispatch_ipc_command(
+            "compute_file_hash_cmd",
+            serde_json::json!({ "path": file_str }),
+        )
+        .expect("IPC dispatch compute_file_hash_cmd should succeed");
+        assert_eq!(hash_val.as_str().unwrap(), hash);
+
+        // 2. inspect_archive_cmd on zip
+        let zip_path = dir.path().join("test_pkg.zip");
+        let mut zip_bytes = Vec::new();
+        let file_data = b"inner content test";
+        zip_bytes.extend_from_slice(b"PK\x03\x04");
+        zip_bytes.extend_from_slice(&[20, 0]); // ver 2.0
+        zip_bytes.extend_from_slice(&[0, 0]); // flags
+        zip_bytes.extend_from_slice(&[0, 0]); // method 0 (store)
+        zip_bytes.extend_from_slice(&[0, 0, 0, 0]); // time
+        zip_bytes.extend_from_slice(&[0, 0, 0, 0]); // crc
+        zip_bytes.extend_from_slice(&(file_data.len() as u32).to_le_bytes()); // comp
+        zip_bytes.extend_from_slice(&(file_data.len() as u32).to_le_bytes()); // uncomp
+        let inner_name = b"inner_file.txt";
+        zip_bytes.extend_from_slice(&(inner_name.len() as u16).to_le_bytes());
+        zip_bytes.extend_from_slice(&0u16.to_le_bytes()); // extra
+        zip_bytes.extend_from_slice(inner_name);
+        zip_bytes.extend_from_slice(file_data);
+        std::fs::write(&zip_path, zip_bytes).unwrap();
+
+        let zip_str = zip_path.to_string_lossy().to_string();
+        let entries = inspect_archive_cmd(zip_str.clone()).expect("Zip inspection should succeed");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "inner_file.txt");
+        assert_eq!(entries[0].size_bytes, file_data.len() as u64);
+
+        // Preview command should also mark is_archive = true
+        let preview = get_file_preview_cmd(zip_str).expect("Preview should succeed");
+        assert!(preview.is_archive);
+        assert_eq!(preview.archive_entries.len(), 1);
     }
 }

@@ -714,23 +714,61 @@ fn extract_pdf_text_operators(raw: &str, content: &mut String) {
 
 fn normalize_extracted_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
+    let mut prev_was_empty = false;
+
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
+            if !prev_was_empty && !out.is_empty() {
+                out.push('\n');
+                prev_was_empty = true;
+            }
             continue;
         }
+        prev_was_empty = false;
+
         let words: Vec<&str> = trimmed.split_whitespace().collect();
         let mut normalized_line = String::new();
         let mut single_char_buf = String::new();
 
         for w in words {
-            if w.len() == 1
-                && w.chars()
-                    .next()
-                    .map(|c| c.is_alphanumeric())
-                    .unwrap_or(false)
-            {
-                single_char_buf.push_str(w);
+            // Check if token is a single character
+            if w.chars().count() == 1 {
+                let ch = w.chars().next().unwrap_or(' ');
+                if ch.is_alphabetic() {
+                    single_char_buf.push(ch);
+                } else if ch.is_ascii_digit() {
+                    if !single_char_buf.is_empty() {
+                        if !normalized_line.is_empty() {
+                            normalized_line.push(' ');
+                        }
+                        normalized_line.push_str(&single_char_buf);
+                        single_char_buf.clear();
+                    }
+                    if !normalized_line.is_empty() {
+                        normalized_line.push(' ');
+                    }
+                    normalized_line.push(ch);
+                } else {
+                    // Punctuation attaching to preceding single_char_buf or word
+                    if !single_char_buf.is_empty() {
+                        if !normalized_line.is_empty() {
+                            normalized_line.push(' ');
+                        }
+                        normalized_line.push_str(&single_char_buf);
+                        single_char_buf.clear();
+                        normalized_line.push(ch);
+                    } else if !normalized_line.is_empty()
+                        && (ch == '.' || ch == ',' || ch == ':' || ch == ';' || ch == '!' || ch == '?')
+                    {
+                        normalized_line.push(ch);
+                    } else {
+                        if !normalized_line.is_empty() {
+                            normalized_line.push(' ');
+                        }
+                        normalized_line.push(ch);
+                    }
+                }
             } else {
                 if !single_char_buf.is_empty() {
                     if !normalized_line.is_empty() {
@@ -745,6 +783,7 @@ fn normalize_extracted_text(text: &str) -> String {
                 normalized_line.push_str(w);
             }
         }
+
         if !single_char_buf.is_empty() {
             if !normalized_line.is_empty() {
                 normalized_line.push(' ');
@@ -752,7 +791,16 @@ fn normalize_extracted_text(text: &str) -> String {
             normalized_line.push_str(&single_char_buf);
         }
 
-        out.push_str(&normalized_line);
+        // Clean up common spacing anomalies
+        let cleaned = normalized_line
+            .replace(" .", ".")
+            .replace(" ,", ",")
+            .replace(" :", ":")
+            .replace(" ;", ";")
+            .replace(" !", "!")
+            .replace(" ?", "?");
+
+        out.push_str(&cleaned);
         out.push('\n');
     }
     out
@@ -1021,5 +1069,14 @@ mod tests {
 
         assert!(doc.content_text.contains("Connection reset by peer"));
         assert_eq!(doc.metadata.word_count, 10);
+    }
+
+    #[test]
+    fn test_normalize_extracted_text() {
+        let raw = "P g . 1   S K I L L C E R T P R O   A complete list of the A W S services";
+        let norm = normalize_extracted_text(raw);
+        assert!(norm.contains("Pg. 1"));
+        assert!(norm.contains("SKILLCERTPRO"));
+        assert!(norm.contains("A complete list of the AWS services"));
     }
 }
