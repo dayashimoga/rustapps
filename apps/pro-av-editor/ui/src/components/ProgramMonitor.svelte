@@ -95,6 +95,105 @@
     return `brightness(${brightness.toFixed(2)}) contrast(${contrast.toFixed(2)}) saturate(${saturate.toFixed(2)}) hue-rotate(${hueRotate}deg)`;
   }
 
+  function applyFullColorGradingToCanvas(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    cg?: any
+  ) {
+    if (!cg) return;
+    const isDefault =
+      (cg.exposure || 0) === 0 &&
+      (cg.contrast ?? 1.0) === 1.0 &&
+      (cg.saturation ?? 1.0) === 1.0 &&
+      (cg.temperature || 0) === 0 &&
+      (cg.tint || 0) === 0 &&
+      (cg.lift?.r || 0) === 0 && (cg.lift?.g || 0) === 0 && (cg.lift?.b || 0) === 0 &&
+      (cg.gamma?.r || 0) === 0 && (cg.gamma?.g || 0) === 0 && (cg.gamma?.b || 0) === 0 &&
+      (cg.gain?.r || 0) === 0 && (cg.gain?.g || 0) === 0 && (cg.gain?.b || 0) === 0;
+
+    if (isDefault) return;
+
+    try {
+      const imgData = ctx.getImageData(0, 0, w, h);
+      const data = imgData.data;
+      const len = data.length;
+
+      const expMultiplier = Math.pow(2.0, cg.exposure || 0);
+      const contrastVal = cg.contrast ?? 1.0;
+      const satVal = cg.saturation ?? 1.0;
+      const tempOffset = (cg.temperature || 0) * 0.003;
+      const tintOffset = (cg.tint || 0) * 0.003;
+
+      const liftR = cg.lift?.r || 0;
+      const liftG = cg.lift?.g || 0;
+      const liftB = cg.lift?.b || 0;
+
+      const gammaR = cg.gamma?.r || 0;
+      const gammaG = cg.gamma?.g || 0;
+      const gammaB = cg.gamma?.b || 0;
+
+      const gainR = cg.gain?.r || 0;
+      const gainG = cg.gain?.g || 0;
+      const gainB = cg.gain?.b || 0;
+
+      for (let i = 0; i < len; i += 4) {
+        let r = data[i] / 255.0;
+        let g = data[i + 1] / 255.0;
+        let b = data[i + 2] / 255.0;
+
+        // 1. Exposure
+        if (expMultiplier !== 1.0) {
+          r *= expMultiplier;
+          g *= expMultiplier;
+          b *= expMultiplier;
+        }
+
+        // 2. White Balance (Temperature & Tint)
+        if (tempOffset !== 0 || tintOffset !== 0) {
+          r += tempOffset + tintOffset * 0.5;
+          g -= tintOffset;
+          b -= tempOffset - tintOffset * 0.5;
+        }
+
+        // 3. Contrast (around 0.5 mid-gray)
+        if (contrastVal !== 1.0) {
+          r = (r - 0.5) * contrastVal + 0.5;
+          g = (g - 0.5) * contrastVal + 0.5;
+          b = (b - 0.5) * contrastVal + 0.5;
+        }
+
+        // Calculate Rec.709 Luma for weighting 3-way wheels
+        const luma = Math.max(0.0, Math.min(1.0, 0.2126 * r + 0.7152 * g + 0.0722 * b));
+        const shadowWeight = Math.max(0.0, 1.0 - luma);
+        const highlightWeight = luma;
+        const midtoneWeight = Math.max(0.0, 1.0 - Math.abs(luma - 0.5) * 2.0);
+
+        // 4. Lift (Shadows), Gamma (Midtones), Gain (Highlights)
+        r += liftR * shadowWeight + gammaR * midtoneWeight + gainR * highlightWeight;
+        g += liftG * shadowWeight + gammaG * midtoneWeight + gainG * highlightWeight;
+        b += liftB * shadowWeight + gammaB * midtoneWeight + gainB * highlightWeight;
+
+        // 5. Saturation (Desaturate towards Luma or boost)
+        if (satVal !== 1.0) {
+          const currentLuma = Math.max(0.0, Math.min(1.0, 0.2126 * r + 0.7152 * g + 0.0722 * b));
+          r = currentLuma + (r - currentLuma) * satVal;
+          g = currentLuma + (g - currentLuma) * satVal;
+          b = currentLuma + (b - currentLuma) * satVal;
+        }
+
+        // Clamp back to 0-255
+        data[i] = Math.max(0, Math.min(255, Math.round(r * 255)));
+        data[i + 1] = Math.max(0, Math.min(255, Math.round(g * 255)));
+        data[i + 2] = Math.max(0, Math.min(255, Math.round(b * 255)));
+      }
+
+      ctx.putImageData(imgData, 0, 0);
+    } catch (e) {
+      console.warn('Canvas pixel color grading fallback:', e);
+    }
+  }
+
   function syncAudioPlayback() {
     if (!audioEl) return;
     const activeAudio = findActiveClip('Audio') || findActiveClip('Video');
@@ -114,7 +213,7 @@
         (activeAudio.clip.speed_multiplier || 1.0) +
         activeAudio.clip.source_in_ms) /
       1000.0;
-    const vol = activeAudio.clip.volume?.static_value ?? 1.0;
+    const vol = activeAudio.clip.volume?.default_value ?? 1.0;
     audioEl.volume = Math.max(0, Math.min(1, vol));
     audioEl.playbackRate = Math.max(0.25, Math.min(4.0, Math.abs(playbackSpeed)));
 
@@ -297,13 +396,50 @@
       if (videoEl.readyState >= 2) {
         canvasRef.width = 640;
         canvasRef.height = 360;
+
+        const clip = activeVideo.clip;
+        const transform = clip.transform || {
+          scale_x: 1.0,
+          scale_y: 1.0,
+          translate_x: 0.0,
+          translate_y: 0.0,
+          rotation_degrees: 0.0,
+          anchor_x: 0.5,
+          anchor_y: 0.5,
+        };
+        const opacity = clip.opacity?.default_value ?? 1.0;
+        const blendMap: Record<string, GlobalCompositeOperation> = {
+          Normal: 'source-over',
+          Multiply: 'multiply',
+          Screen: 'screen',
+          Overlay: 'overlay',
+          Add: 'lighter',
+          Darken: 'darken',
+          Lighten: 'lighten',
+          Difference: 'difference',
+        };
+        const blendOp = blendMap[clip.blend_mode] || 'source-over';
+
         ctx.save();
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, 640, 360);
-        ctx.filter = applyGradeFilterString(activeVideo.clip);
-        ctx.globalAlpha = activeVideo.clip.opacity?.static_value ?? 1.0;
-        ctx.drawImage(videoEl, 0, 0, 640, 360);
+        ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
+        ctx.globalCompositeOperation = blendOp;
+
+        // Apply 2D transforms around center
+        const cx = 320 + (transform.translate_x || 0);
+        const cy = 180 + (transform.translate_y || 0);
+        ctx.translate(cx, cy);
+        if (transform.rotation_degrees) {
+          ctx.rotate((transform.rotation_degrees * Math.PI) / 180.0);
+        }
+        ctx.scale(transform.scale_x ?? 1.0, transform.scale_y ?? 1.0);
+        ctx.drawImage(videoEl, -320, -180, 640, 360);
         ctx.restore();
+
+        // Apply mathematical 3-way color grading + exposure/contrast/saturation
+        applyFullColorGradingToCanvas(ctx, 640, 360, clip.color_grading);
+
         drawHudOverlays(ctx, 640, 360);
         previewBmpBase64 = 'LIVE_VIDEO';
         return true;
@@ -311,7 +447,7 @@
     } else if (kind === 'image') {
       // For JPG/WEBP/GIF (or fast cached PNG/BMP), draw via HTMLImageElement if cached
       const ext = (activeVideo.source.file_path.split('.').pop() || '').toLowerCase();
-      if (['jpg', 'jpeg', 'webp', 'gif'].includes(ext)) {
+      if (['jpg', 'jpeg', 'webp', 'gif', 'png', 'bmp'].includes(ext)) {
         let img = loadedImageCache[mediaUrl];
         if (!img) {
           img = new Image();
@@ -322,13 +458,48 @@
         if (img.complete && img.naturalWidth > 0) {
           canvasRef.width = 640;
           canvasRef.height = 360;
+
+          const clip = activeVideo.clip;
+          const transform = clip.transform || {
+            scale_x: 1.0,
+            scale_y: 1.0,
+            translate_x: 0.0,
+            translate_y: 0.0,
+            rotation_degrees: 0.0,
+            anchor_x: 0.5,
+            anchor_y: 0.5,
+          };
+          const opacity = clip.opacity?.default_value ?? 1.0;
+          const blendMap: Record<string, GlobalCompositeOperation> = {
+            Normal: 'source-over',
+            Multiply: 'multiply',
+            Screen: 'screen',
+            Overlay: 'overlay',
+            Add: 'lighter',
+            Darken: 'darken',
+            Lighten: 'lighten',
+            Difference: 'difference',
+          };
+          const blendOp = blendMap[clip.blend_mode] || 'source-over';
+
           ctx.save();
           ctx.fillStyle = '#000';
           ctx.fillRect(0, 0, 640, 360);
-          ctx.filter = applyGradeFilterString(activeVideo.clip);
-          ctx.globalAlpha = activeVideo.clip.opacity?.static_value ?? 1.0;
-          ctx.drawImage(img, 0, 0, 640, 360);
+          ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
+          ctx.globalCompositeOperation = blendOp;
+
+          const cx = 320 + (transform.translate_x || 0);
+          const cy = 180 + (transform.translate_y || 0);
+          ctx.translate(cx, cy);
+          if (transform.rotation_degrees) {
+            ctx.rotate((transform.rotation_degrees * Math.PI) / 180.0);
+          }
+          ctx.scale(transform.scale_x ?? 1.0, transform.scale_y ?? 1.0);
+          ctx.drawImage(img, -320, -180, 640, 360);
           ctx.restore();
+
+          applyFullColorGradingToCanvas(ctx, 640, 360, clip.color_grading);
+
           drawHudOverlays(ctx, 640, 360);
           previewBmpBase64 = 'LIVE_IMAGE';
           return true;
@@ -482,7 +653,7 @@
   <div class="monitor-top-bar">
     <div class="hud-left">
       <span class="program-title">Program Monitor</span>
-      <span class="res-tag">1920×1080 @ {Math.round(fps)}fps</span>
+      <span class="res-tag">{project?.settings?.width || 1920}×{project?.settings?.height || 1080} @ {Math.round(fps)}fps</span>
       {#if activeSourceLabel}
         <span class="res-tag" style="color: #38bdf8; border: 1px solid rgba(56,189,248,0.3);">
           🎬 {activeSourceLabel}

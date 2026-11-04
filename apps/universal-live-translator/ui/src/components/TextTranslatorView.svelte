@@ -123,12 +123,22 @@
     micWebTranscript = '';
 
     const langCode: LanguageCode = sourceLang === 'auto' ? (detectedLid?.language || 'en') : sourceLang;
+    const bcp47Map: Record<string, string> = {
+      en: 'en-US', es: 'es-ES', fr: 'fr-FR', de: 'de-DE', it: 'it-IT',
+      pt: 'pt-BR', ru: 'ru-RU', zh: 'zh-CN', ja: 'ja-JP', ko: 'ko-KR',
+      ar: 'ar-SA', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', bn: 'bn-IN',
+      tr: 'tr-TR', nl: 'nl-NL', pl: 'pl-PL', sv: 'sv-SE', uk: 'uk-UA',
+      vi: 'vi-VN', th: 'th-TH', id: 'id-ID', ms: 'ms-MY', cs: 'cs-CZ',
+      ro: 'ro-RO', da: 'da-DK', fi: 'fi-FI', no: 'no-NO', hu: 'hu-HU',
+      el: 'el-GR', he: 'he-IL', fa: 'fa-IR', ur: 'ur-PK', bg: 'bg-BG',
+    };
+
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (SpeechRec) {
         micSpeechRec = new SpeechRec();
-        micSpeechRec.lang = langCode;
+        micSpeechRec.lang = bcp47Map[langCode] || langCode;
         micSpeechRec.continuous = true;
         micSpeechRec.interimResults = true;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -151,6 +161,9 @@
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         micAudioCtx = new AudioContext({ sampleRate: 16000 });
+        if (micAudioCtx.state === 'suspended') {
+          await micAudioCtx.resume();
+        }
         const src = micAudioCtx.createMediaStreamSource(micStream);
         micProcessor = micAudioCtx.createScriptProcessor(2048, 1, 1);
         micProcessor.onaudioprocess = (ev: AudioProcessingEvent) => {
@@ -273,6 +286,50 @@
     if (!outputText) return;
     isSpeaking = true;
     try {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(outputText);
+        const bcp47Map: Record<string, string> = {
+          en: 'en-US', es: 'es-ES', fr: 'fr-FR', de: 'de-DE', it: 'it-IT',
+          pt: 'pt-BR', ru: 'ru-RU', zh: 'zh-CN', ja: 'ja-JP', ko: 'ko-KR',
+          ar: 'ar-SA', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', bn: 'bn-IN',
+          tr: 'tr-TR', nl: 'nl-NL', pl: 'pl-PL', sv: 'sv-SE', uk: 'uk-UA',
+          vi: 'vi-VN', th: 'th-TH', id: 'id-ID', ms: 'ms-MY', cs: 'cs-CZ',
+          ro: 'ro-RO', da: 'da-DK', fi: 'fi-FI', no: 'no-NO', hu: 'hu-HU',
+          el: 'el-GR', he: 'he-IL', fa: 'fa-IR', ur: 'ur-PK', bg: 'bg-BG',
+        };
+        utterance.lang = bcp47Map[targetLang] || targetLang;
+        utterance.rate = 1.0;
+        let finished = false;
+        utterance.onend = () => {
+          if (!finished) {
+            finished = true;
+            isSpeaking = false;
+          }
+        };
+        utterance.onerror = async () => {
+          if (!finished) {
+            finished = true;
+            await playBackendWav();
+          }
+        };
+        window.speechSynthesis.speak(utterance);
+        setTimeout(() => {
+          if (isSpeaking && !finished) {
+            finished = true;
+            isSpeaking = false;
+          }
+        }, 10000);
+        return;
+      }
+      await playBackendWav();
+    } catch {
+      await playBackendWav();
+    }
+  }
+
+  async function playBackendWav() {
+    try {
       const req: TtsSynthesisRequest = {
         text: outputText,
         language: targetLang,
@@ -282,6 +339,7 @@
       if (res && res.audioWavBase64) {
         const audio = new Audio(`data:audio/wav;base64,${res.audioWavBase64}`);
         audio.onended = () => { isSpeaking = false; };
+        audio.onerror = () => { isSpeaking = false; };
         await audio.play();
       } else {
         isSpeaking = false;

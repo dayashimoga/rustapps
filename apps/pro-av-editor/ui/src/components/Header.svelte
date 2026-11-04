@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import type { TimelineProject } from '../types';
+  import { tauriInvoke, type TimelineProject } from '../types';
 
   export let project: TimelineProject | null = null;
   export let activePanel: 'edit' | 'color' | 'audio' = 'edit';
@@ -17,7 +17,39 @@
     openAiTools: void;
     openExport: void;
     switchPanel: 'edit' | 'color' | 'audio';
+    refreshProject: void;
   }>();
+
+  let showSettingsModal = false;
+  let editWidth = 1920;
+  let editHeight = 1080;
+  let editFps = 'Fps60';
+
+  function openSettings() {
+    if (project) {
+      editWidth = project.settings.width;
+      editHeight = project.settings.height;
+      editFps = project.settings.frame_rate;
+    }
+    showSettingsModal = true;
+  }
+
+  async function saveSettings() {
+    try {
+      const updated = await tauriInvoke<TimelineProject>('update_project_settings_cmd', {
+        width: editWidth,
+        height: editHeight,
+        frameRate: editFps,
+      });
+      if (updated && project) {
+        project = updated;
+      }
+      showSettingsModal = false;
+      dispatch('refreshProject');
+    } catch (e: any) {
+      console.error('Failed to update project settings:', e);
+    }
+  }
 </script>
 
 <header class="header">
@@ -34,8 +66,14 @@
         <span class="offline-pill">100% OFFLINE</span>
         <span class="sla-badge">60 FPS SLA</span>
         {#if project}
-          <span class="meta-tag">{project.settings.width}x{project.settings.height}</span>
-          <span class="meta-tag">{project.settings.frame_rate.replace('Fps', '')} fps</span>
+          <button
+            type="button"
+            class="meta-tag-btn"
+            on:click={openSettings}
+            title="Click to modify Project Resolution & Frame Rate"
+          >
+            ⚙ {project.settings.width}×{project.settings.height} · {project.settings.frame_rate.replace('Fps', '').replace('_', '.')} fps
+          </button>
         {/if}
       </div>
     </div>
@@ -128,6 +166,88 @@
   </div>
 </header>
 
+{#if showSettingsModal}
+  <div
+    class="modal-backdrop"
+    role="presentation"
+    on:keydown={(e) => e.key === 'Escape' && (showSettingsModal = false)}
+    on:click|self={() => (showSettingsModal = false)}
+  >
+    <div class="settings-modal">
+      <div class="modal-header">
+        <h3>Project Sequence Settings</h3>
+        <button type="button" class="close-btn" on:click={() => (showSettingsModal = false)}>✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="preset-chips">
+          <button
+            type="button"
+            class="chip"
+            on:click={() => { editWidth = 1920; editHeight = 1080; editFps = 'Fps60'; }}
+          >
+            1080p 60fps
+          </button>
+          <button
+            type="button"
+            class="chip"
+            on:click={() => { editWidth = 3840; editHeight = 2160; editFps = 'Fps60'; }}
+          >
+            4K UHD 60fps
+          </button>
+          <button
+            type="button"
+            class="chip"
+            on:click={() => { editWidth = 3840; editHeight = 1608; editFps = 'Fps24'; }}
+          >
+            2.39:1 Cinema 24fps
+          </button>
+          <button
+            type="button"
+            class="chip"
+            on:click={() => { editWidth = 1080; editHeight = 1920; editFps = 'Fps60'; }}
+          >
+            9:16 Vertical Short
+          </button>
+        </div>
+
+        <div class="form-row">
+          <label>
+            Width (px)
+            <input type="number" min="320" max="7680" bind:value={editWidth} />
+          </label>
+          <label>
+            Height (px)
+            <input type="number" min="240" max="4320" bind:value={editHeight} />
+          </label>
+        </div>
+
+        <div class="form-row">
+          <label>
+            Frame Rate (FPS)
+            <select bind:value={editFps}>
+              <option value="Fps23_976">23.976 fps (Cinematic Film)</option>
+              <option value="Fps24">24.0 fps (Standard Film)</option>
+              <option value="Fps25">25.0 fps (PAL / European Broadcast)</option>
+              <option value="Fps29_97">29.97 fps (NTSC Broadcast)</option>
+              <option value="Fps30">30.0 fps (Web Video)</option>
+              <option value="Fps50">50.0 fps (High Frame Rate PAL)</option>
+              <option value="Fps59_94">59.94 fps (NTSC Broadcast HFR)</option>
+              <option value="Fps60">60.0 fps (Ultra Smooth 60 FPS)</option>
+              <option value="Fps120">120.0 fps (High Speed / Slow Mo)</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="btn-cancel" on:click={() => (showSettingsModal = false)}>Cancel</button>
+        <button type="button" class="btn-apply" on:click={saveSettings}>Apply Settings</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .header {
     display: flex;
@@ -178,7 +298,7 @@
     border: 1px solid rgba(16, 185, 129, 0.3);
   }
 
-  .sla-badge, .meta-tag {
+  .sla-badge {
     font-size: 0.65rem;
     font-family: var(--font-mono);
     padding: 1px 5px;
@@ -337,6 +457,171 @@
   .btn-primary {
     background: var(--accent-primary);
     color: white;
+  }
+
+  .meta-tag-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    color: #94a3b8;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .meta-tag-btn:hover {
+    background: rgba(56, 189, 248, 0.18);
+    border-color: #38bdf8;
+    color: #e2e8f0;
+  }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  .settings-modal {
+    background: #111827;
+    border: 1px solid #374151;
+    border-radius: 8px;
+    width: 440px;
+    max-width: 90vw;
+    box-shadow: 0 16px 32px rgba(0, 0, 0, 0.6);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.85rem 1.1rem;
+    border-bottom: 1px solid #1f2937;
+  }
+
+  .modal-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #f3f4f6;
+  }
+
+  .close-btn {
+    background: transparent;
+    border: none;
+    color: #9ca3af;
+    cursor: pointer;
+    font-size: 1rem;
+  }
+
+  .close-btn:hover {
+    color: #f3f4f6;
+  }
+
+  .modal-body {
+    padding: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .preset-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .chip {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid #374151;
+    color: #cbd5e1;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.74rem;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .chip:hover {
+    background: #2563eb;
+    border-color: #3b82f6;
+    color: white;
+  }
+
+  .form-row {
+    display: flex;
+    gap: 0.8rem;
+  }
+
+  .form-row label {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-size: 0.78rem;
+    color: #94a3b8;
+  }
+
+  .form-row input,
+  .form-row select {
+    background: #0b0f17;
+    border: 1px solid #374151;
+    border-radius: 4px;
+    padding: 6px 8px;
+    color: #f3f4f6;
+    font-size: 0.82rem;
+  }
+
+  .form-row input:focus,
+  .form-row select:focus {
+    outline: none;
+    border-color: #3b82f6;
+  }
+
+  .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding: 0.85rem 1.1rem;
+    border-top: 1px solid #1f2937;
+    background: #0c1017;
+  }
+
+  .btn-cancel {
+    background: transparent;
+    border: 1px solid #374151;
+    color: #9ca3af;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+  }
+
+  .btn-cancel:hover {
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .btn-apply {
+    background: #2563eb;
+    border: none;
+    color: white;
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 0.8rem;
+  }
+
+  .btn-apply:hover {
+    background: #1d4ed8;
   }
 </style>
 

@@ -506,3 +506,4 @@
     box-shadow: 0 6px 16px rgba(79, 70, 229, 0.5);
   }
 </style>
+

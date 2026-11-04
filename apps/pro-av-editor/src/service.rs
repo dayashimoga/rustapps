@@ -696,6 +696,28 @@ impl EditorService {
         )))
     }
 
+    /// Update project resolution and frame rate on an active timeline
+    pub fn update_project_settings(
+        &self,
+        width: u32,
+        height: u32,
+        frame_rate: FrameRate,
+    ) -> Result<TimelineProject, ServiceError> {
+        let mut guard = self
+            .engine
+            .write()
+            .map_err(|_| ServiceError::LockPoisoned)?;
+        let project = guard.project_mut();
+        project.settings.width = width.clamp(320, 7680);
+        project.settings.height = height.clamp(240, 4320);
+        project.settings.frame_rate = frame_rate;
+        project.updated_at_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        Ok(project.clone())
+    }
+
     /// Update probed duration and dimensions of a MediaSource (e.g., from HTML5 `<video>` metadata)
     pub fn update_media_duration(
         &self,

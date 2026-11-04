@@ -117,6 +117,9 @@
           },
         });
         audioCtx = new AudioContext({ sampleRate: 16000 });
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume();
+        }
         const source = audioCtx.createMediaStreamSource(mediaStream);
         analyserNode = audioCtx.createAnalyser();
         analyserNode.fftSize = 256;
@@ -371,6 +374,40 @@
 
   async function speakTurn(turn: ConversationTurn) {
     try {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(turn.translatedText);
+        const bcp47Map: Record<string, string> = {
+          en: 'en-US', es: 'es-ES', fr: 'fr-FR', de: 'de-DE', it: 'it-IT',
+          pt: 'pt-BR', ru: 'ru-RU', zh: 'zh-CN', ja: 'ja-JP', ko: 'ko-KR',
+          ar: 'ar-SA', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', bn: 'bn-IN',
+          tr: 'tr-TR', nl: 'nl-NL', pl: 'pl-PL', sv: 'sv-SE', uk: 'uk-UA',
+          vi: 'vi-VN', th: 'th-TH', id: 'id-ID', ms: 'ms-MY', cs: 'cs-CZ',
+          ro: 'ro-RO', da: 'da-DK', fi: 'fi-FI', no: 'no-NO', hu: 'hu-HU',
+          el: 'el-GR', he: 'he-IL', fa: 'fa-IR', ur: 'ur-PK', bg: 'bg-BG',
+        };
+        utterance.lang = bcp47Map[turn.targetLang] || turn.targetLang;
+        utterance.rate = 1.0;
+        let finished = false;
+        utterance.onerror = async () => {
+          if (!finished) {
+            finished = true;
+            await playWavFallback(turn);
+          }
+        };
+        utterance.onend = () => { finished = true; };
+        window.speechSynthesis.speak(utterance);
+        return;
+      }
+      await playWavFallback(turn);
+    } catch (e) {
+      console.error('Error speaking turn:', e);
+      await playWavFallback(turn);
+    }
+  }
+
+  async function playWavFallback(turn: ConversationTurn) {
+    try {
       const req: TtsSynthesisRequest = {
         text: turn.translatedText,
         language: turn.targetLang,
@@ -381,8 +418,8 @@
         const audio = new Audio(`data:audio/wav;base64,${res.audioWavBase64}`);
         await audio.play();
       }
-    } catch (e) {
-      console.error('Error speaking turn:', e);
+    } catch {
+      // ignore
     }
   }
 </script>

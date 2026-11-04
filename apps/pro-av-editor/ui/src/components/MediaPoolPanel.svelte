@@ -26,9 +26,9 @@
   let fileInputRef: HTMLInputElement;
 
   function triggerBrowseMedia() {
-    dispatch('importMedia');
-    dispatch('importMediaDialog');
-    if (fileInputRef) {
+    if (typeof window !== 'undefined' && window.__TAURI__?.dialog?.open) {
+      dispatch('importMedia');
+    } else if (fileInputRef) {
       fileInputRef.value = '';
       fileInputRef.click();
     }
@@ -529,12 +529,12 @@
 
           <div class="field-row">
             <label for="clip-speed">Speed ({editSpeed.toFixed(2)}x)</label>
-            <input id="clip-speed" type="range" min="0.25" max="4.0" step="0.05" bind:value={editSpeed} on:change={applyClipProperties} />
+            <input id="clip-speed" type="range" min="0.25" max="4.0" step="0.05" bind:value={editSpeed} on:input={applyClipProperties} on:change={applyClipProperties} />
           </div>
 
           <div class="field-row">
             <label for="clip-opacity">Opacity ({Math.round(editOpacity * 100)}%)</label>
-            <input id="clip-opacity" type="range" min="0" max="1" step="0.02" bind:value={editOpacity} on:change={applyClipProperties} />
+            <input id="clip-opacity" type="range" min="0" max="1" step="0.02" bind:value={editOpacity} on:input={applyClipProperties} on:change={applyClipProperties} />
           </div>
 
           <div class="field-row">
@@ -553,27 +553,27 @@
 
           <div class="field-row">
             <label for="clip-vol">Audio Gain ({Math.round(editVolume * 100)}%)</label>
-            <input id="clip-vol" type="range" min="0" max="2" step="0.05" bind:value={editVolume} on:change={applyClipProperties} />
+            <input id="clip-vol" type="range" min="0" max="2" step="0.05" bind:value={editVolume} on:input={applyClipProperties} on:change={applyClipProperties} />
           </div>
 
           <div class="field-row">
             <label for="clip-scale-x">Scale X ({editScaleX.toFixed(2)})</label>
-            <input id="clip-scale-x" type="range" min="0.1" max="3.0" step="0.05" bind:value={editScaleX} on:change={applyClipProperties} />
+            <input id="clip-scale-x" type="range" min="0.1" max="3.0" step="0.05" bind:value={editScaleX} on:input={applyClipProperties} on:change={applyClipProperties} />
           </div>
 
           <div class="field-row">
             <label for="clip-scale-y">Scale Y ({editScaleY.toFixed(2)})</label>
-            <input id="clip-scale-y" type="range" min="0.1" max="3.0" step="0.05" bind:value={editScaleY} on:change={applyClipProperties} />
+            <input id="clip-scale-y" type="range" min="0.1" max="3.0" step="0.05" bind:value={editScaleY} on:input={applyClipProperties} on:change={applyClipProperties} />
           </div>
 
           <div class="field-row">
             <label for="clip-rot">Rotation ({editRotation.toFixed(0)}°)</label>
-            <input id="clip-rot" type="range" min="-180" max="180" step="1" bind:value={editRotation} on:change={applyClipProperties} />
+            <input id="clip-rot" type="range" min="-180" max="180" step="1" bind:value={editRotation} on:input={applyClipProperties} on:change={applyClipProperties} />
           </div>
 
           <div class="field-row">
             <label for="clip-pan">Stereo Pan ({editPan.toFixed(2)})</label>
-            <input id="clip-pan" type="range" min="-1" max="1" step="0.05" bind:value={editPan} on:change={applyClipProperties} />
+            <input id="clip-pan" type="range" min="-1" max="1" step="0.05" bind:value={editPan} on:input={applyClipProperties} on:change={applyClipProperties} />
           </div>
         </div>
 

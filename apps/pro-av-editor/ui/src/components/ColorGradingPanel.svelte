@@ -1,13 +1,71 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
-  import { tauriInvoke, type ColorGradingSettings, type VideoScopeData } from '../types';
+  import {
+    tauriInvoke,
+    type ColorGradingSettings,
+    type TimelineProject,
+    type VideoScopeData,
+  } from '../types';
 
+  export let project: TimelineProject | null = null;
   export let playheadMs: number = 0;
   export let selectedClipId: string | null = null;
 
   const dispatch = createEventDispatcher<{
-    gradeUpdated: void;
+    gradeUpdated: { clipId: string; grading: ColorGradingSettings };
   }>();
+
+  function getTargetClipId(): string | null {
+    if (selectedClipId) return selectedClipId;
+    if (!project) return null;
+    for (const track of project.tracks) {
+      if (track.track_type !== 'Video' || track.muted) continue;
+      for (const clip of track.clips) {
+        if (playheadMs >= clip.timeline_in_ms && playheadMs < clip.timeline_out_ms) {
+          return clip.id;
+        }
+      }
+    }
+    for (const track of project.tracks) {
+      if (track.track_type === 'Video' && track.clips.length > 0) {
+        return track.clips[0].id;
+      }
+    }
+    return null;
+  }
+
+  let lastTargetId: string | null = null;
+  $: currentTargetId = getTargetClipId();
+  $: if (currentTargetId && currentTargetId !== lastTargetId) {
+    lastTargetId = currentTargetId;
+    loadClipGrading(currentTargetId);
+  }
+
+  function loadClipGrading(clipId: string) {
+    if (!project) return;
+    for (const track of project.tracks) {
+      for (const clip of track.clips) {
+        if (clip.id === clipId && clip.color_grading) {
+          const cg = clip.color_grading;
+          exposure = cg.exposure || 0.0;
+          contrast = cg.contrast ?? 1.0;
+          saturation = cg.saturation ?? 1.0;
+          temperature = cg.temperature || 0.0;
+          tint = cg.tint || 0.0;
+          liftR = cg.lift?.r || 0.0;
+          liftG = cg.lift?.g || 0.0;
+          liftB = cg.lift?.b || 0.0;
+          gammaR = cg.gamma?.r || 0.0;
+          gammaG = cg.gamma?.g || 0.0;
+          gammaB = cg.gamma?.b || 0.0;
+          gainR = cg.gain?.r || 0.0;
+          gainG = cg.gain?.g || 0.0;
+          gainB = cg.gain?.b || 0.0;
+          return;
+        }
+      }
+    }
+  }
 
   // Primary Color Sliders
   let exposure: number = 0.0;
@@ -303,6 +361,11 @@
   }
 
   async function applyGrading() {
+    const targetClipId = getTargetClipId();
+    if (!targetClipId) {
+      console.warn('No active or selected video clip to color grade');
+      return;
+    }
     const grading: ColorGradingSettings = {
       lift: { r: liftR, g: liftG, b: liftB, luma: 0.0 },
       gamma: { r: gammaR, g: gammaG, b: gammaB, luma: 0.0 },
@@ -314,13 +377,24 @@
       tint,
       lut_file_path: null,
     };
+    // 1. Optimistically update local project so ProgramMonitor renders changes instantaneously
+    if (project) {
+      for (const track of project.tracks) {
+        for (const clip of track.clips) {
+          if (clip.id === targetClipId) {
+            clip.color_grading = grading;
+          }
+        }
+      }
+    }
+    dispatch('gradeUpdated', { clipId: targetClipId, grading });
+
     try {
       await tauriInvoke('update_clip_color_grading_cmd', {
-        clipId: selectedClipId,
+        clipId: targetClipId,
         grading,
       });
       await loadScopes();
-      dispatch('gradeUpdated');
     } catch (e) {
       console.error('Failed to update color grading:', e);
     }

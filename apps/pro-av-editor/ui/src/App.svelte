@@ -103,26 +103,27 @@
 
   async function handleOpenProject() {
     try {
+      const hasNativeDialog = typeof window !== 'undefined' && Boolean(window.__TAURI__?.dialog?.open);
       let chosenPath: string | null = null;
-      if (typeof window !== 'undefined' && window.__TAURI__?.dialog?.open) {
+      if (hasNativeDialog) {
         try {
-          chosenPath = await window.__TAURI__.dialog.open({
+          chosenPath = await window.__TAURI__!.dialog.open({
             title: 'Open Pro AV Studio Project (.avedproj)',
             filter: '*.avedproj;*.json',
             filters: [{ name: 'Project Files', extensions: ['avedproj', 'json'] }],
           });
         } catch (e) {
-          console.warn('Native open dialog unavailable, using file input fallback:', e);
+          console.warn('Native open dialog error:', e);
         }
-      }
-      if (chosenPath) {
-        project = await tauriInvoke<TimelineProject>('load_project_cmd', {
-          path: chosenPath,
-        });
-        playheadMs = 0;
-        selectedClipId = null;
-        await refreshProject();
-        showToast(`Loaded project: ${chosenPath}`);
+        if (chosenPath) {
+          project = await tauriInvoke<TimelineProject>('load_project_cmd', {
+            path: chosenPath,
+          });
+          playheadMs = 0;
+          selectedClipId = null;
+          await refreshProject();
+          showToast(`Loaded project: ${chosenPath}`);
+        }
       } else if (openProjectFileInput) {
         openProjectFileInput.value = '';
         openProjectFileInput.click();
@@ -162,10 +163,11 @@
 
   async function handleImportMedia() {
     try {
+      const hasNativeDialog = typeof window !== 'undefined' && Boolean(window.__TAURI__?.dialog?.open);
       let chosenPath: string | null = null;
-      if (typeof window !== 'undefined' && window.__TAURI__?.dialog?.open) {
+      if (hasNativeDialog) {
         try {
-          chosenPath = await window.__TAURI__.dialog.open({
+          chosenPath = await window.__TAURI__!.dialog.open({
             title: 'Import Video, Audio, or Image Media',
             filter: '*.mp4;*.webm;*.mov;*.mkv;*.avi;*.wav;*.mp3;*.flac;*.ogg;*.png;*.jpg;*.jpeg;*.bmp;*.webp',
             filters: [
@@ -180,16 +182,16 @@
             ],
           });
         } catch (e) {
-          console.warn('Native open dialog unavailable, using file picker fallback:', e);
+          console.warn('Native open dialog error:', e);
         }
-      }
-      if (chosenPath) {
-        project = await tauriInvoke<TimelineProject>('import_media_file_cmd', {
-          filePath: chosenPath,
-          autoAddToTimeline: true,
-        });
-        await refreshProject();
-        showToast(`Imported media: ${chosenPath.split(/[\\/]/).pop()}`);
+        if (chosenPath) {
+          project = await tauriInvoke<TimelineProject>('import_media_file_cmd', {
+            filePath: chosenPath,
+            autoAddToTimeline: true,
+          });
+          await refreshProject();
+          showToast(`Imported media: ${chosenPath.split(/[\\/]/).pop()}`);
+        }
       } else if (importMediaFileInput) {
         importMediaFileInput.value = '';
         importMediaFileInput.click();
@@ -279,6 +281,36 @@
   function handleSelectClip(e: CustomEvent<Clip>) {
     selectedClipId = e.detail.id;
   }
+
+  $: projectFps = (() => {
+    if (!project?.settings?.frame_rate) return 60.0;
+    const fr = project.settings.frame_rate;
+    if (fr === 'Fps23_976') return 23.976;
+    if (fr === 'Fps24') return 24.0;
+    if (fr === 'Fps25') return 25.0;
+    if (fr === 'Fps29_97') return 29.97;
+    if (fr === 'Fps30') return 30.0;
+    if (fr === 'Fps50') return 50.0;
+    if (fr === 'Fps59_94') return 59.94;
+    if (fr === 'Fps60') return 60.0;
+    if (fr === 'Fps120') return 120.0;
+    return 60.0;
+  })();
+
+  async function handleGradeUpdated(e: CustomEvent<{ clipId: string; grading: any }>) {
+    if (project && e.detail?.clipId && e.detail?.grading) {
+      for (const track of project.tracks) {
+        for (const clip of track.clips) {
+          if (clip.id === e.detail.clipId) {
+            clip.color_grading = e.detail.grading;
+          }
+        }
+      }
+    }
+    if (monitorRef && monitorRef.updateFrame) {
+      await monitorRef.updateFrame();
+    }
+  }
 </script>
 
 <div class="editor-shell">
@@ -296,6 +328,7 @@
     on:openAiTools={() => { activeAiModalTab = 'silence'; showAiModal = true; }}
     on:openExport={() => { activeAiModalTab = 'export'; showAiModal = true; }}
     on:switchPanel={(e) => (activePanel = e.detail)}
+    on:refreshProject={refreshProject}
   />
 
   {#if statusMessage}
@@ -311,7 +344,7 @@
           {project}
           {playheadMs}
           {durationMs}
-          fps={60.0}
+          fps={projectFps}
           on:timeupdate={(e) => (playheadMs = e.detail)}
         />
       </div>
@@ -323,15 +356,15 @@
             {selectedClipId}
             {playheadMs}
             on:importMedia={handleImportMedia}
-            on:importMediaDialog={handleImportMedia}
             on:refreshProject={refreshProject}
             on:toast={(e) => showToast(e.detail)}
           />
         {:else if activePanel === 'color'}
           <ColorGradingPanel
+            {project}
             {playheadMs}
             {selectedClipId}
-            on:gradeUpdated={refreshProject}
+            on:gradeUpdated={handleGradeUpdated}
             on:toast={(e) => showToast(e.detail)}
           />
         {:else if activePanel === 'audio'}

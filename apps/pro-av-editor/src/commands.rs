@@ -6,8 +6,8 @@
 use crate::audio_engine::LoudnessMeterData;
 use crate::color::VideoScopeData;
 use crate::models::{
-    BlendMode, Clip, ColorGradingSettings, MasterExportSummary, TimelineProject, TrackType,
-    Transform2D,
+    BlendMode, Clip, ColorGradingSettings, FrameRate, MasterExportSummary, TimelineProject,
+    TrackType, Transform2D,
 };
 use crate::service::EditorService;
 use crate::templates::{ExportPreset, ProjectTemplate};
@@ -67,6 +67,18 @@ pub fn load_project_cmd(path: String) -> Result<TimelineProject, String> {
     let svc = service.lock().map_err(|e| e.to_string())?;
     svc.load_project(path).map_err(|e| e.to_string())?;
     svc.get_project().map_err(|e| e.to_string())
+}
+
+/// Update project resolution and frame rate on an active timeline
+pub fn update_project_settings_cmd(
+    width: u32,
+    height: u32,
+    frame_rate: FrameRate,
+) -> Result<TimelineProject, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.update_project_settings(width, height, frame_rate)
+        .map_err(|e| e.to_string())
 }
 
 /// Import a local media file into the project's media pool and optionally append it onto the timeline
@@ -504,6 +516,28 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
                 .ok_or_else(|| "Missing path".to_string())?
                 .to_string();
             let res = load_project_cmd(path)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "update_project_settings_cmd" => {
+            let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(1920) as u32;
+            let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(1080) as u32;
+            let fps_val = args
+                .get("frameRate")
+                .or_else(|| args.get("frame_rate"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("Fps60");
+            let frame_rate = match fps_val {
+                "Fps23_976" => FrameRate::Fps23_976,
+                "Fps24" => FrameRate::Fps24,
+                "Fps25" => FrameRate::Fps25,
+                "Fps29_97" => FrameRate::Fps29_97,
+                "Fps30" => FrameRate::Fps30,
+                "Fps50" => FrameRate::Fps50,
+                "Fps59_94" => FrameRate::Fps59_94,
+                "Fps120" => FrameRate::Fps120,
+                _ => FrameRate::Fps60,
+            };
+            let res = update_project_settings_cmd(width, height, frame_rate)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "import_media_file_cmd" => {
@@ -977,5 +1011,11 @@ mod tests {
         assert_eq!(custom_proj.settings.width, 3840);
         assert_eq!(custom_proj.settings.height, 1608);
         assert!(!custom_proj.tracks.is_empty());
+
+        // Test update project settings command
+        let updated_proj = update_project_settings_cmd(1080, 1920, FrameRate::Fps60).unwrap();
+        assert_eq!(updated_proj.settings.width, 1080);
+        assert_eq!(updated_proj.settings.height, 1920);
+        assert_eq!(updated_proj.settings.frame_rate, FrameRate::Fps60);
     }
 }

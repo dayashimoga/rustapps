@@ -253,7 +253,7 @@ impl OfflineTranslationEngine {
             }
 
             let (translated_line, tok_count, hit_count) =
-                self.translate_sentence(line, table, source, target);
+                self.translate_multi_sentence_line(line, table, source, target);
             total_tokens += tok_count;
             translated_tokens += hit_count;
             translated_lines.push(translated_line);
@@ -273,6 +273,60 @@ impl OfflineTranslationEngine {
         };
 
         (result, confidence)
+    }
+
+    /// Split a line into sentence segments based on terminal punctuation (. ! ? ;), translate each, and recombine
+    fn translate_multi_sentence_line(
+        &self,
+        line: &str,
+        table: Option<&HashMap<String, String>>,
+        source: LanguageCode,
+        target: LanguageCode,
+    ) -> (String, usize, usize) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return (String::new(), 0, 0);
+        }
+
+        // Sentence splitter preserving delimiters
+        let mut segments = Vec::new();
+        let mut cur = String::new();
+        let chars: Vec<char> = trimmed.chars().collect();
+        let mut idx = 0;
+
+        while idx < chars.len() {
+            let c = chars[idx];
+            cur.push(c);
+            if matches!(c, '.' | '!' | '?' | ';')
+                && idx + 1 < chars.len()
+                && chars[idx + 1].is_whitespace()
+            {
+                segments.push(cur.clone());
+                cur.clear();
+                idx += 1; // skip following whitespace
+            }
+            idx += 1;
+        }
+        if !cur.trim().is_empty() {
+            segments.push(cur);
+        }
+
+        if segments.len() <= 1 {
+            return self.translate_sentence(trimmed, table, source, target);
+        }
+
+        let mut out_parts = Vec::new();
+        let mut total_toks = 0;
+        let mut total_hits = 0;
+
+        for seg in segments {
+            let (translated_seg, toks, hits) = self.translate_sentence(&seg, table, source, target);
+            total_toks += toks;
+            total_hits += hits;
+            out_parts.push(translated_seg);
+        }
+
+        (out_parts.join(" "), total_toks, total_hits)
     }
 
     /// Translate a single sentence using multi-word greedy matching + subword tokenization
@@ -350,9 +404,24 @@ impl OfflineTranslationEngine {
             let punct_suffix: String = punct_suffix.chars().rev().collect();
 
             if let Some(tbl) = table {
-                if let Some(target_word) =
-                    tbl.get(&clean_word).or_else(|| tbl.get(&unaccented_word))
-                {
+                let direct_or_stemmed = tbl
+                    .get(&clean_word)
+                    .or_else(|| tbl.get(&unaccented_word))
+                    .or_else(|| {
+                        if clean_word.ends_with('s') && clean_word.len() > 3 {
+                            tbl.get(&clean_word[..clean_word.len() - 1])
+                        } else if (clean_word.ends_with("es") || clean_word.ends_with("ed"))
+                            && clean_word.len() > 4
+                        {
+                            tbl.get(&clean_word[..clean_word.len() - 2])
+                        } else if clean_word.ends_with("ing") && clean_word.len() > 5 {
+                            tbl.get(&clean_word[..clean_word.len() - 3])
+                        } else {
+                            None
+                        }
+                    });
+
+                if let Some(target_word) = direct_or_stemmed {
                     let mut res = target_word.clone();
                     if is_capitalized(raw_word) {
                         res = capitalize_first_letter(&res);
@@ -574,6 +643,13 @@ impl OfflineTranslationEngine {
             ("buy", "comprar"),
             ("pay", "pagar"),
             ("offline translation", "traducción sin conexión"),
+            ("adventure", "aventura"),
+            ("adventures", "aventuras"),
+            ("exciting", "emocionante"),
+            ("exciting adventure", "emocionante aventura"),
+            ("friend", "amigo"),
+            ("friends", "amigos"),
+            ("going", "yendo"),
             ("file", "archivo"),
             ("settings", "configuración"),
             ("help", "ayuda"),
@@ -676,6 +752,11 @@ impl OfflineTranslationEngine {
             ("very", "très"),
             ("much", "beaucoup"),
             ("welcome", "bienvenue"),
+            ("adventure", "aventure"),
+            ("adventures", "aventures"),
+            ("exciting", "passionnant"),
+            ("friends", "amis"),
+            ("going", "allant"),
             ("offline translation", "traduction hors ligne"),
             ("system", "système"),
             ("ready", "prêt"),
@@ -740,6 +821,9 @@ impl OfflineTranslationEngine {
             ("good", "gut"),
             ("very", "sehr"),
             ("welcome", "willkommen"),
+            ("adventure", "Abenteuer"),
+            ("adventures", "Abenteuer"),
+            ("friends", "Freunde"),
             ("offline translation", "offline-übersetzung"),
             ("system", "system"),
             ("ready", "bereit"),
@@ -785,6 +869,8 @@ impl OfflineTranslationEngine {
             ("food", "cibo"),
             ("coffee", "caffè"),
             ("friend", "amico"),
+            ("adventure", "avventura"),
+            ("friends", "amici"),
             ("welcome", "benvenuto"),
             ("help", "aiuto"),
         ];
@@ -825,6 +911,8 @@ impl OfflineTranslationEngine {
             ("food", "comida"),
             ("coffee", "café"),
             ("friend", "amigo"),
+            ("adventure", "aventura"),
+            ("friends", "amigos"),
             ("welcome", "bem-vindo"),
             ("help", "ajuda"),
         ];
@@ -864,6 +952,7 @@ impl OfflineTranslationEngine {
                 ("no", "nee"),
                 ("how are you", "hoe gaat het?"),
                 ("welcome", "welkom"),
+                ("adventure", "avontuur"),
                 ("water", "water"),
                 ("help", "hulp"),
             ],
@@ -887,6 +976,7 @@ impl OfflineTranslationEngine {
                 ("no", "hayır"),
                 ("how are you", "nasılsınız?"),
                 ("welcome", "hoş geldiniz"),
+                ("adventure", "macera"),
                 ("water", "su"),
                 ("help", "yardım"),
             ],
@@ -909,6 +999,7 @@ impl OfflineTranslationEngine {
                 ("yes", "tak"),
                 ("no", "nie"),
                 ("welcome", "witamy"),
+                ("adventure", "przygoda"),
                 ("water", "woda"),
                 ("help", "pomoc"),
             ],
@@ -929,6 +1020,7 @@ impl OfflineTranslationEngine {
                 ("yes", "vâng"),
                 ("no", "không"),
                 ("welcome", "chào mừng"),
+                ("adventure", "phiêu lưu"),
                 ("water", "nước"),
                 ("help", "giúp đỡ"),
             ],
@@ -951,6 +1043,7 @@ impl OfflineTranslationEngine {
                 ("yes", "ya"),
                 ("no", "tidak"),
                 ("welcome", "selamat datang"),
+                ("adventure", "petualangan"),
                 ("water", "air"),
                 ("help", "bantuan"),
             ],
@@ -971,6 +1064,7 @@ impl OfflineTranslationEngine {
                 ("please", "snälla"),
                 ("yes", "ja"),
                 ("no", "nej"),
+                ("adventure", "äventyr"),
                 ("welcome", "välkommen"),
             ],
             &[],
@@ -988,6 +1082,7 @@ impl OfflineTranslationEngine {
                 ("please", "부탁합니다"),
                 ("yes", "네"),
                 ("no", "아니요"),
+                ("adventure", "모험"),
                 ("welcome", "환영합니다"),
             ],
             &[("고맙습니다", "thank you")],
@@ -999,17 +1094,298 @@ impl OfflineTranslationEngine {
             LanguageCode::Hi,
             &[
                 ("hello", "नमस्ते"),
+                ("hi", "नमस्ते"),
                 ("world", "दुनिया"),
                 ("hello world", "नमस्ते दुनिया"),
+                ("good morning", "शुभ प्रभात"),
+                ("good evening", "शुभ संध्या"),
+                ("good night", "शुभ रात्रि"),
                 ("thank you", "धन्यवाद"),
+                ("thank you very much", "बहुत बहुत धन्यवाद"),
+                ("thanks", "धन्यवाद"),
                 ("please", "कृपया"),
                 ("yes", "हाँ"),
                 ("no", "नहीं"),
                 ("welcome", "स्वागत है"),
                 ("water", "पानी"),
+                ("food", "खाना"),
                 ("help", "मदद"),
+                ("adventure", "साहसिक यात्रा"),
+                ("exciting adventure", "रोमांचक साहसिक यात्रा"),
+                ("friend", "दोस्त"),
+                ("friends", "दोस्तों"),
+                ("family", "परिवार"),
+                ("home", "घर"),
+                ("work", "काम"),
+                ("today", "आज"),
+                ("tomorrow", "कल"),
+                ("yesterday", "कल"),
+                ("life", "जिंदगी"),
+                ("journey", "यात्रा"),
+                ("book", "किताब"),
+                ("good", "अच्छा"),
+                ("bad", "बुरा"),
+                ("how are you", "आप कैसे हैं?"),
+                ("how are you?", "आप कैसे हैं?"),
+                ("i am fine", "मैं ठीक हूँ"),
+                ("what is your name", "आपका नाम क्या है?"),
+                ("what is your name?", "आपका नाम क्या है?"),
+                ("my name is", "मेरा नाम है"),
+                ("where is", "कहाँ है"),
+                ("i", "मैं"),
+                ("you", "आप"),
+                ("he", "वह"),
+                ("she", "वह"),
+                ("we", "हम"),
+                ("they", "वे"),
+                ("my", "मेरा"),
+                ("your", "आपका"),
+                ("am", "हूँ"),
+                ("is", "है"),
+                ("are", "हैं"),
+                ("was", "था"),
+                ("were", "थे"),
+                ("go", "जाओ"),
+                ("going", "जा रहा"),
+                ("come", "आओ"),
+                ("with", "के साथ"),
+                ("and", "और"),
+                ("or", "या"),
+                ("but", "लेकिन"),
+                ("very", "बहुत"),
             ],
-            &[],
+            &[
+                ("नमस्ते", "hello"),
+                ("धन्यवाद", "thank you"),
+                ("साहसिक यात्रा", "adventure"),
+                ("रोमांच", "adventure"),
+            ],
+        );
+
+        // -------------------------------------------------------------------
+        // EN <-> TA (English <-> Tamil)
+        // -------------------------------------------------------------------
+        register_bidirectional_table(
+            tables,
+            LanguageCode::En,
+            LanguageCode::Ta,
+            &[
+                ("hello", "வணக்கம்"),
+                ("hi", "வணக்கம்"),
+                ("world", "உலகம்"),
+                ("hello world", "வணக்கம் உலகம்"),
+                ("good morning", "காலை வணக்கம்"),
+                ("good evening", "மாலை வணக்கம்"),
+                ("good night", "இரவு வணக்கம்"),
+                ("thank you", "நன்றி"),
+                ("thank you very much", "மிக்க நன்றி"),
+                ("thanks", "நன்றி"),
+                ("welcome", "நல்வரவு"),
+                ("you are welcome", "வரவேற்கிறேன்"),
+                ("please", "தயவுசெய்து"),
+                ("yes", "ஆம்"),
+                ("no", "இல்லை"),
+                ("how are you", "எப்படி இருக்கிறீர்கள்?"),
+                ("how are you?", "எப்படி இருக்கிறீர்கள்?"),
+                ("i am fine", "நான் நலமாக இருக்கிறேன்"),
+                ("what is your name", "உங்கள் பெயர் என்ன?"),
+                ("what is your name?", "உங்கள் பெயர் என்ன?"),
+                ("my name is", "என் பெயர்"),
+                ("adventure", "சாகசம்"),
+                ("exciting adventure", "உற்சாகமான சாகசம்"),
+                ("water", "தண்ணீர்"),
+                ("food", "உணவு"),
+                ("help", "உதவி"),
+                ("friend", "நண்பர்"),
+                ("friends", "நண்பர்கள்"),
+                ("family", "குடும்பம்"),
+                ("home", "வீடு"),
+                ("work", "வேலை"),
+                ("today", "இன்று"),
+                ("tomorrow", "நாளை"),
+                ("yesterday", "நேற்று"),
+                ("life", "வாழ்க்கை"),
+                ("journey", "பயணம்"),
+                ("book", "புத்தகம்"),
+                ("love", "அன்பு"),
+                ("peace", "அமைதி"),
+                ("time", "நேரம்"),
+                ("good", "நல்லது"),
+                ("bad", "கெட்டது"),
+                ("beautiful", "அழகான"),
+                ("exciting", "உற்சாகமான"),
+                ("happy", "மகிழ்ச்சி"),
+                ("great", "சிறந்த"),
+                ("small", "சிறிய"),
+                ("large", "பெரிய"),
+                ("new", "புதிய"),
+                ("old", "பழைய"),
+                ("where is", "எங்கே இருக்கிறது"),
+                ("airport", "விமான நிலையம்"),
+                ("station", "நிலையம்"),
+                ("train", "ரயில்"),
+                ("car", "கார்"),
+                ("bus", "பேருந்து"),
+                ("hotel", "விடுதி"),
+                ("hospital", "மருத்துவமனை"),
+                ("doctor", "மருத்துவர்"),
+                ("money", "பணம்"),
+                ("price", "விலை"),
+                ("how much", "எவ்வளவு"),
+                ("i", "நான்"),
+                ("you", "நீங்கள்"),
+                ("he", "அவர்"),
+                ("she", "அவள்"),
+                ("we", "நாங்கள்"),
+                ("they", "அவர்கள்"),
+                ("my", "என்"),
+                ("your", "உங்கள்"),
+                ("our", "எங்கள்"),
+                ("their", "அவர்களின்"),
+                ("am", "இருக்கிறேன்"),
+                ("is", "இருக்கிறது"),
+                ("are", "இருக்கிறார்கள்"),
+                ("was", "இருந்தது"),
+                ("were", "இருந்தனர்"),
+                ("going", "செல்கிறேன்"),
+                ("go", "செல்"),
+                ("come", "வா"),
+                ("with", "உடன்"),
+                ("and", "மற்றும்"),
+                ("or", "அல்லது"),
+                ("but", "ஆனால்"),
+                ("in", "இல்"),
+                ("on", "மீது"),
+                ("at", "இல்"),
+                ("to", "க்கு"),
+                ("for", "க்காக"),
+                ("from", "இருந்து"),
+                ("very", "மிகவும்"),
+                ("goodbye", "பிரியாவிடை"),
+                ("see you", "மீண்டும் சந்திப்போம்"),
+            ],
+            &[
+                ("வணக்கம்", "hello"),
+                ("நன்றி", "thank you"),
+                ("சாகசம்", "adventure"),
+                ("துணிவுச்செயல்", "adventure"),
+            ],
+        );
+
+        // -------------------------------------------------------------------
+        // EN <-> TE (English <-> Telugu)
+        // -------------------------------------------------------------------
+        register_bidirectional_table(
+            tables,
+            LanguageCode::En,
+            LanguageCode::Te,
+            &[
+                ("hello", "నమస్కారం"),
+                ("hi", "నమస్కారం"),
+                ("world", "ప్రపంచం"),
+                ("hello world", "నమస్కారం ప్రపంచం"),
+                ("good morning", "శుభోదయం"),
+                ("good evening", "శుభ సాయంత్రం"),
+                ("good night", "శుభ రాత్రి"),
+                ("thank you", "ధన్యవాదాలు"),
+                ("thank you very much", "చాలా ధన్యవాదాలు"),
+                ("thanks", "ధన్యవాదాలు"),
+                ("welcome", "స్వాగతం"),
+                ("please", "దయచేసి"),
+                ("yes", "అవును"),
+                ("no", "కాదు"),
+                ("adventure", "సాహసం"),
+                ("exciting adventure", "ఉత్తేజకరమైన సాహసం"),
+                ("water", "నీరు"),
+                ("food", "ఆహారం"),
+                ("help", "సహాయం"),
+                ("friend", "స్నేహితుడు"),
+                ("friends", "స్నేహితులు"),
+                ("family", "కుటుంబం"),
+                ("home", "ఇల్లు"),
+                ("work", "పని"),
+                ("today", "ఈరోజు"),
+                ("tomorrow", "రేపు"),
+                ("yesterday", "నిన్న"),
+                ("life", "జీవితం"),
+                ("journey", "ప్రయాణం"),
+                ("book", "పుస్తకం"),
+                ("good", "మంచి"),
+                ("bad", "చెడు"),
+                ("how are you", "మీరు ఎలా ఉన్నారు?"),
+                ("what is your name", "మీ పేరు ఏమిటి?"),
+                ("my name is", "నా పేరు"),
+                ("where is", "ఎక్కడ ఉంది"),
+                ("i", "నేను"),
+                ("you", "మీరు"),
+                ("we", "మేము"),
+                ("my", "నా"),
+                ("your", "మీ"),
+                ("with", "తో"),
+                ("and", "మరియు"),
+                ("very", "చాలా"),
+            ],
+            &[
+                ("నమస్కారం", "hello"),
+                ("ధన్యవాదాలు", "thank you"),
+                ("సాహసం", "adventure"),
+            ],
+        );
+
+        // -------------------------------------------------------------------
+        // EN <-> BN (English <-> Bengali)
+        // -------------------------------------------------------------------
+        register_bidirectional_table(
+            tables,
+            LanguageCode::En,
+            LanguageCode::Bn,
+            &[
+                ("hello", "হ্যালো"),
+                ("hi", "নমস্কার"),
+                ("world", "বিশ্ব"),
+                ("hello world", "হ্যালো বিশ্ব"),
+                ("good morning", "সুপ্রভাত"),
+                ("good evening", "শুভ সন্ধ্যা"),
+                ("good night", "শুভ রাত্রি"),
+                ("thank you", "ধন্যবাদ"),
+                ("thank you very much", "অনেক ধন্যবাদ"),
+                ("thanks", "ধন্যবাদ"),
+                ("welcome", "স্বাগতম"),
+                ("please", "দয়া করে"),
+                ("yes", "হ্যাঁ"),
+                ("no", "না"),
+                ("adventure", "অভিযান"),
+                ("exciting adventure", "উত্তেজনাপূর্ণ অভিযান"),
+                ("water", "জল"),
+                ("food", "খাবার"),
+                ("help", "সাহায্য"),
+                ("friend", "বন্ধু"),
+                ("friends", "বন্ধুরা"),
+                ("family", "পরিবার"),
+                ("home", "বাড়ি"),
+                ("work", "কাজ"),
+                ("today", "আজ"),
+                ("tomorrow", "আগামীকাল"),
+                ("yesterday", "গতকাল"),
+                ("life", "জীবন"),
+                ("journey", "যাত্রা"),
+                ("book", "বই"),
+                ("good", "ভালো"),
+                ("bad", "খারাপ"),
+                ("how are you", "আপনি কেমন আছেন?"),
+                ("what is your name", "আপনার নাম কি?"),
+                ("my name is", "আমার নাম"),
+                ("where is", "কোথায়"),
+                ("i", "আমি"),
+                ("you", "আপনি"),
+                ("we", "আমরা"),
+                ("my", "আমার"),
+                ("your", "আপনার"),
+                ("with", "সাথে"),
+                ("and", "এবং"),
+                ("very", "খুব"),
+            ],
+            &[("ধন্যবাদ", "thank you"), ("অভিযান", "adventure")],
         );
 
         // -------------------------------------------------------------------
@@ -1031,6 +1407,7 @@ impl OfflineTranslationEngine {
                 ("yes", "はい"),
                 ("no", "いいえ"),
                 ("welcome", "ようこそ"),
+                ("adventure", "冒険"),
                 ("water", "水"),
                 ("help", "助けて"),
                 ("offline translation", "オフライン翻訳"),
@@ -1057,6 +1434,7 @@ impl OfflineTranslationEngine {
                 ("yes", "是的"),
                 ("no", "不"),
                 ("welcome", "欢迎"),
+                ("adventure", "冒险"),
                 ("water", "水"),
                 ("help", "帮助"),
                 ("offline translation", "离线翻译"),
@@ -1084,6 +1462,7 @@ impl OfflineTranslationEngine {
                 ("no", "нет"),
                 ("how are you", "как дела?"),
                 ("welcome", "добро пожаловать"),
+                ("adventure", "приключение"),
                 ("water", "вода"),
                 ("help", "помощь"),
             ],
@@ -1109,6 +1488,7 @@ impl OfflineTranslationEngine {
                 ("yes", "نعم"),
                 ("no", "لا"),
                 ("welcome", "أهلا بك"),
+                ("adventure", "مغامرة"),
                 ("water", "ماء"),
                 ("help", "مساعدة"),
             ],
@@ -1426,5 +1806,49 @@ mod tests {
             "Translation latency {:.2}ms exceeded 150ms SLA",
             per_op_ms
         );
+    }
+
+    #[test]
+    fn test_tamil_adventure_and_multi_sentence_translation() {
+        let engine = OfflineTranslationEngine::new();
+
+        // Exact user screenshot scenario: "adventure" -> Tamil
+        let res = engine
+            .translate(&TranslationRequest {
+                source_lang: Some(LanguageCode::En),
+                target_lang: LanguageCode::Ta,
+                text: "adventure".to_string(),
+                preserve_formatting: true,
+                domain_glossary: None,
+            })
+            .unwrap();
+        assert_eq!(res.source_lang, LanguageCode::En);
+        assert_eq!(res.target_lang, LanguageCode::Ta);
+        assert_eq!(res.translated_text, "சாகசம்");
+
+        // Reverse: Tamil "வணக்கம்" -> English "hello"
+        let res_rev = engine
+            .translate(&TranslationRequest {
+                source_lang: Some(LanguageCode::Ta),
+                target_lang: LanguageCode::En,
+                text: "வணக்கம்".to_string(),
+                preserve_formatting: true,
+                domain_glossary: None,
+            })
+            .unwrap();
+        assert_eq!(res_rev.translated_text.to_lowercase(), "hello");
+
+        // Multi-sentence longer conversation translation
+        let res_multi = engine
+            .translate(&TranslationRequest {
+                source_lang: Some(LanguageCode::En),
+                target_lang: LanguageCode::Ta,
+                text: "Hello! Thank you very much.".to_string(),
+                preserve_formatting: true,
+                domain_glossary: None,
+            })
+            .unwrap();
+        assert!(res_multi.translated_text.contains("வணக்கம்"));
+        assert!(res_multi.translated_text.contains("நன்றி"));
     }
 }

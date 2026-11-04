@@ -684,6 +684,9 @@ impl LanguageDetector {
         let mut hanzi_count = 0usize;
         let mut arabic_count = 0usize;
         let mut devanagari_count = 0usize;
+        let mut tamil_count = 0usize;
+        let mut telugu_count = 0usize;
+        let mut bengali_count = 0usize;
         let mut cyrillic_count = 0usize;
         let mut greek_count = 0usize;
         let mut hebrew_count = 0usize;
@@ -727,6 +730,18 @@ impl LanguageDetector {
                 // Devanagari (Hindi)
                 '\u{0900}'..='\u{097F}' => {
                     devanagari_count += 1;
+                }
+                // Tamil
+                '\u{0B80}'..='\u{0BFF}' => {
+                    tamil_count += 1;
+                }
+                // Telugu
+                '\u{0C00}'..='\u{0C7F}' => {
+                    telugu_count += 1;
+                }
+                // Bengali
+                '\u{0980}'..='\u{09FF}' => {
+                    bengali_count += 1;
                 }
                 // Cyrillic
                 '\u{0400}'..='\u{04FF}' => {
@@ -815,6 +830,33 @@ impl LanguageDetector {
                 language: LanguageCode::Hi,
                 confidence: 0.99,
                 script: ScriptType::Devanagari,
+            });
+        }
+
+        // Tamil
+        if tamil_count > 0 {
+            return Some(LidResult {
+                language: LanguageCode::Ta,
+                confidence: 0.99,
+                script: ScriptType::TamilScript,
+            });
+        }
+
+        // Telugu
+        if telugu_count > 0 {
+            return Some(LidResult {
+                language: LanguageCode::Te,
+                confidence: 0.99,
+                script: ScriptType::TeluguScript,
+            });
+        }
+
+        // Bengali
+        if bengali_count > 0 {
+            return Some(LidResult {
+                language: LanguageCode::Bn,
+                confidence: 0.99,
+                script: ScriptType::BengaliScript,
             });
         }
 

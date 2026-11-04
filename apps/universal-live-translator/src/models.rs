@@ -27,6 +27,9 @@ pub enum ScriptType {
     Hangul,
     ArabicScript,
     Devanagari,
+    TamilScript,
+    TeluguScript,
+    BengaliScript,
     GreekScript,
     HebrewScript,
     ThaiScript,
@@ -68,6 +71,9 @@ pub enum LanguageCode {
     Bg, // Bulgarian
     Fa, // Persian
     Ur, // Urdu
+    Ta, // Tamil
+    Te, // Telugu
+    Bn, // Bengali
 }
 
 impl LanguageCode {
@@ -106,6 +112,9 @@ impl LanguageCode {
             Self::Bg => "bg",
             Self::Fa => "fa",
             Self::Ur => "ur",
+            Self::Ta => "ta",
+            Self::Te => "te",
+            Self::Bn => "bn",
         }
     }
 
@@ -144,6 +153,9 @@ impl LanguageCode {
             Self::Bg => "Bulgarian",
             Self::Fa => "Persian",
             Self::Ur => "Urdu",
+            Self::Ta => "Tamil",
+            Self::Te => "Telugu",
+            Self::Bn => "Bengali",
         }
     }
 
@@ -182,6 +194,9 @@ impl LanguageCode {
             Self::Bg => "Български",
             Self::Fa => "فارسی",
             Self::Ur => "اردو",
+            Self::Ta => "தமிழ்",
+            Self::Te => "తెలుగు",
+            Self::Bn => "বাংলা",
         }
     }
 
@@ -214,6 +229,9 @@ impl LanguageCode {
             Self::Ko => ScriptType::Hangul,
             Self::Ar | Self::Fa | Self::Ur => ScriptType::ArabicScript,
             Self::Hi => ScriptType::Devanagari,
+            Self::Ta => ScriptType::TamilScript,
+            Self::Te => ScriptType::TeluguScript,
+            Self::Bn => ScriptType::BengaliScript,
             Self::El => ScriptType::GreekScript,
             Self::He => ScriptType::HebrewScript,
             Self::Th => ScriptType::ThaiScript,
@@ -264,11 +282,14 @@ impl LanguageCode {
             "bg" | "bul" | "bulgarian" | "български" => Some(Self::Bg),
             "fa" | "fas" | "per" | "persian" | "فارسی" => Some(Self::Fa),
             "ur" | "urd" | "urdu" | "اردو" => Some(Self::Ur),
+            "ta" | "tam" | "tamil" | "தமிழ்" => Some(Self::Ta),
+            "te" | "tel" | "telugu" | "తెలుగు" => Some(Self::Te),
+            "bn" | "ben" | "bengali" | "বাংলা" => Some(Self::Bn),
             _ => None,
         }
     }
 
-    /// List of all 32 supported language codes
+    /// List of all supported language codes
     pub fn all() -> &'static [LanguageCode] {
         &[
             Self::En,
@@ -303,6 +324,9 @@ impl LanguageCode {
             Self::Bg,
             Self::Fa,
             Self::Ur,
+            Self::Ta,
+            Self::Te,
+            Self::Bn,
         ]
     }
 }
@@ -571,7 +595,7 @@ mod tests {
     #[test]
     fn test_all_languages_have_valid_metadata() {
         let all = LanguageCode::all();
-        assert_eq!(all.len(), 32);
+        assert_eq!(all.len(), 35);
 
         for lang in all {
             let code_str = lang.as_str();
