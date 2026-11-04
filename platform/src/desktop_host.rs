@@ -187,65 +187,88 @@ pub trait DesktopIpcHandler: Send + Sync + 'static {
     fn self_test_checks(&self) -> Vec<SelfTestCheck>;
 }
 
-const TAURI_BRIDGE_SCRIPT: &str = r#"<script>
-(function() {
-  async function ipcInvoke(cmd, args) {
-    const response = await fetch('/__ipc/' + encodeURIComponent(cmd), {
+fn generate_bridge_script(session_token: &str) -> String {
+    format!(
+        r#"<script>
+(function() {{
+  const __AUTH_TOKEN__ = "{}";
+  window.__ANTIGRAVITY_TOKEN__ = __AUTH_TOKEN__;
+
+  async function ipcInvoke(cmd, args) {{
+    const response = await fetch('/__ipc/' + encodeURIComponent(cmd), {{
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(args || {})
-    });
+      headers: {{
+        'Content-Type': 'application/json',
+        'X-Antigravity-Token': __AUTH_TOKEN__
+      }},
+      body: JSON.stringify(args || {{}})
+    }});
     const payload = await response.json();
-    if (!response.ok || (payload && payload.__ipc_error)) {
+    if (!response.ok || (payload && payload.__ipc_error)) {{
       throw new Error((payload && payload.__ipc_error) || ('IPC HTTP ' + response.status));
-    }
+    }}
     return payload ? payload.__ipc_data : null;
-  }
+  }}
 
-  async function dialogOpen(options) {
-    const response = await fetch('/__dialog/open', {
+  async function dialogOpen(options) {{
+    const response = await fetch('/__dialog/open', {{
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(options || {})
-    });
+      headers: {{
+        'Content-Type': 'application/json',
+        'X-Antigravity-Token': __AUTH_TOKEN__
+      }},
+      body: JSON.stringify(options || {{}})
+    }});
     const payload = await response.json();
     return payload ? payload.path : null;
-  }
+  }}
 
-  async function dialogSave(options) {
-    const response = await fetch('/__dialog/save', {
+  async function dialogSave(options) {{
+    const response = await fetch('/__dialog/save', {{
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(options || {})
-    });
+      headers: {{
+        'Content-Type': 'application/json',
+        'X-Antigravity-Token': __AUTH_TOKEN__
+      }},
+      body: JSON.stringify(options || {{}})
+    }});
     const payload = await response.json();
     return payload ? payload.path : null;
-  }
+  }}
 
-  async function getDrivesAndPlaces() {
-    const response = await fetch('/__fs/drives');
+  async function getDrivesAndPlaces() {{
+    const response = await fetch('/__fs/drives', {{
+      headers: {{ 'X-Antigravity-Token': __AUTH_TOKEN__ }}
+    }});
     if (!response.ok) return [];
     const payload = await response.json();
     return payload && payload.entries ? payload.entries : [];
-  }
+  }}
 
-  function fileUrl(localPath) {
+  function fileUrl(localPath) {{
     if (!localPath) return '';
-    return '/__file?path=' + encodeURIComponent(localPath);
-  }
+    return '/__file?path=' + encodeURIComponent(localPath) + '&token=' + encodeURIComponent(__AUTH_TOKEN__);
+  }}
 
-  window.__TAURI__ = window.__TAURI__ || {};
+  window.__TAURI__ = window.__TAURI__ || {{}};
   window.__TAURI__.invoke = ipcInvoke;
-  window.__TAURI__.core = { invoke: ipcInvoke };
-  window.__TAURI__.dialog = { open: dialogOpen, save: dialogSave };
-  window.__TAURI__.fs = { getDrivesAndPlaces: getDrivesAndPlaces, fileUrl: fileUrl };
-  window.__TAURI_INTERNALS__ = { invoke: ipcInvoke };
+  window.__TAURI__.core = {{ invoke: ipcInvoke }};
+  window.__TAURI__.dialog = {{ open: dialogOpen, save: dialogSave }};
+  window.__TAURI__.fs = {{ getDrivesAndPlaces: getDrivesAndPlaces, fileUrl: fileUrl }};
+  window.__TAURI_INTERNALS__ = {{ invoke: ipcInvoke }};
 
-  setInterval(function() {
-    fetch('/__heartbeat', { method: 'POST', keepalive: true }).catch(function() {});
-  }, 2000);
-})();
-</script>"#;
+  setInterval(function() {{
+    fetch('/__heartbeat', {{
+      method: 'POST',
+      headers: {{ 'X-Antigravity-Token': __AUTH_TOKEN__ }},
+      keepalive: true
+    }}).catch(function() {{}});
+  }}, 2000);
+}})();
+</script>"#,
+        session_token
+    )
+}
 
 fn current_epoch_ms() -> u64 {
     SystemTime::now()
@@ -254,15 +277,16 @@ fn current_epoch_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn inject_bridge_into_html(index_html: &str, app_title: &str) -> String {
+fn inject_bridge_into_html(index_html: &str, app_title: &str, session_token: &str) -> String {
+    let bridge_script = generate_bridge_script(session_token);
     let mut html = index_html.to_string();
     if !html.contains("<title>") && html.contains("<head>") {
         html = html.replacen("<head>", &format!("<head><title>{}</title>", app_title), 1);
     }
     if html.contains("</head>") {
-        html.replacen("</head>", &format!("{}\n</head>", TAURI_BRIDGE_SCRIPT), 1)
+        html.replacen("</head>", &format!("{}\n</head>", bridge_script), 1)
     } else {
-        format!("{}\n{}", TAURI_BRIDGE_SCRIPT, html)
+        format!("{}\n{}", bridge_script, html)
     }
 }
 
@@ -289,6 +313,18 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
     let port = local_addr.port();
     let url = format!("http://127.0.0.1:{}", port);
 
+    // Cryptographically secure 256-bit session token for authenticated loopback IPC
+    let session_token: Arc<str> = {
+        use rand::RngCore;
+        let mut bytes = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        bytes
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>()
+            .into()
+    };
+
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let last_heartbeat_ms = Arc::new(AtomicU64::new(current_epoch_ms()));
     let client_connected = Arc::new(AtomicBool::new(false));
@@ -298,8 +334,13 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
     let server_heartbeat = Arc::clone(&last_heartbeat_ms);
     let server_connected = Arc::clone(&client_connected);
     let server_handler = Arc::clone(&handler);
+    let server_token = Arc::clone(&session_token);
 
-    let index_with_bridge = Arc::new(inject_bridge_into_html(bundle.index_html, bundle.app_title));
+    let index_with_bridge = Arc::new(inject_bridge_into_html(
+        bundle.index_html,
+        bundle.app_title,
+        &session_token,
+    ));
 
     let server_thread = std::thread::spawn(move || {
         let _ = listener.set_nonblocking(true);
@@ -314,8 +355,18 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
                     let sd = Arc::clone(&server_shutdown);
                     let h = Arc::clone(&server_handler);
                     let html = Arc::clone(&index_with_bridge);
+                    let tok = Arc::clone(&server_token);
                     std::thread::spawn(move || {
-                        handle_http_connection(stream, &bundle, &html, h.as_ref(), &hb, &conn, &sd);
+                        handle_http_connection(
+                            stream,
+                            &bundle,
+                            &html,
+                            h.as_ref(),
+                            &hb,
+                            &conn,
+                            &sd,
+                            &tok,
+                        );
                     });
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -329,7 +380,7 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
     });
 
     if is_self_test {
-        let report = execute_self_test(port, &bundle, handler.as_ref())?;
+        let report = execute_self_test(port, &bundle, handler.as_ref(), &session_token)?;
         shutdown_flag.store(true, Ordering::SeqCst);
         let _ = server_thread.join();
         return Ok(Some(report));
@@ -337,6 +388,7 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
 
     if is_headless {
         println!("{} listening on {} (headless mode)", bundle.app_title, url);
+        println!("Session Token: {}", session_token);
         while !shutdown_flag.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -397,6 +449,7 @@ fn handle_http_connection(
     last_heartbeat_ms: &AtomicU64,
     client_connected: &AtomicBool,
     shutdown_flag: &AtomicBool,
+    session_token: &str,
 ) {
     let mut reader = BufReader::new(match stream.try_clone() {
         Ok(s) => s,
@@ -418,6 +471,7 @@ fn handle_http_connection(
 
     let mut content_length: usize = 0;
     let mut range_header: Option<String> = None;
+    let mut auth_token_header: Option<String> = None;
     loop {
         let mut header_line = String::new();
         if reader.read_line(&mut header_line).is_err() {
@@ -428,10 +482,18 @@ fn handle_http_connection(
             break;
         }
         if let Some((k, v)) = trimmed.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("content-length") {
-                content_length = v.trim().parse::<usize>().unwrap_or(0);
-            } else if k.trim().eq_ignore_ascii_case("range") {
-                range_header = Some(v.trim().to_string());
+            let key = k.trim();
+            let val = v.trim();
+            if key.eq_ignore_ascii_case("content-length") {
+                content_length = val.parse::<usize>().unwrap_or(0);
+            } else if key.eq_ignore_ascii_case("range") {
+                range_header = Some(val.to_string());
+            } else if key.eq_ignore_ascii_case("x-antigravity-token") {
+                auth_token_header = Some(val.to_string());
+            } else if key.eq_ignore_ascii_case("authorization") {
+                if let Some(bearer) = val.strip_prefix("Bearer ") {
+                    auth_token_header = Some(bearer.trim().to_string());
+                }
             }
         }
     }
@@ -446,6 +508,33 @@ fn handle_http_connection(
 
     if method == "OPTIONS" {
         let _ = write_http_response(&mut stream, 200, "text/plain", b"OK");
+        return;
+    }
+
+    let mut query_token: Option<String> = None;
+    for pair in query_string.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            if k == "token" {
+                query_token = Some(url_decode(v));
+                break;
+            }
+        }
+    }
+
+    let is_authenticated = auth_token_header
+        .as_deref()
+        .map(|t| t == session_token)
+        .or_else(|| query_token.as_deref().map(|t| t == session_token))
+        .unwrap_or(false);
+
+    // Cryptographic Loopback Security Gate: All internal operational routes require authentication
+    if path.starts_with("/__") && !is_authenticated {
+        let _ = write_http_response(
+            &mut stream,
+            403,
+            "application/json",
+            b"{\"__ipc_ok\":false,\"__ipc_error\":\"Forbidden: Invalid or missing X-Antigravity-Token\"}",
+        );
         return;
     }
 
@@ -599,12 +688,14 @@ fn write_http_response(
     let status_text = match status {
         200 => "OK",
         204 => "No Content",
+        206 => "Partial Content",
         400 => "Bad Request",
+        403 => "Forbidden",
         404 => "Not Found",
         _ => "Internal Server Error",
     };
     let header = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type, X-Antigravity-Token, Authorization, Range\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
         status,
         status_text,
         content_type,
@@ -1009,9 +1100,10 @@ fn execute_self_test(
     port: u16,
     bundle: &EmbeddedUiBundle,
     handler: &dyn DesktopIpcHandler,
+    session_token: &str,
 ) -> Result<SelfTestReport, PlatformError> {
     // 1. Verify HTML endpoint over loopback TCP
-    let (status_html, html_body) = loopback_http_request(port, "GET", "/", b"")?;
+    let (status_html, html_body) = loopback_http_request(port, "GET", "/", b"", None)?;
     if status_html != 200 || html_body.len() < 200 {
         return Err(PlatformError::Unsupported(format!(
             "Self-test HTML check failed: status={} len={}",
@@ -1021,7 +1113,7 @@ fn execute_self_test(
     }
 
     // 2. Verify JS & CSS asset bundles over loopback TCP
-    let (status_js, js_body) = loopback_http_request(port, "GET", "/assets/app.js", b"")?;
+    let (status_js, js_body) = loopback_http_request(port, "GET", "/assets/app.js", b"", None)?;
     if status_js != 200 || js_body.len() < 1024 {
         return Err(PlatformError::Unsupported(format!(
             "Self-test JS bundle check failed: status={} len={}",
@@ -1030,7 +1122,7 @@ fn execute_self_test(
         )));
     }
 
-    let (status_css, css_body) = loopback_http_request(port, "GET", "/assets/app.css", b"")?;
+    let (status_css, css_body) = loopback_http_request(port, "GET", "/assets/app.css", b"", None)?;
     if status_css != 200 || css_body.is_empty() {
         return Err(PlatformError::Unsupported(format!(
             "Self-test CSS bundle check failed: status={} len={}",
@@ -1039,7 +1131,40 @@ fn execute_self_test(
         )));
     }
 
-    // 3. Execute live IPC checks over HTTP POST /__ipc/<command>
+    // 3. Negative Security Gate: Verify unauthenticated and bad-token calls to /__* return 403 Forbidden
+    let (status_unauth, _) = loopback_http_request(port, "POST", "/__fs/drives", b"", None)?;
+    if status_unauth != 403 {
+        return Err(PlatformError::Unsupported(format!(
+            "Loopback security gate check failed: unauthenticated /__fs/drives returned HTTP {} instead of expected 403 Forbidden",
+            status_unauth
+        )));
+    }
+
+    let (status_bad_token, _) = loopback_http_request(
+        port,
+        "POST",
+        "/__fs/drives",
+        b"",
+        Some("invalid_token_12345"),
+    )?;
+    if status_bad_token != 403 {
+        return Err(PlatformError::Unsupported(format!(
+            "Loopback security gate check failed: invalid token /__fs/drives returned HTTP {} instead of expected 403 Forbidden",
+            status_bad_token
+        )));
+    }
+
+    // 4. Positive Security Gate: Authenticated drive check
+    let (status_auth_fs, _) =
+        loopback_http_request(port, "POST", "/__fs/drives", b"", Some(session_token))?;
+    if status_auth_fs != 200 {
+        return Err(PlatformError::Unsupported(format!(
+            "Authenticated loopback check failed: valid token /__fs/drives returned HTTP {}",
+            status_auth_fs
+        )));
+    }
+
+    // 5. Execute live IPC checks over HTTP POST /__ipc/<command> with session token
     let checks = handler.self_test_checks();
     let total = checks.len();
     let mut passed = 0usize;
@@ -1047,7 +1172,8 @@ fn execute_self_test(
     for check in checks {
         let path = format!("/__ipc/{}", check.command);
         let body = serde_json::to_vec(&check.payload).unwrap_or_default();
-        let (status, resp_bytes) = loopback_http_request(port, "POST", &path, &body)?;
+        let (status, resp_bytes) =
+            loopback_http_request(port, "POST", &path, &body, Some(session_token))?;
         if status == 200 {
             if let Ok(val) = serde_json::from_slice::<Value>(&resp_bytes) {
                 if val.get("__ipc_ok").and_then(|v| v.as_bool()) == Some(true) {
@@ -1093,16 +1219,23 @@ fn loopback_http_request(
     method: &str,
     path: &str,
     body: &[u8],
+    auth_token: Option<&str>,
 ) -> Result<(u16, Vec<u8>), PlatformError> {
     let mut stream = TcpStream::connect(("127.0.0.1", port))?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
 
+    let auth_header = match auth_token {
+        Some(tok) => format!("X-Antigravity-Token: {}\r\n", tok),
+        None => String::new(),
+    };
+
     let req = format!(
-        "{} {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "{} {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         method,
         path,
         port,
+        auth_header,
         body.len()
     );
     stream.write_all(req.as_bytes())?;
@@ -1304,9 +1437,15 @@ mod tests {
 
     #[test]
     fn test_bridge_injection_includes_dialog_and_fs() {
-        let html = inject_bridge_into_html("<html><head></head><body></body></html>", "TestApp");
+        let html = inject_bridge_into_html(
+            "<html><head></head><body></body></html>",
+            "TestApp",
+            "test_session_token_12345",
+        );
         assert!(html.contains("window.__TAURI__.dialog"));
         assert!(html.contains("window.__TAURI__.fs"));
         assert!(html.contains("<title>TestApp</title>"));
+        assert!(html.contains(r#"const __AUTH_TOKEN__ = "test_session_token_12345";"#));
+        assert!(html.contains("window.__ANTIGRAVITY_TOKEN__ = __AUTH_TOKEN__;"));
     }
 }

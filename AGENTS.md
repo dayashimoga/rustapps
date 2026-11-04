@@ -5,6 +5,35 @@
 
 ---
 
+## 0. Behavioral Execution Protocol (CLAUDE.md Integration)
+
+All AI agents and subagents operating in this repository MUST strictly abide by the four behavioral pillars:
+
+1. **Think Before Coding:**
+   - Never assume. Never hide confusion. Surface tradeoffs explicitly before proposing or making changes.
+   - If multiple interpretations exist, present them clearly instead of picking silently.
+   - If a simpler approach exists, state it and push back against unnecessary complexity.
+   - Before editing files, review target files and their callers to verify assumptions.
+
+2. **Simplicity First (Prevent Overengineering):**
+   - Write the minimum clean code that solves the problem. No speculative abstractions or single-use traits/generics.
+   - No unrequested "configurability" or complex indirection layers.
+   - No error handling for physically impossible scenarios.
+   - If 50 lines solves a problem cleanly, do not write 200 lines.
+
+3. **Surgical Code Changes:**
+   - Touch only what must be touched to satisfy the active objective.
+   - Never perform drive-by reformatting, unrelated refactoring, or renaming in existing code.
+   - Match existing coding style and idioms exactly.
+   - Always clean up your own orphans (remove unused imports, variables, or functions created by your changes) in the same commit.
+
+4. **Goal-Driven Execution & Verification Loops:**
+   - Transform every request into a deterministic plan: `[Step] -> verify: [check]`.
+   - Never mark a step or subphase complete without running its verification command (unit tests, clippy, `--self-test`).
+   - Execute strictly one subphase at a time; satisfy all exit criteria before proceeding.
+
+---
+
 ## 1. Core Engineering Philosophy: Zero-Mock, Evidence-Based Production Readiness
 
 1. **Absolute Prohibition of Mocks/Simulations in Production Code:**
