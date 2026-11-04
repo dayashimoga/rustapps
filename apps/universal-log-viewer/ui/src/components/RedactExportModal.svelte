@@ -65,7 +65,8 @@
 </script>
 
 {#if isOpen}
-  <div class="modal-overlay" role="dialog" aria-modal="true" tabindex="-1">
+  <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+<div class="modal-overlay" role="dialog" aria-modal="true" aria-label="PII and Credential Redaction Export" tabindex="-1" on:click|self={handleClose} on:keydown={(e) => e.key === 'Escape' && handleClose()}>
     <div class="redact-modal glass-panel">
       <div class="modal-header">
         <div class="header-left">

@@ -8,6 +8,7 @@
   import MediaPoolPanel from './components/MediaPoolPanel.svelte';
   import AiToolsModal from './components/AiToolsModal.svelte';
   import NewProjectModal from './components/NewProjectModal.svelte';
+  import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
   import {
     tauriInvoke,
     type Clip,
@@ -22,6 +23,7 @@
   let selectedClipId: string | null = null;
   let showAiModal: boolean = false;
   let showNewProjectModal: boolean = false;
+  let isCommandPaletteOpen: boolean = false;
   let activeAiModalTab: 'silence' | 'beats' | 'scenecut' | 'captions' | 'export' = 'silence';
   let canUndo: boolean = true;
   let canRedo: boolean = true;
@@ -30,6 +32,216 @@
   let monitorRef: ProgramMonitor;
   let openProjectFileInput: HTMLInputElement;
   let importMediaFileInput: HTMLInputElement;
+
+  $: commandActions = [
+    {
+      id: 'act-new-proj',
+      title: 'New Studio Project...',
+      subtitle: 'Create timeline from broadcast or social preset',
+      category: 'File',
+      icon: '✨',
+      shortcut: 'Ctrl+N',
+      run: () => { showNewProjectModal = true; },
+    },
+    {
+      id: 'act-open-proj',
+      title: 'Open Studio Project...',
+      subtitle: 'Load project file (.avedproj)',
+      category: 'File',
+      icon: '📂',
+      shortcut: 'Ctrl+O',
+      run: handleOpenProject,
+    },
+    {
+      id: 'act-save-proj',
+      title: 'Save Studio Project',
+      subtitle: 'Write full timeline state to .avedproj',
+      category: 'File',
+      icon: '💾',
+      shortcut: 'Ctrl+S',
+      run: handleSaveProject,
+    },
+    {
+      id: 'act-import-media',
+      title: 'Import Media Asset...',
+      subtitle: 'Add video, audio, or image into project media bin',
+      category: 'Media',
+      icon: '🎞️',
+      shortcut: 'Ctrl+I',
+      run: handleImportMedia,
+    },
+    {
+      id: 'act-export',
+      title: 'Master Exporter & Render...',
+      subtitle: 'Render 4K UHD master, web mp4, or EBU R128 audio',
+      category: 'Export',
+      icon: '🚀',
+      shortcut: 'Ctrl+E',
+      run: () => { activeAiModalTab = 'export'; showAiModal = true; },
+    },
+    {
+      id: 'panel-edit',
+      title: 'Switch View: Edit & Multi-Track Cut',
+      subtitle: 'Timeline sequencing and clip inspector',
+      category: 'View',
+      icon: '✂️',
+      shortcut: 'Ctrl+1',
+      run: () => { activePanel = 'edit'; },
+    },
+    {
+      id: 'panel-color',
+      title: 'Switch View: Color Grading & Scopes HUD',
+      subtitle: 'Color wheels, waveform, histogram, vectorscope',
+      category: 'View',
+      icon: '🎨',
+      shortcut: 'Ctrl+2',
+      run: () => { activePanel = 'color'; },
+    },
+    {
+      id: 'panel-audio',
+      title: 'Switch View: Audio Mixer & 8-Band EQ',
+      subtitle: 'Bus faders, parametric EQ, compressor, EBU R128 loudness',
+      category: 'View',
+      icon: '🎛️',
+      shortcut: 'Ctrl+3',
+      run: () => { activePanel = 'audio'; },
+    },
+    {
+      id: 'act-silence',
+      title: 'AI Silence Ripple-Cut',
+      subtitle: 'Auto-detect dead audio space and ripple truncate',
+      category: 'AI Tools',
+      icon: '🔇',
+      shortcut: '',
+      run: () => { activeAiModalTab = 'silence'; showAiModal = true; },
+    },
+    {
+      id: 'act-beats',
+      title: 'AI Music Beat Detection',
+      subtitle: 'Place rhythmic timeline markers on audio transients',
+      category: 'AI Tools',
+      icon: '🥁',
+      shortcut: '',
+      run: () => { activeAiModalTab = 'beats'; showAiModal = true; },
+    },
+    {
+      id: 'act-scenecut',
+      title: 'AI Scene-Cut Detection',
+      subtitle: 'Histogram-difference optical shot transition detector',
+      category: 'AI Tools',
+      icon: '🎬',
+      shortcut: '',
+      run: () => { activeAiModalTab = 'scenecut'; showAiModal = true; },
+    },
+    {
+      id: 'act-captions',
+      title: 'AI Whisper Auto-Captions',
+      subtitle: 'Generate aligned subtitle track from speech',
+      category: 'AI Tools',
+      icon: '💬',
+      shortcut: '',
+      run: () => { activeAiModalTab = 'captions'; showAiModal = true; },
+    },
+    {
+      id: 'act-undo',
+      title: 'Undo Timeline Edit',
+      subtitle: 'Revert last timeline mutation',
+      category: 'Edit',
+      icon: '↩️',
+      shortcut: 'Ctrl+Z',
+      run: handleUndo,
+    },
+    {
+      id: 'act-redo',
+      title: 'Redo Timeline Edit',
+      subtitle: 'Re-apply previously reverted mutation',
+      category: 'Edit',
+      icon: '↪️',
+      shortcut: 'Ctrl+Y',
+      run: handleRedo,
+    },
+    {
+      id: 'act-play-pause',
+      title: 'Play / Pause Timeline',
+      subtitle: 'Toggle monitor playback',
+      category: 'Playback',
+      icon: '⏯️',
+      shortcut: 'Space',
+      run: () => { monitorRef?.togglePlay(); },
+    },
+  ];
+
+  function handleGlobalKeyDown(e: KeyboardEvent) {
+    const isCtrl = e.ctrlKey || e.metaKey;
+
+    if (isCtrl && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      isCommandPaletteOpen = !isCommandPaletteOpen;
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      if (isCommandPaletteOpen) {
+        e.preventDefault();
+        isCommandPaletteOpen = false;
+        return;
+      }
+      if (showAiModal) {
+        e.preventDefault();
+        showAiModal = false;
+        return;
+      }
+      if (showNewProjectModal) {
+        e.preventDefault();
+        showNewProjectModal = false;
+        return;
+      }
+      if (selectedClipId) {
+        e.preventDefault();
+        selectedClipId = null;
+        return;
+      }
+      return;
+    }
+
+    // Ignore single keys if typing in an input
+    const activeTagName = (document.activeElement?.tagName || '').toLowerCase();
+    const isInputActive = activeTagName === 'input' || activeTagName === 'textarea';
+    if (isInputActive) return;
+
+    if (isCtrl && e.key.toLowerCase() === 'n') {
+      e.preventDefault();
+      showNewProjectModal = true;
+    } else if (isCtrl && e.key.toLowerCase() === 'o') {
+      e.preventDefault();
+      handleOpenProject();
+    } else if (isCtrl && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      handleSaveProject();
+    } else if (isCtrl && e.key.toLowerCase() === 'i') {
+      e.preventDefault();
+      handleImportMedia();
+    } else if (isCtrl && e.key.toLowerCase() === 'e') {
+      e.preventDefault();
+      activeAiModalTab = 'export';
+      showAiModal = true;
+    } else if (isCtrl && e.key === '1') {
+      e.preventDefault();
+      activePanel = 'edit';
+    } else if (isCtrl && e.key === '2') {
+      e.preventDefault();
+      activePanel = 'color';
+    } else if (isCtrl && e.key === '3') {
+      e.preventDefault();
+      activePanel = 'audio';
+    } else if (isCtrl && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      handleUndo();
+    } else if (isCtrl && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
+      e.preventDefault();
+      handleRedo();
+    }
+  }
 
   function showToast(msg: string) {
     statusMessage = msg;
@@ -415,7 +627,16 @@
     bind:this={importMediaFileInput}
     on:change={handleMediaFilesSelected}
   />
+
+  <!-- Global Command Palette -->
+  <CommandPalette
+    isOpen={isCommandPaletteOpen}
+    actions={commandActions}
+    on:close={() => (isCommandPaletteOpen = false)}
+  />
 </div>
+
+<svelte:window on:keydown={handleGlobalKeyDown} />
 
 <style>
   .editor-shell {

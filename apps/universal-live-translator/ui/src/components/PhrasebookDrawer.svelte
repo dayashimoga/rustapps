@@ -446,7 +446,8 @@
 
   <!-- Add Phrase Modal Dialog -->
   {#if showAddPhrase}
-    <div class="modal-backdrop" role="dialog" aria-modal="true" tabindex="-1">
+    <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+    <div class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Add New Offline Phrase" tabindex="-1" on:click|self={() => (showAddPhrase = false)} on:keydown={(e) => e.key === 'Escape' && (showAddPhrase = false)}>
       <div class="modal-card">
         <h3 class="modal-title">Add New Offline Phrase</h3>
         <div class="modal-fields">

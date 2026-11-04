@@ -11,6 +11,7 @@
   import ShamirModal from './components/ShamirModal.svelte';
   import LeakScannerModal from './components/LeakScannerModal.svelte';
   import PasswordGeneratorModal from './components/PasswordGeneratorModal.svelte';
+  import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
   import type {
     BackupExportSummary,
     BackupImportSummary,
@@ -45,10 +46,237 @@
   let isShamirModalOpen = false;
   let isLeakScannerOpen = false;
   let isGeneratorOpen = false;
+  let isCommandPaletteOpen = false;
   let shamirModalMode: 'split' | 'unlock' = 'split';
   let biometricAvailable = false;
   let clipboardSeconds: number | null = null;
   let clipboardTimer: number | null = null;
+
+  $: commandActions = [
+    {
+      id: 'act-new-secret',
+      title: 'Create New Secret',
+      subtitle: 'Add password, API key, certificate, or SSH key',
+      category: 'Actions',
+      icon: '➕',
+      shortcut: 'Ctrl+N',
+      run: () => { editingSecret = null; isNewSecretModalOpen = true; },
+    },
+    {
+      id: 'act-lock',
+      title: 'Lock Vault Immediately',
+      subtitle: 'Zeroize master keys and wipe decrypted state',
+      category: 'Security',
+      icon: '🔒',
+      shortcut: 'Ctrl+L',
+      run: handleLock,
+    },
+    {
+      id: 'act-health',
+      title: 'Security Health & Audit Chain',
+      subtitle: 'Evaluate entropy, reuse, age, and HMAC verification',
+      category: 'Security',
+      icon: '🛡️',
+      shortcut: 'Ctrl+H',
+      run: () => { isHealthDashboardOpen = true; },
+    },
+    {
+      id: 'act-leak-scanner',
+      title: 'Offline Secret Leak Scanner',
+      subtitle: 'Scan repositories and folders for hardcoded credentials',
+      category: 'DevOps',
+      icon: '🔍',
+      shortcut: 'Ctrl+Shift+L',
+      run: () => { isLeakScannerOpen = true; },
+    },
+    {
+      id: 'act-generator',
+      title: 'Password & Passphrase Generator',
+      subtitle: 'NIST 800-63B compliant high-entropy offline generator',
+      category: 'Tools',
+      icon: '⚡',
+      shortcut: 'Ctrl+G',
+      run: () => { isGeneratorOpen = true; },
+    },
+    {
+      id: 'act-backup',
+      title: 'Encrypted Backup & Portability',
+      subtitle: 'Export or restore Argon2id + AES-256-GCM encrypted vault backup',
+      category: 'DevOps',
+      icon: '💾',
+      shortcut: 'Ctrl+B',
+      run: () => { isBackupModalOpen = true; },
+    },
+    {
+      id: 'act-shamir',
+      title: 'Shamir Secret Sharing (M-of-N)',
+      subtitle: 'Split master key into threshold shards or recover',
+      category: 'Security',
+      icon: '🧩',
+      shortcut: 'Ctrl+Shift+S',
+      run: () => { shamirModalMode = 'split'; isShamirModalOpen = true; },
+    },
+    {
+      id: 'act-export-env',
+      title: 'Export .env / KubeConfig',
+      subtitle: 'Format active secrets for local dev environments',
+      category: 'DevOps',
+      icon: '📦',
+      shortcut: 'Ctrl+E',
+      run: handleExportDotenv,
+    },
+    {
+      id: 'act-clear-clipboard',
+      title: 'Clear Clipboard Memory',
+      subtitle: 'Immediately wipe active clipboard buffer',
+      category: 'Security',
+      icon: '🧹',
+      shortcut: 'Ctrl+Shift+X',
+      run: handleClearClipboard,
+    },
+    {
+      id: 'filter-all',
+      title: 'Show All Secrets',
+      subtitle: 'Display complete vault contents',
+      category: 'Filter',
+      icon: '📑',
+      shortcut: '',
+      run: () => { filterType = 'all'; },
+    },
+    {
+      id: 'filter-password',
+      title: 'Filter: Passwords & Credentials',
+      subtitle: 'Show web and service logins',
+      category: 'Filter',
+      icon: '🔑',
+      shortcut: '',
+      run: () => { filterType = 'password'; },
+    },
+    {
+      id: 'filter-api-key',
+      title: 'Filter: API Keys & Bearer Tokens',
+      subtitle: 'Show cloud and third-party tokens',
+      category: 'Filter',
+      icon: '🏷️',
+      shortcut: '',
+      run: () => { filterType = 'api_key'; },
+    },
+    {
+      id: 'filter-ssh',
+      title: 'Filter: SSH Keypairs',
+      subtitle: 'Show Ed25519 & RSA private keys',
+      category: 'Filter',
+      icon: '🖥️',
+      shortcut: '',
+      run: () => { filterType = 'ssh_key'; },
+    },
+    {
+      id: 'filter-cert',
+      title: 'Filter: X.509 Certificates',
+      subtitle: 'Show TLS certificates and root CAs',
+      category: 'Filter',
+      icon: '📜',
+      shortcut: '',
+      run: () => { filterType = 'certificate'; },
+    },
+    {
+      id: 'filter-db',
+      title: 'Filter: Database Connection URIs',
+      subtitle: 'Show PostgreSQL, MySQL, Redis, MongoDB URIs',
+      category: 'Filter',
+      icon: '🗄️',
+      shortcut: '',
+      run: () => { filterType = 'database'; },
+    },
+  ];
+
+  function handleGlobalKeyDown(e: KeyboardEvent) {
+    const isCtrl = e.ctrlKey || e.metaKey;
+
+    if (isCtrl && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      isCommandPaletteOpen = !isCommandPaletteOpen;
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      if (isCommandPaletteOpen) {
+        e.preventDefault();
+        isCommandPaletteOpen = false;
+        return;
+      }
+      if (isNewSecretModalOpen) {
+        e.preventDefault();
+        isNewSecretModalOpen = false;
+        editingSecret = null;
+        return;
+      }
+      if (isHealthDashboardOpen) {
+        e.preventDefault();
+        isHealthDashboardOpen = false;
+        return;
+      }
+      if (isBackupModalOpen) {
+        e.preventDefault();
+        isBackupModalOpen = false;
+        return;
+      }
+      if (isShamirModalOpen) {
+        e.preventDefault();
+        isShamirModalOpen = false;
+        return;
+      }
+      if (isLeakScannerOpen) {
+        e.preventDefault();
+        isLeakScannerOpen = false;
+        return;
+      }
+      if (isGeneratorOpen) {
+        e.preventDefault();
+        isGeneratorOpen = false;
+        return;
+      }
+      if (searchQuery) {
+        e.preventDefault();
+        searchQuery = '';
+        return;
+      }
+      return;
+    }
+
+    // Ignore other shortcuts when typing in inputs/textareas
+    const activeTagName = (document.activeElement?.tagName || '').toLowerCase();
+    const isInputActive = activeTagName === 'input' || activeTagName === 'textarea';
+    if (isInputActive) return;
+
+    if (isCtrl && e.key.toLowerCase() === 'n') {
+      e.preventDefault();
+      editingSecret = null;
+      isNewSecretModalOpen = true;
+    } else if (isCtrl && e.key.toLowerCase() === 'l') {
+      e.preventDefault();
+      handleLock();
+    } else if (isCtrl && e.key.toLowerCase() === 'h') {
+      e.preventDefault();
+      isHealthDashboardOpen = true;
+    } else if (isCtrl && e.key.toLowerCase() === 'g') {
+      e.preventDefault();
+      isGeneratorOpen = true;
+    } else if (isCtrl && e.key.toLowerCase() === 'b') {
+      e.preventDefault();
+      isBackupModalOpen = true;
+    } else if (isCtrl && e.shiftKey && e.key.toLowerCase() === 'l') {
+      e.preventDefault();
+      isLeakScannerOpen = true;
+    } else if (isCtrl && e.shiftKey && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      shamirModalMode = 'split';
+      isShamirModalOpen = true;
+    } else if (isCtrl && e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      (document.querySelector('.search-input') as HTMLInputElement)?.focus();
+    }
+  }
 
   // Notification toast
   let toastMessage = '';
@@ -633,7 +861,16 @@
       <span>{toastMessage}</span>
     </div>
   {/if}
+
+  <!-- Global Command Palette -->
+  <CommandPalette
+    isOpen={isCommandPaletteOpen}
+    actions={commandActions}
+    on:close={() => { isCommandPaletteOpen = false; }}
+  />
 </div>
+
+<svelte:window on:keydown={handleGlobalKeyDown} />
 
 <style>
   .app-layout {

@@ -12,6 +12,7 @@
   import ScreenshotGallery from './components/ScreenshotGallery.svelte';
   import DocumentModal from './components/DocumentModal.svelte';
   import ComplianceScanner from './components/ComplianceScanner.svelte';
+  import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
   import type {
     ActiveTab,
     BatchRenameResult,
@@ -66,6 +67,194 @@
   // Phase 6 Document Inspection Modal State
   let inspectedDoc: ExtractedDocument | null = null;
   let isDocModalOpen = false;
+  let isCommandPaletteOpen = false;
+
+  $: commandActions = [
+    {
+      id: 'tab-browser',
+      title: 'Explorer & File Grid',
+      subtitle: 'Browse local directories and preview files',
+      category: 'Navigation',
+      icon: '📁',
+      shortcut: 'Ctrl+1',
+      run: () => { activeTab = 'browser'; },
+    },
+    {
+      id: 'tab-content-search',
+      title: 'Content & Semantic Search',
+      subtitle: 'Tantivy full-text & vector search across documents',
+      category: 'Navigation',
+      icon: '🔍',
+      shortcut: 'Ctrl+2',
+      run: () => { activeTab = 'content_search'; },
+    },
+    {
+      id: 'tab-screenshots',
+      title: 'Screenshot OCR Gallery',
+      subtitle: 'Visual perceptual hash & OCR search',
+      category: 'Navigation',
+      icon: '🖼️',
+      shortcut: 'Ctrl+3',
+      run: () => { activeTab = 'screenshots'; },
+    },
+    {
+      id: 'tab-duplicates',
+      title: 'Duplicate File Finder',
+      subtitle: 'BLAKE3 content hashing deduplication',
+      category: 'Navigation',
+      icon: '👥',
+      shortcut: 'Ctrl+4',
+      run: () => { activeTab = 'duplicates'; },
+    },
+    {
+      id: 'tab-treemap',
+      title: 'Disk Treemap Visualizer',
+      subtitle: 'Hierarchical space consumption visualizer',
+      category: 'Navigation',
+      icon: '🗺️',
+      shortcut: 'Ctrl+5',
+      run: () => { activeTab = 'treemap'; },
+    },
+    {
+      id: 'tab-batch-rename',
+      title: 'Batch File Renamer',
+      subtitle: 'Regex, prefixes, numbering transformations',
+      category: 'Navigation',
+      icon: '✏️',
+      shortcut: 'Ctrl+6',
+      run: () => { activeTab = 'batch_rename'; },
+    },
+    {
+      id: 'tab-compliance',
+      title: 'Data Compliance Scanner',
+      subtitle: 'PII, secret leak, and compliance pattern detection',
+      category: 'Navigation',
+      icon: '🛡️',
+      shortcut: 'Ctrl+7',
+      run: () => { activeTab = 'compliance'; },
+    },
+    {
+      id: 'act-browse',
+      title: 'Browse Folder...',
+      subtitle: 'Open native folder picker dialog',
+      category: 'Actions',
+      icon: '📂',
+      shortcut: 'Ctrl+O',
+      run: handleBrowseFolder,
+    },
+    {
+      id: 'act-refresh',
+      title: 'Refresh Current Directory',
+      subtitle: 'Re-scan filesystem entries',
+      category: 'Actions',
+      icon: '↻',
+      shortcut: 'Ctrl+R',
+      run: () => loadDirectory(currentPath),
+    },
+    {
+      id: 'act-nav-up',
+      title: 'Navigate to Parent Folder',
+      subtitle: 'Go up one directory level',
+      category: 'Navigation',
+      icon: '⬆️',
+      shortcut: 'Alt+Up',
+      run: handleNavigateUp,
+    },
+    {
+      id: 'act-stats',
+      title: 'Toggle Storage Analytics',
+      subtitle: 'Open slide-over folder statistics drawer',
+      category: 'Actions',
+      icon: '📊',
+      shortcut: 'Ctrl+S',
+      run: () => { showStatsDrawer = !showStatsDrawer; },
+    },
+    {
+      id: 'act-select-all',
+      title: 'Select All Files',
+      subtitle: 'Select all items in current folder',
+      category: 'Selection',
+      icon: '☑️',
+      shortcut: 'Ctrl+A',
+      run: handleSelectAll,
+    },
+    {
+      id: 'act-deselect-all',
+      title: 'Deselect All',
+      subtitle: 'Clear current item selection',
+      category: 'Selection',
+      icon: '⏹️',
+      shortcut: 'Ctrl+D',
+      run: handleDeselectAll,
+    },
+    ...drivesAndPlaces.map((entry) => ({
+      id: `drive-${entry.path}`,
+      title: `Jump to ${entry.name}`,
+      subtitle: entry.path,
+      category: 'Drives & Places',
+      icon: entry.kind === 'drive' ? '💽' : '📁',
+      shortcut: '',
+      run: () => loadDirectory(entry.path),
+    })),
+  ];
+
+  function handleGlobalKeyDown(e: KeyboardEvent) {
+    const isCtrl = e.ctrlKey || e.metaKey;
+
+    if (isCtrl && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      isCommandPaletteOpen = !isCommandPaletteOpen;
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      if (isCommandPaletteOpen) {
+        e.preventDefault();
+        isCommandPaletteOpen = false;
+        return;
+      }
+      if (isDocModalOpen) {
+        e.preventDefault();
+        isDocModalOpen = false;
+        return;
+      }
+      if (previewItem) {
+        e.preventDefault();
+        previewItem = null;
+        return;
+      }
+      if (showStatsDrawer) {
+        e.preventDefault();
+        showStatsDrawer = false;
+        return;
+      }
+      return;
+    }
+
+    // Ignore other shortcuts when typing in inputs/textareas
+    const activeTagName = (document.activeElement?.tagName || '').toLowerCase();
+    const isInputActive = activeTagName === 'input' || activeTagName === 'textarea';
+    if (isInputActive) return;
+
+    if (isCtrl && e.key.toLowerCase() === 'o') {
+      e.preventDefault();
+      handleBrowseFolder();
+    } else if (isCtrl && e.key.toLowerCase() === 'r') {
+      e.preventDefault();
+      loadDirectory(currentPath);
+    } else if (isCtrl && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      showStatsDrawer = !showStatsDrawer;
+    } else if (isCtrl && e.key >= '1' && e.key <= '7') {
+      e.preventDefault();
+      const tabs: ActiveTab[] = ['browser', 'content_search', 'screenshots', 'duplicates', 'treemap', 'batch_rename', 'compliance'];
+      const targetTab = tabs[parseInt(e.key, 10) - 1];
+      if (targetTab) activeTab = targetTab;
+    } else if ((e.altKey && e.key === 'ArrowUp') || e.key === 'Backspace') {
+      e.preventDefault();
+      handleNavigateUp();
+    }
+  }
 
   // Standardized Desktop IPC Bridge
   async function invokeTauri<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -515,7 +704,16 @@
     onClose={() => (isDocModalOpen = false)}
     onOpenInOs={handleOpenInOs}
   />
+
+  <!-- Global Command Palette -->
+  <CommandPalette
+    isOpen={isCommandPaletteOpen}
+    actions={commandActions}
+    on:close={() => (isCommandPaletteOpen = false)}
+  />
 </main>
+
+<svelte:window on:keydown={handleGlobalKeyDown} />
 
 <style>
   .app-layout {

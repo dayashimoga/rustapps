@@ -128,7 +128,8 @@
   }
 </script>
 
-<div class="modal-overlay" role="dialog" aria-modal="true" tabindex="-1">
+<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+<div class="modal-overlay" role="dialog" aria-modal="true" aria-label="Encrypted Backup and Migration" tabindex="-1" on:click|self={onClose} on:keydown={(e) => e.key === 'Escape' && onClose()}>
   <div class="backup-modal">
     <div class="modal-header">
       <div class="header-left">

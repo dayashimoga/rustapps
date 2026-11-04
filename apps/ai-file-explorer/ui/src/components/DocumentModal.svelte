@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ExtractedDocument } from '../types';
+  import { getLocalFileUrl } from '../lib/ipc';
 
   export let doc: ExtractedDocument | null = null;
   export let isOpen = false;
@@ -9,7 +10,7 @@
   let copySuccess = false;
 
   $: isImageFile = doc && doc.extension && ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(doc.extension.toLowerCase());
-  $: imagePreviewUrl = doc && isImageFile ? `/__file?path=${encodeURIComponent(doc.path)}` : '';
+  $: imagePreviewUrl = doc && isImageFile ? getLocalFileUrl(doc.path) : '';
 
   function copyToClipboard() {
     if (!doc) return;
@@ -24,13 +25,13 @@
 {#if isOpen && doc}
   <!-- svelte-ignore a11y-click-events-have-key-events -->
   <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
-  <div class="modal-backdrop" on:click={onClose} role="dialog" aria-modal="true" tabindex="-1">
+  <div class="modal-backdrop" on:click={onClose} role="dialog" aria-modal="true" aria-labelledby="doc-modal-title" tabindex="-1">
     <!-- svelte-ignore a11y-click-events-have-key-events -->
     <!-- svelte-ignore a11y-no-static-element-interactions -->
     <div class="modal-dialog" on:click|stopPropagation role="document">
       <div class="modal-header">
         <div class="title-section">
-          <h2>{doc.metadata.title || doc.file_name}</h2>
+          <h2 id="doc-modal-title">{doc.metadata.title || doc.file_name}</h2>
           <span class="path-sub">{doc.path}</span>
         </div>
         <button class="close-btn" on:click={onClose}>&times;</button>

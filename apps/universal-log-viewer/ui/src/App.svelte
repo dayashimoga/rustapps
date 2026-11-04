@@ -8,6 +8,7 @@
   import AiInsightsDrawer from './components/AiInsightsDrawer.svelte';
   import RedactExportModal from './components/RedactExportModal.svelte';
   import StatusBar from './components/StatusBar.svelte';
+  import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
   import type {
     LogLineRecord,
     OpenedFileInfo,
@@ -712,23 +713,207 @@
     };
   }
 
+  let isCommandPaletteOpen = false;
+
+  $: commandActions = [
+    {
+      id: 'act-open-file',
+      title: 'Open Log File...',
+      subtitle: 'Pick native log file via system dialog',
+      category: 'File',
+      icon: '📂',
+      shortcut: 'Ctrl+O',
+      run: handleOpenFilePrompt,
+    },
+    {
+      id: 'act-open-folder',
+      title: 'Open Log Folder...',
+      subtitle: 'Pick directory to explore multi-service logs',
+      category: 'File',
+      icon: '📁',
+      shortcut: 'Ctrl+Shift+O',
+      run: handleOpenFolderPrompt,
+    },
+    {
+      id: 'act-focus-search',
+      title: 'Focus Search & Filter',
+      subtitle: 'Filter logs with regex or sub-string query',
+      category: 'Navigation',
+      icon: '🔍',
+      shortcut: 'Ctrl+F',
+      run: () => document.getElementById('input-search')?.focus(),
+    },
+    {
+      id: 'act-tail',
+      title: 'Toggle Live Tail Mode',
+      subtitle: 'Stream new incoming lines automatically',
+      category: 'Stream',
+      icon: '▶️',
+      shortcut: 'Ctrl+T',
+      run: toggleTailMode,
+    },
+    {
+      id: 'act-timeline',
+      title: 'Toggle Chronological Timeline',
+      subtitle: 'Density histogram and anomaly spike markers',
+      category: 'View',
+      icon: '📊',
+      shortcut: 'Ctrl+Shift+T',
+      run: () => { showTimeline = !showTimeline; },
+    },
+    {
+      id: 'act-bookmarks',
+      title: 'Toggle Bookmarks Drawer',
+      subtitle: 'Quick-access pinned incident lines',
+      category: 'View',
+      icon: '🔖',
+      shortcut: 'Ctrl+B',
+      run: () => { isBookmarksOpen = !isBookmarksOpen; },
+    },
+    {
+      id: 'act-insights',
+      title: 'Toggle AI Insights Drawer',
+      subtitle: 'Drain template clustering and error spike detection',
+      category: 'AI',
+      icon: '🧠',
+      shortcut: 'Ctrl+I',
+      run: () => { showAiInsights = !showAiInsights; },
+    },
+    {
+      id: 'act-redact-export',
+      title: 'Sanitized Redaction Export',
+      subtitle: 'Offline regex & Luhn credit card / PII masking',
+      category: 'Compliance',
+      icon: '🛡️',
+      shortcut: 'Ctrl+E',
+      run: () => { isRedactExportOpen = true; },
+    },
+    {
+      id: 'filter-all',
+      title: 'Severity: Show ALL Records',
+      subtitle: 'Clear severity level filter',
+      category: 'Filter',
+      icon: '📑',
+      shortcut: '',
+      run: () => { activeSeverityFilter = 'ALL'; applyFilters(); },
+    },
+    {
+      id: 'filter-error',
+      title: 'Severity: Filter to ERROR only',
+      subtitle: 'Isolate error lines',
+      category: 'Filter',
+      icon: '🔴',
+      shortcut: '',
+      run: () => { activeSeverityFilter = 'ERROR'; applyFilters(); },
+    },
+    {
+      id: 'filter-warn',
+      title: 'Severity: Filter to WARN only',
+      subtitle: 'Isolate warning lines',
+      category: 'Filter',
+      icon: '🟡',
+      shortcut: '',
+      run: () => { activeSeverityFilter = 'WARN'; applyFilters(); },
+    },
+    {
+      id: 'filter-info',
+      title: 'Severity: Filter to INFO only',
+      subtitle: 'Isolate info lines',
+      category: 'Filter',
+      icon: '🔵',
+      shortcut: '',
+      run: () => { activeSeverityFilter = 'INFO'; applyFilters(); },
+    },
+  ];
+
   // Global Keyboard Shortcuts
   function handleKeyDown(e: KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+    const isCtrl = e.ctrlKey || e.metaKey;
+
+    if (isCtrl && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      isCommandPaletteOpen = !isCommandPaletteOpen;
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      if (isCommandPaletteOpen) {
+        e.preventDefault();
+        isCommandPaletteOpen = false;
+        return;
+      }
+      if (isRedactExportOpen) {
+        e.preventDefault();
+        isRedactExportOpen = false;
+        return;
+      }
+      if (isBookmarksOpen) {
+        e.preventDefault();
+        isBookmarksOpen = false;
+        return;
+      }
+      if (showAiInsights) {
+        e.preventDefault();
+        showAiInsights = false;
+        return;
+      }
+      if (isSystemLogsOpen) {
+        e.preventDefault();
+        isSystemLogsOpen = false;
+        return;
+      }
+      if (isFolderSidebarOpen) {
+        e.preventDefault();
+        isFolderSidebarOpen = false;
+        return;
+      }
+      if (searchQuery) {
+        e.preventDefault();
+        searchQuery = '';
+        applyFilters();
+        return;
+      }
+      return;
+    }
+
+    if (isCtrl && e.key.toLowerCase() === 'f') {
       e.preventDefault();
       document.getElementById('input-search')?.focus();
-    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 't') {
+      return;
+    }
+
+    // Ignore single keys if typing in an input
+    const activeTagName = (document.activeElement?.tagName || '').toLowerCase();
+    const isInputActive = activeTagName === 'input' || activeTagName === 'textarea';
+    if (isInputActive) return;
+
+    if (isCtrl && e.shiftKey && e.key.toLowerCase() === 'o') {
+      e.preventDefault();
+      handleOpenFolderPrompt();
+    } else if (isCtrl && e.shiftKey && e.key.toLowerCase() === 't') {
+      e.preventDefault();
+      showTimeline = !showTimeline;
+    } else if (isCtrl && e.key.toLowerCase() === 't') {
       e.preventDefault();
       toggleTailMode();
-    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+    } else if (isCtrl && e.key.toLowerCase() === 'b') {
       e.preventDefault();
       isBookmarksOpen = !isBookmarksOpen;
-    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'i') {
+    } else if (isCtrl && e.key.toLowerCase() === 'i') {
       e.preventDefault();
       showAiInsights = !showAiInsights;
-    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
+    } else if (isCtrl && e.key.toLowerCase() === 'o') {
       e.preventDefault();
       handleOpenFilePrompt();
+    } else if (isCtrl && e.key.toLowerCase() === 'e') {
+      e.preventDefault();
+      isRedactExportOpen = true;
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      toggleTailMode();
+    } else if (e.key === '/') {
+      e.preventDefault();
+      document.getElementById('input-search')?.focus();
     }
   }
 
@@ -1066,6 +1251,13 @@
     {visibleCount}
     {fileSizeBytes}
     {tailModeActive}
+  />
+
+  <!-- Global Command Palette -->
+  <CommandPalette
+    isOpen={isCommandPaletteOpen}
+    actions={commandActions}
+    on:close={() => (isCommandPaletteOpen = false)}
   />
 </div>
 

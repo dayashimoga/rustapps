@@ -109,7 +109,8 @@
 
 {#if show}
   <!-- svelte-ignore a11y-click-events-have-key-events -->
-  <div class="modal-backdrop" on:click|self={() => dispatch('close')} role="presentation">
+  <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+  <div class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Create New Studio Project" tabindex="-1" on:click|self={() => dispatch('close')} on:keydown={(e) => e.key === 'Escape' && dispatch('close')}>
     <div class="modal-dialog">
       <div class="modal-header">
         <div class="header-title">

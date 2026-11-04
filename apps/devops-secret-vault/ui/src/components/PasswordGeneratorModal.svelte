@@ -68,9 +68,11 @@
 
 {#if isOpen}
   <!-- svelte-ignore a11y-click-events-have-key-events -->
-  <!-- svelte-ignore a11y-no-static-element-interactions -->
-  <div class="modal-backdrop" on:click={() => dispatch('close')}>
-    <div class="gen-modal glass-panel" on:click|stopPropagation>
+  <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+  <div class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Cryptographic Secret Generator" tabindex="-1" on:click|self={() => dispatch('close')} on:keydown={(e) => e.key === 'Escape' && dispatch('close')}>
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <!-- svelte-ignore a11y-no-static-element-interactions -->
+    <div class="gen-modal glass-panel" on:click|stopPropagation role="document">
       <div class="modal-header">
         <div class="title-row">
           <span class="icon">⚡</span>

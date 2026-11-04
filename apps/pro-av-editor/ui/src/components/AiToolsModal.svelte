@@ -272,7 +272,9 @@
 </script>
 
 {#if show}
-  <div class="modal-backdrop" on:click|self={() => dispatch('close')} role="presentation">
+  <!-- svelte-ignore a11y-click-events-have-key-events -->
+  <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+  <div class="modal-backdrop" role="dialog" aria-modal="true" aria-label="AI Studio Tools and Master Exporter" tabindex="-1" on:click|self={() => dispatch('close')} on:keydown={(e) => e.key === 'Escape' && dispatch('close')}>
     <div class="modal-dialog">
       <!-- Modal Header -->
       <div class="modal-header">

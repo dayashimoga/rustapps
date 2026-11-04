@@ -81,7 +81,8 @@
   }
 </script>
 
-<div class="health-modal-overlay">
+<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+<div class="health-modal-overlay" role="dialog" aria-modal="true" aria-label="Security Health and Hygiene Dashboard" tabindex="-1" on:click|self={onClose} on:keydown={(e) => e.key === 'Escape' && onClose()}>
   <div class="health-modal">
     <div class="modal-header">
       <div class="title-wrap">
