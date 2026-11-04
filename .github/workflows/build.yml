@@ -5,33 +5,49 @@ on:
     branches: [ master, main, develop ]
   pull_request:
     branches: [ master, main, develop ]
+  workflow_dispatch:
+    inputs:
+      app:
+        description: 'Select application to build (or "all" for all 5 applications)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - devops-secret-vault
+          - ai-file-explorer
+          - universal-log-viewer
+          - universal-live-translator
+          - pro-av-editor
+      platform:
+        description: 'Select target platform (or "all" for all 5 platforms)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - windows
+          - linux
+          - macos
+          - android
+          - ios
 
 jobs:
-  build:
-    name: Build (${{ matrix.os }} - ${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
+  build-windows:
+    name: Build Windows (${{ matrix.app }})
+    runs-on: windows-latest
+    if: >-
+      (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows') &&
+      (github.event_name != 'workflow_dispatch' || inputs.app == 'all' || inputs.app == matrix.app)
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_suffix: windows-x64
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            artifact_suffix: windows-arm64
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact_suffix: linux-x64
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            artifact_suffix: linux-arm64
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact_suffix: macos-x64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact_suffix: macos-arm64
+        app:
+          - devops-secret-vault
+          - ai-file-explorer
+          - universal-log-viewer
+          - universal-live-translator
+          - pro-av-editor
 
     steps:
       - name: Checkout Repository
@@ -40,7 +56,7 @@ jobs:
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-pc-windows-msvc
           components: rustfmt, clippy
 
       - name: Cache Cargo Dependencies
@@ -52,126 +68,281 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-build-${{ matrix.app }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-build-${{ matrix.target }}-
+            ${{ runner.os }}-cargo-build-${{ matrix.app }}-
             ${{ runner.os }}-cargo-build-
-
-      - name: Install System Dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libappindicator3-dev librsvg2-dev
-          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-            echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-            echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
-          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Build Svelte Desktop UIs
-        run: |
-          for app in devops-secret-vault ai-file-explorer universal-log-viewer universal-live-translator pro-av-editor; do
-            if [ -d "apps/${app}/ui" ]; then
-              echo "Building UI for ${app}..."
-              (cd "apps/${app}/ui" && (npm ci || npm install) && npm run build)
-            fi
-          done
-        shell: bash
-
-      - name: Check Formatting
-        run: cargo fmt --all -- --check
-
-      - name: Clippy Linter
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Compile Release Workspace
-        run: cargo build --workspace --release --target ${{ matrix.target }}
-
-      - name: Package Standalone Per-App ZIP Bundles
+      - name: Build Svelte Desktop UI
         shell: bash
         run: |
-          mkdir -p dist-packages
-          APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor")
-          for app in "${APPS[@]}"; do
-            mkdir -p "dist-packages/${app}"
-            bin_name="${app}"
-            [ "${{ runner.os }}" = "Windows" ] && bin_name="${app}.exe"
-            src_bin="target/${{ matrix.target }}/release/${bin_name}"
-            if [ -f "${src_bin}" ]; then
-              stage_dir="stage_${app}"
-              mkdir -p "${stage_dir}"
-              cp "${src_bin}" "${stage_dir}/"
-              touch "${stage_dir}/portable.flag"
-              [ -f "README.md" ] && cp "README.md" "${stage_dir}/"
-              [ -f "LICENSE" ] && cp "LICENSE" "${stage_dir}/"
-              zip_path="dist-packages/${app}/${app}-0.1.0-${{ matrix.artifact_suffix }}.zip"
-              if command -v 7z >/dev/null 2>&1; then
-                7z a -tzip "${zip_path}" "./${stage_dir}/*"
-              elif command -v zip >/dev/null 2>&1; then
-                (cd "${stage_dir}" && zip -r "../../${zip_path}" .)
-              elif command -v powershell >/dev/null 2>&1; then
-                powershell -Command "Compress-Archive -Path '${stage_dir}/*' -DestinationPath '${zip_path}' -Force"
-              fi
-              if [ -f "${zip_path}" ]; then
-                if command -v sha256sum >/dev/null 2>&1; then
-                  (cd "dist-packages/${app}" && sha256sum "$(basename "${zip_path}")" > "$(basename "${zip_path}").sha256")
-                elif command -v shasum >/dev/null 2>&1; then
-                  (cd "dist-packages/${app}" && shasum -a 256 "$(basename "${zip_path}")" > "$(basename "${zip_path}").sha256")
-                fi
-              fi
-              rm -rf "${stage_dir}"
+          if [ -d "apps/${{ matrix.app }}/ui" ]; then
+            echo "Building UI for ${{ matrix.app }}..."
+            (cd "apps/${{ matrix.app }}/ui" && (npm ci || npm install) && npm run build)
+          fi
+
+      - name: Clippy Linter (${{ matrix.app }})
+        run: cargo clippy -p ${{ matrix.app }} --all-targets -- -D warnings
+
+      - name: Compile Release Binary
+        run: cargo build --release -p ${{ matrix.app }}
+
+      - name: Self-Test Verification
+        shell: bash
+        run: |
+          bin_path="target/release/${{ matrix.app }}.exe"
+          if [ -f "${bin_path}" ]; then
+            echo "Executing --self-test on ${bin_path}..."
+            "${bin_path}" --self-test
+          fi
+
+      - name: Package Standalone Windows ZIP Bundle
+        shell: bash
+        run: |
+          mkdir -p "dist-packages/${{ matrix.app }}"
+          stage_dir="stage_${{ matrix.app }}"
+          mkdir -p "${stage_dir}"
+          cp "target/release/${{ matrix.app }}.exe" "${stage_dir}/"
+          touch "${stage_dir}/portable.flag"
+          [ -f "README.md" ] && cp "README.md" "${stage_dir}/"
+          [ -f "LICENSE" ] && cp "LICENSE" "${stage_dir}/"
+          zip_path="dist-packages/${{ matrix.app }}/${{ matrix.app }}-0.1.0-windows-x64.zip"
+          if command -v 7z >/dev/null 2>&1; then
+            7z a -tzip "${zip_path}" "./${stage_dir}/*"
+          elif command -v powershell >/dev/null 2>&1; then
+            powershell -Command "Compress-Archive -Path '${stage_dir}/*' -DestinationPath '${zip_path}' -Force"
+          fi
+          if [ -f "${zip_path}" ]; then
+            if command -v sha256sum >/dev/null 2>&1; then
+              (cd "dist-packages/${{ matrix.app }}" && sha256sum "$(basename "${zip_path}")" > "$(basename "${zip_path}").sha256")
+            elif command -v powershell >/dev/null 2>&1; then
+              powershell -Command "Get-FileHash -Path '${zip_path}' -Algorithm SHA256 | ForEach-Object { \"`$(`$_.Hash.ToLower())  `$(`$_.Path | Split-Path -Leaf)\" } | Set-Content '${zip_path}.sha256'"
             fi
-          done
+          fi
+          rm -rf "${stage_dir}"
 
-      - name: Upload devops-secret-vault Artifact
+      - name: Upload ${{ matrix.app }} Windows Artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: devops-secret-vault-${{ matrix.artifact_suffix }}
-          path: dist-packages/devops-secret-vault/
+          name: ${{ matrix.app }}-windows
+          path: dist-packages/${{ matrix.app }}/
           retention-days: 90
 
-      - name: Upload ai-file-explorer Artifact
+  build-linux:
+    name: Build Linux (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'linux') &&
+      (github.event_name != 'workflow_dispatch' || inputs.app == 'all' || inputs.app == matrix.app)
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - devops-secret-vault
+          - ai-file-explorer
+          - universal-log-viewer
+          - universal-live-translator
+          - pro-av-editor
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+          components: rustfmt, clippy
+
+      - name: Cache Cargo Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-build-${{ matrix.app }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-${{ matrix.app }}-
+            ${{ runner.os }}-cargo-build-
+
+      - name: Install System Dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libappindicator3-dev librsvg2-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build Svelte Desktop UI
+        shell: bash
+        run: |
+          if [ -d "apps/${{ matrix.app }}/ui" ]; then
+            echo "Building UI for ${{ matrix.app }}..."
+            (cd "apps/${{ matrix.app }}/ui" && (npm ci || npm install) && npm run build)
+          fi
+
+      - name: Clippy Linter (${{ matrix.app }})
+        run: cargo clippy -p ${{ matrix.app }} --all-targets -- -D warnings
+
+      - name: Compile Release Binary
+        run: cargo build --release -p ${{ matrix.app }}
+
+      - name: Self-Test Verification
+        shell: bash
+        run: |
+          bin_path="target/release/${{ matrix.app }}"
+          if [ -f "${bin_path}" ]; then
+            chmod +x "${bin_path}"
+            echo "Executing --self-test on ${bin_path}..."
+            "${bin_path}" --self-test
+          fi
+
+      - name: Package Standalone Linux ZIP Bundle
+        shell: bash
+        run: |
+          mkdir -p "dist-packages/${{ matrix.app }}"
+          stage_dir="stage_${{ matrix.app }}"
+          mkdir -p "${stage_dir}"
+          cp "target/release/${{ matrix.app }}" "${stage_dir}/"
+          touch "${stage_dir}/portable.flag"
+          [ -f "README.md" ] && cp "README.md" "${stage_dir}/"
+          [ -f "LICENSE" ] && cp "LICENSE" "${stage_dir}/"
+          zip_path="dist-packages/${{ matrix.app }}/${{ matrix.app }}-0.1.0-linux-x64.zip"
+          if command -v zip >/dev/null 2>&1; then
+            (cd "${stage_dir}" && zip -r "../../${zip_path}" .)
+          fi
+          if [ -f "${zip_path}" ]; then
+            (cd "dist-packages/${{ matrix.app }}" && sha256sum "$(basename "${zip_path}")" > "$(basename "${zip_path}").sha256")
+          fi
+          rm -rf "${stage_dir}"
+
+      - name: Upload ${{ matrix.app }} Linux Artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ai-file-explorer-${{ matrix.artifact_suffix }}
-          path: dist-packages/ai-file-explorer/
+          name: ${{ matrix.app }}-linux
+          path: dist-packages/${{ matrix.app }}/
           retention-days: 90
 
-      - name: Upload universal-log-viewer Artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: universal-log-viewer-${{ matrix.artifact_suffix }}
-          path: dist-packages/universal-log-viewer/
-          retention-days: 90
+  build-macos:
+    name: Build macOS (${{ matrix.app }})
+    runs-on: macos-latest
+    if: >-
+      (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos') &&
+      (github.event_name != 'workflow_dispatch' || inputs.app == 'all' || inputs.app == matrix.app)
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - devops-secret-vault
+          - ai-file-explorer
+          - universal-log-viewer
+          - universal-live-translator
+          - pro-av-editor
 
-      - name: Upload universal-live-translator Artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: universal-live-translator-${{ matrix.artifact_suffix }}
-          path: dist-packages/universal-live-translator/
-          retention-days: 90
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Upload pro-av-editor Artifact
+      - name: Install Rust Toolchain & macOS Targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+          components: rustfmt, clippy
+
+      - name: Cache Cargo Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-build-${{ matrix.app }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-${{ matrix.app }}-
+            ${{ runner.os }}-cargo-build-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build Svelte Desktop UI
+        shell: bash
+        run: |
+          if [ -d "apps/${{ matrix.app }}/ui" ]; then
+            echo "Building UI for ${{ matrix.app }}..."
+            (cd "apps/${{ matrix.app }}/ui" && (npm ci || npm install) && npm run build)
+          fi
+
+      - name: Clippy Linter (${{ matrix.app }})
+        run: cargo clippy -p ${{ matrix.app }} --all-targets -- -D warnings
+
+      - name: Compile Universal macOS Binaries (Apple Silicon & Intel)
+        run: |
+          cargo build --release --target aarch64-apple-darwin -p ${{ matrix.app }}
+          cargo build --release --target x86_64-apple-darwin -p ${{ matrix.app }}
+          mkdir -p target/universal
+          lipo -create -output "target/universal/${{ matrix.app }}" \
+            "target/aarch64-apple-darwin/release/${{ matrix.app }}" \
+            "target/x86_64-apple-darwin/release/${{ matrix.app }}"
+
+      - name: Self-Test Verification
+        shell: bash
+        run: |
+          bin_path="target/universal/${{ matrix.app }}"
+          if [ -f "${bin_path}" ]; then
+            chmod +x "${bin_path}"
+            echo "Executing --self-test on ${bin_path}..."
+            "${bin_path}" --self-test
+          fi
+
+      - name: Package Standalone macOS Universal ZIP Bundle
+        shell: bash
+        run: |
+          mkdir -p "dist-packages/${{ matrix.app }}"
+          stage_dir="stage_${{ matrix.app }}"
+          mkdir -p "${stage_dir}"
+          cp "target/universal/${{ matrix.app }}" "${stage_dir}/"
+          touch "${stage_dir}/portable.flag"
+          [ -f "README.md" ] && cp "README.md" "${stage_dir}/"
+          [ -f "LICENSE" ] && cp "LICENSE" "${stage_dir}/"
+          zip_path="dist-packages/${{ matrix.app }}/${{ matrix.app }}-0.1.0-macos-universal.zip"
+          if command -v zip >/dev/null 2>&1; then
+            (cd "${stage_dir}" && zip -r "../../${zip_path}" .)
+          fi
+          if [ -f "${zip_path}" ]; then
+            (cd "dist-packages/${{ matrix.app }}" && shasum -a 256 "$(basename "${zip_path}")" > "$(basename "${zip_path}").sha256")
+          fi
+          rm -rf "${stage_dir}"
+
+      - name: Upload ${{ matrix.app }} macOS Artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: pro-av-editor-${{ matrix.artifact_suffix }}
-          path: dist-packages/pro-av-editor/
+          name: ${{ matrix.app }}-macos
+          path: dist-packages/${{ matrix.app }}/
           retention-days: 90
 
   build-android:
-    name: Build Android Mobile (${{ matrix.app }})
+    name: Build Android (${{ matrix.app }})
     runs-on: ubuntu-latest
+    if: >-
+      (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'android') &&
+      (github.event_name != 'workflow_dispatch' || inputs.app == 'all' || inputs.app == matrix.app)
     strategy:
       fail-fast: false
       matrix:
@@ -223,8 +394,11 @@ jobs:
           retention-days: 90
 
   build-ios:
-    name: Build iOS Mobile (${{ matrix.app }})
+    name: Build iOS (${{ matrix.app }})
     runs-on: macos-latest
+    if: >-
+      (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'ios') &&
+      (github.event_name != 'workflow_dispatch' || inputs.app == 'all' || inputs.app == matrix.app)
     strategy:
       fail-fast: false
       matrix:
