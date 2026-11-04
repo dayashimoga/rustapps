@@ -15,6 +15,7 @@
 
   const dispatch = createEventDispatcher<{
     refreshProject: void;
+    importMedia: void;
     importMediaDialog: void;
     toast: string;
   }>();
@@ -22,6 +23,27 @@
   let activeSubTab: 'pool' | 'inspector' = 'pool';
   let customFilePath = '';
   let isImporting = false;
+  let fileInputRef: HTMLInputElement;
+
+  function triggerBrowseMedia() {
+    dispatch('importMedia');
+    dispatch('importMediaDialog');
+    if (fileInputRef) {
+      fileInputRef.value = '';
+      fileInputRef.click();
+    }
+  }
+
+  async function handleLocalFilesSelected(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const files = input?.files;
+    if (!files || files.length === 0) return;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const filePath = (file as any).path || file.name;
+      await importPath(filePath, true);
+    }
+  }
 
   // Editable clip inspector state
   let editName = '';
@@ -218,14 +240,43 @@
 
   async function handleAddTrack(trackType: 'Video' | 'Audio') {
     try {
-      await tauriInvoke('add_track_cmd', {
-        name: '',
+      const existing = project?.tracks.filter((t) => t.track_type === trackType).length || 0;
+      const trackName = `${trackType} ${existing + 1}`;
+      const updated = await tauriInvoke<TimelineProject>('add_track_cmd', {
+        name: trackName,
         trackType,
       });
+      if (updated && updated.tracks && project) {
+        project = updated;
+      }
       dispatch('refreshProject');
-      dispatch('toast', `Added new ${trackType} track.`);
+      dispatch('toast', `Added new ${trackName} track.`);
     } catch (e: any) {
       dispatch('toast', `Error adding track: ${e?.message || e}`);
+    }
+  }
+
+  async function handleInsertDemoAsset(type: 'smpte' | 'tone' | 'countdown' | 'title' | 'ambient') {
+    if (!project) return;
+    try {
+      if (type === 'smpte') {
+        await handleAddGeneratorClip('ColorSolid');
+        dispatch('toast', 'Added SMPTE Test Solid to timeline.');
+      } else if (type === 'title') {
+        await handleAddGeneratorClip('Title');
+        dispatch('toast', 'Added Studio Lower-Third Title.');
+      } else {
+        const demoPath = `demo_assets/${type}_48khz.wav`;
+        const updated = await tauriInvoke<TimelineProject>('import_media_file_cmd', {
+          filePath: demoPath,
+          autoAddToTimeline: true,
+        });
+        if (updated) project = updated;
+        dispatch('refreshProject');
+        dispatch('toast', `Added ${type.toUpperCase()} demo asset to timeline.`);
+      }
+    } catch (e: any) {
+      dispatch('toast', `Demo asset notice: ${e?.message || e}`);
     }
   }
 
@@ -336,7 +387,7 @@
           type="button"
           class="btn-browse-media"
           disabled={isImporting}
-          on:click={() => dispatch('importMediaDialog')}
+          on:click={triggerBrowseMedia}
         >
           📥 Browse Video / Audio / Image...
         </button>
@@ -372,6 +423,32 @@
           + Audio Track
         </button>
       </div>
+
+      <div class="demo-assets-bar">
+        <span class="gen-label">PRE-BUNDLED DEMO MEDIA:</span>
+        <button type="button" class="demo-chip" on:click={() => handleInsertDemoAsset('smpte')}>
+          📺 SMPTE Bars
+        </button>
+        <button type="button" class="demo-chip" on:click={() => handleInsertDemoAsset('countdown')}>
+          ⏱️ 8s Countdown
+        </button>
+        <button type="button" class="demo-chip" on:click={() => handleInsertDemoAsset('tone')}>
+          🔊 1kHz Tone
+        </button>
+        <button type="button" class="demo-chip" on:click={() => handleInsertDemoAsset('ambient')}>
+          🎵 Audio Bed
+        </button>
+      </div>
+
+      <!-- Hidden Local File Input for 100% Reliable File Browser Trigger -->
+      <input
+        type="file"
+        multiple
+        accept="video/*,audio/*,image/*,.mp4,.webm,.mov,.mkv,.avi,.wav,.mp3,.flac,.ogg,.png,.jpg,.jpeg,.bmp,.webp"
+        style="display: none;"
+        bind:this={fileInputRef}
+        on:change={handleLocalFilesSelected}
+      />
 
       <div class="pool-list">
         {#if mediaPool.length === 0}
@@ -656,6 +733,32 @@
   .gen-chip:hover {
     border-color: #58a6ff;
     color: #58a6ff;
+  }
+
+  .demo-assets-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid #21262d;
+  }
+
+  .demo-chip {
+    background: rgba(168, 85, 247, 0.12);
+    border: 1px solid rgba(168, 85, 247, 0.35);
+    color: #d8b4fe;
+    padding: 0.22rem 0.55rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .demo-chip:hover {
+    background: rgba(168, 85, 247, 0.25);
+    border-color: #c084fc;
+    color: #ffffff;
   }
 
   .pool-list {

@@ -6,7 +6,8 @@
 use crate::audio_engine::LoudnessMeterData;
 use crate::color::VideoScopeData;
 use crate::models::{
-    BlendMode, Clip, ColorGradingSettings, TimelineProject, TrackType, Transform2D,
+    BlendMode, Clip, ColorGradingSettings, MasterExportSummary, TimelineProject, TrackType,
+    Transform2D,
 };
 use crate::service::EditorService;
 use crate::templates::{ExportPreset, ProjectTemplate};
@@ -28,20 +29,27 @@ pub fn get_project_state_cmd() -> Result<TimelineProject, String> {
     svc.get_project().map_err(|e| e.to_string())
 }
 
-/// Create a new project optionally from a pre-configured template
+/// Create a new project optionally from a pre-configured template with custom dimensions and starter demo clips
 pub fn create_project_cmd(
     name: String,
     template_id: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
+    fps: Option<f32>,
+    include_demo_clips: bool,
 ) -> Result<TimelineProject, String> {
     let service = get_service();
     let mut svc = service.lock().map_err(|e| e.to_string())?;
 
-    if let Some(tid) = template_id {
-        *svc = EditorService::from_template(&tid, &name).map_err(|e| e.to_string())?;
-    } else {
-        *svc = EditorService::from_template("tpl_standard_video", &name)
-            .unwrap_or_else(|_| EditorService::new());
-    }
+    *svc = EditorService::create_project_with_options(
+        template_id.as_deref(),
+        &name,
+        width,
+        height,
+        fps,
+        include_demo_clips,
+    )
+    .map_err(|e| e.to_string())?;
 
     svc.get_project().map_err(|e| e.to_string())
 }
@@ -383,6 +391,63 @@ pub fn render_audio_master_cmd(output_path: Option<String>) -> Result<String, St
     Ok(format!("{} ({} bytes PCM WAV)", path_str, bytes))
 }
 
+/// Render broadcast video master and export standard container with audio mixdown
+pub fn render_video_master_cmd(
+    preset_id: &str,
+    output_path: Option<String>,
+) -> Result<MasterExportSummary, String> {
+    let preset = ExportPreset::all_standard_presets()
+        .into_iter()
+        .find(|p| p.id == preset_id)
+        .unwrap_or_else(|| ExportPreset::all_standard_presets().remove(0));
+
+    let path = match output_path {
+        Some(p) if !p.trim().is_empty() => {
+            let pb = std::path::PathBuf::from(&p);
+            if pb.is_relative() {
+                if let Ok(app_paths) = platform_common::AppPaths::from_app_name("pro-av-editor") {
+                    app_paths.data_dir.join(pb)
+                } else {
+                    std::env::temp_dir().join(pb)
+                }
+            } else {
+                pb
+            }
+        }
+        _ => {
+            let ext = &preset.container;
+            let filename = format!(
+                "master_export_{}_{}.{}",
+                (preset.name.replace(' ', "_")),
+                date_tag(),
+                ext
+            );
+            if let Ok(app_paths) = platform_common::AppPaths::from_app_name("pro-av-editor") {
+                app_paths.data_dir.join("exports").join(filename)
+            } else {
+                std::env::temp_dir().join(filename)
+            }
+        }
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let path_str = path.to_string_lossy().to_string();
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    let summary = svc
+        .export_video_master(preset_id, &path_str)
+        .map_err(|e| e.to_string())?;
+    Ok(summary)
+}
+
+fn date_tag() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Dispatch desktop IPC commands from the Svelte 5 studio frontend
 pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
     match cmd {
@@ -401,7 +466,19 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
                 .or_else(|| args.get("template_id"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let res = create_project_cmd(name, template_id)?;
+            let width = args.get("width").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let height = args
+                .get("height")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            let fps = args.get("fps").and_then(|v| v.as_f64()).map(|v| v as f32);
+            let include_demo_clips = args
+                .get("includeDemoClips")
+                .or_else(|| args.get("include_demo_clips"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let res =
+                create_project_cmd(name, template_id, width, height, fps, include_demo_clips)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "save_project_cmd" => {
@@ -796,6 +873,20 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let res = render_audio_master_cmd(output_path)?;
             Ok(json!(res))
         }
+        "render_video_master_cmd" => {
+            let preset_id = args
+                .get("presetId")
+                .or_else(|| args.get("preset_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("preset_1080p60_web");
+            let output_path = args
+                .get("outputPath")
+                .or_else(|| args.get("output_path"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let res = render_video_master_cmd(preset_id, output_path)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
         "export_edl_cmd" => {
             let res = export_edl_cmd()?;
             Ok(json!(res))
@@ -833,7 +924,7 @@ mod tests {
         assert_eq!(tpls.len(), 4);
 
         let presets = get_export_presets_cmd().unwrap();
-        assert_eq!(presets.len(), 4);
+        assert_eq!(presets.len(), 6);
 
         let preview_b64 = render_preview_frame_cmd(0, 64, 36).unwrap();
         assert!(!preview_b64.is_empty());
@@ -859,5 +950,32 @@ mod tests {
         assert_eq!(moved_proj.tracks[0].clips[0].timeline_in_ms, 250);
 
         let _ = std::fs::remove_file(&tmp_bmp);
+
+        // Test video master export command
+        let out_avi = std::env::temp_dir().join("test_master_export.avi");
+        let export_res = render_video_master_cmd(
+            "preset_uncompressed_avi",
+            Some(out_avi.to_string_lossy().to_string()),
+        )
+        .unwrap();
+        assert_eq!(export_res.container, "avi");
+        assert!(export_res.bytes_written > 1000);
+        assert!(out_avi.exists());
+        let _ = std::fs::remove_file(&out_avi);
+
+        // Test create project with custom options
+        let custom_proj = create_project_cmd(
+            "Custom 4K Commercial".to_string(),
+            Some("tpl_cinematic_239".to_string()),
+            Some(3840),
+            Some(1608),
+            Some(24.0),
+            true,
+        )
+        .unwrap();
+        assert_eq!(custom_proj.name, "Custom 4K Commercial");
+        assert_eq!(custom_proj.settings.width, 3840);
+        assert_eq!(custom_proj.settings.height, 1608);
+        assert!(!custom_proj.tracks.is_empty());
     }
 }

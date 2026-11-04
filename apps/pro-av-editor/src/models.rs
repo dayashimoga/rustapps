@@ -676,6 +676,23 @@ impl TimelineProject {
 }
 
 // ---------------------------------------------------------------------------
+// Master Export Output Model
+// ---------------------------------------------------------------------------
+
+/// Result metadata produced when rendering an offline master export
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MasterExportSummary {
+    pub path: String,
+    pub bytes_written: usize,
+    pub duration_ms: u64,
+    pub width: u32,
+    pub height: u32,
+    pub frame_count: usize,
+    pub fps: f32,
+    pub container: String,
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

@@ -179,26 +179,92 @@
     }
   }
 
+  interface ExportSummaryView {
+    path: string;
+    bytes: number;
+    sizeFormatted: string;
+    width: number;
+    height: number;
+    fps: number;
+    frames: number;
+    durationSec: string;
+    container: string;
+  }
+  let exportSummary: ExportSummaryView | null = null;
+
   async function handleRenderMaster() {
     exportRunning = true;
+    exportSummary = null;
     exportStatus = 'Rendering broadcast master offline...';
     try {
-      let outPath = `exports/master_${Date.now()}.wav`;
+      const preset = exportPresets.find((p) => p.id === selectedPresetId) || exportPresets[0];
+      const isWav = preset.container.toLowerCase() === 'wav';
+      const cleanProjectName = (project?.name || 'master').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const defaultFileName = `${cleanProjectName}_${preset.id}.${preset.container}`;
+      let outPath: string | undefined = undefined;
+
       if (typeof window !== 'undefined' && window.__TAURI__?.dialog?.save) {
-        const picked = await window.__TAURI__.dialog.save({
-          title: 'Save Broadcast Master Mixdown (.wav)',
-          defaultName: `${(project?.name || 'master_mixdown').replace(/[^a-zA-Z0-9_-]/g, '_')}.wav`,
-          filter: '*.wav',
-        });
-        if (picked) {
-          outPath = picked;
+        try {
+          const picked = await window.__TAURI__.dialog.save({
+            title: `Save Master ${isWav ? 'Mixdown (.wav)' : `Video (.${preset.container})`}`,
+            defaultName: defaultFileName,
+            filter: `*.${preset.container}`,
+            filters: [{ name: preset.name, extensions: [preset.container] }],
+          });
+          if (picked) {
+            outPath = picked;
+          }
+        } catch (e) {
+          console.warn('Native save dialog skipped or unavailable, using default exports path:', e);
         }
       }
-      const res = await tauriInvoke<string>('render_audio_master_cmd', {
-        outputPath: outPath,
-      });
-      exportStatus = `Broadcast render complete: ${res}`;
+
+      if (isWav) {
+        const res = await tauriInvoke<string>('render_audio_master_cmd', {
+          outputPath: outPath,
+        });
+        exportStatus = `Broadcast audio render complete: ${res}`;
+        exportSummary = {
+          path: res.split(' ')[0] || outPath || defaultFileName,
+          bytes: 0,
+          sizeFormatted: 'Uncompressed Linear PCM',
+          width: 0,
+          height: 0,
+          fps: 0,
+          frames: 0,
+          durationSec: ((project?.duration_ms || 6000) / 1000).toFixed(1),
+          container: 'WAV',
+        };
+      } else {
+        const res = await tauriInvoke<{
+          path: string;
+          bytes_written: number;
+          duration_ms: number;
+          width: number;
+          height: number;
+          frame_count: number;
+          fps: number;
+          container: string;
+        }>('render_video_master_cmd', {
+          presetId: preset.id,
+          outputPath: outPath,
+        });
+        const mb = (res.bytes_written / (1024 * 1024)).toFixed(2);
+        exportStatus = `Broadcast video render complete: ${res.path} (${mb} MB)`;
+        exportSummary = {
+          path: res.path,
+          bytes: res.bytes_written,
+          sizeFormatted: `${mb} MB`,
+          width: res.width,
+          height: res.height,
+          fps: res.fps,
+          frames: res.frame_count,
+          durationSec: (res.duration_ms / 1000).toFixed(1),
+          container: res.container.toUpperCase(),
+        };
+      }
     } catch (e) {
+      console.error('Export error:', e);
       exportStatus = `Export render failed: ${e}`;
     } finally {
       exportRunning = false;
@@ -443,8 +509,44 @@
                   disabled={exportRunning}
                   on:click={handleRenderMaster}
                 >
-                  🚀 Render Broadcast Master
+                  {exportRunning ? '⏳ Rendering Offline Master...' : '🚀 Render Broadcast Master'}
                 </button>
+                {#if exportStatus}
+                  <div class="result-banner" class:error={exportStatus.includes('failed')}>
+                    {exportStatus}
+                  </div>
+                {/if}
+                {#if exportSummary}
+                  <div class="export-summary-card">
+                    <div class="summary-top">
+                      <span class="summary-badge">✓ RENDER COMPLETE</span>
+                      <span class="summary-container">{exportSummary.container}</span>
+                    </div>
+                    <div class="summary-path" title={exportSummary.path}>
+                      <code>{exportSummary.path}</code>
+                    </div>
+                    <div class="summary-specs">
+                      {#if exportSummary.width > 0}
+                        <span>{exportSummary.width}×{exportSummary.height} @ {exportSummary.fps} FPS</span>
+                        <span>•</span>
+                        <span>{exportSummary.frames} frames</span>
+                        <span>•</span>
+                      {/if}
+                      <span>{exportSummary.durationSec}s</span>
+                      <span>•</span>
+                      <span class="summary-size">{exportSummary.sizeFormatted}</span>
+                    </div>
+                    <div class="summary-actions">
+                      <a
+                        class="btn-download-master"
+                        href={`/__file?path=${encodeURIComponent(exportSummary.path)}`}
+                        download
+                      >
+                        ⬇ Download Master File
+                      </a>
+                    </div>
+                  </div>
+                {/if}
               </div>
 
               <!-- NLE Interchange -->
@@ -861,5 +963,92 @@
     font-size: 0.75rem;
     color: #cbd5e1;
     white-space: pre-wrap;
+  }
+
+  .export-summary-card {
+    background: #0d1117;
+    border: 1px solid #238636;
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+  }
+
+  .summary-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .summary-badge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #3fb950;
+    background: rgba(46, 160, 67, 0.15);
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+  }
+
+  .summary-container {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #8b949e;
+    background: #21262d;
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+  }
+
+  .summary-path {
+    background: #161b22;
+    padding: 0.4rem 0.6rem;
+    border-radius: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .summary-path code {
+    font-family: monospace;
+    font-size: 0.75rem;
+    color: #79c0ff;
+  }
+
+  .summary-specs {
+    display: flex;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+    color: #8b949e;
+    align-items: center;
+  }
+
+  .summary-size {
+    font-weight: 700;
+    color: #58a6ff;
+  }
+
+  .summary-actions {
+    margin-top: 0.25rem;
+  }
+
+  .btn-download-master {
+    display: inline-flex;
+    align-items: center;
+    background: #238636;
+    color: #ffffff;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.45rem 0.9rem;
+    border-radius: 6px;
+    text-decoration: none;
+    transition: all 0.15s ease;
+  }
+
+  .btn-download-master:hover {
+    background: #2ea043;
+    color: #ffffff;
+    box-shadow: 0 4px 12px rgba(46, 160, 67, 0.4);
   }
 </style>

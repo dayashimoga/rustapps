@@ -206,6 +206,17 @@ export interface ProjectTemplate {
   initial_tracks: Array<[string, string, TrackType, number]>;
 }
 
+export interface MasterExportSummary {
+  path: string;
+  bytes_written: number;
+  duration_ms: number;
+  width: number;
+  height: number;
+  frame_count: number;
+  fps: number;
+  container: string;
+}
+
 // SMPTE timecode format helper
 export function formatTimecode(ms: number, fps: number = 60.0): string {
   const totalSeconds = Math.floor(ms / 1000);

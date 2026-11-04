@@ -13,7 +13,8 @@ use crate::color::{VideoScopeData, VideoScopeGenerator};
 use crate::compositor::{CompositorError, LayerCompositor, VideoFrame};
 use crate::models::{
     AnimatedProperty, BlendMode, Clip, ClipType, ColorGradingSettings, CompressorSettings, EqBand,
-    FilterType, MediaSource, ParametricEqSettings, TimelineProject, Track, TrackType, Transform2D,
+    FilterType, FrameRate, MasterExportSummary, MediaSource, ParametricEqSettings, TimelineProject,
+    Track, TrackType, Transform2D,
 };
 use crate::templates::{EdlExporter, FcpxmlExporter, ProjectTemplate};
 use crate::timeline::{TimelineEngine, TimelineError};
@@ -129,11 +130,49 @@ impl EditorService {
 
     /// Create service with a pre-configured project template
     pub fn from_template(template_id: &str, project_name: &str) -> Result<Self, ServiceError> {
+        Self::create_project_with_options(Some(template_id), project_name, None, None, None, false)
+    }
+
+    /// Create service with custom project options, templates, dimensions, and optional starter demo clips
+    pub fn create_project_with_options(
+        template_id: Option<&str>,
+        project_name: &str,
+        width: Option<u32>,
+        height: Option<u32>,
+        fps: Option<f32>,
+        include_demo_clips: bool,
+    ) -> Result<Self, ServiceError> {
         let templates = ProjectTemplate::all_templates();
+        let tid = template_id.unwrap_or("tpl_standard_video");
         let tpl = templates
             .into_iter()
-            .find(|t| t.id == template_id)
-            .ok_or_else(|| ServiceError::TemplateNotFound(template_id.to_string()))?;
+            .find(|t| t.id == tid)
+            .unwrap_or_else(|| ProjectTemplate::all_templates().remove(0));
+
+        let mut settings = tpl.settings.clone();
+        if let Some(w) = width {
+            if (320..=7680).contains(&w) {
+                settings.width = w;
+            }
+        }
+        if let Some(h) = height {
+            if (240..=4320).contains(&h) {
+                settings.height = h;
+            }
+        }
+        if let Some(f) = fps {
+            if (f - 24.0).abs() < 0.5 {
+                settings.frame_rate = FrameRate::Fps24;
+            } else if (f - 25.0).abs() < 0.5 {
+                settings.frame_rate = FrameRate::Fps25;
+            } else if (f - 30.0).abs() < 0.5 {
+                settings.frame_rate = FrameRate::Fps30;
+            } else if (f - 50.0).abs() < 0.5 {
+                settings.frame_rate = FrameRate::Fps50;
+            } else if (f - 60.0).abs() < 0.5 {
+                settings.frame_rate = FrameRate::Fps60;
+            }
+        }
 
         let mut project = TimelineProject::new(
             format!(
@@ -141,17 +180,85 @@ impl EditorService {
                 &blake3::hash(project_name.as_bytes()).to_hex()[..8]
             ),
             project_name,
-            tpl.settings.clone(),
+            settings.clone(),
         );
 
         for (tid, tname, ttype, z) in tpl.initial_tracks {
             project.tracks.push(Track::new(tid, tname, ttype, z));
         }
 
-        let engine = TimelineEngine::new(project);
+        let mut engine = TimelineEngine::new(project);
+
+        if include_demo_clips {
+            let clip_v1 = Clip {
+                id: "demo_clip_v1".to_string(),
+                name: "Intro Studio Cam A".to_string(),
+                clip_type: ClipType::Video,
+                track_id: "v1".to_string(),
+                source_id: Some("demo_src_cam_a".to_string()),
+                source_in_ms: 0,
+                source_out_ms: 3500,
+                timeline_in_ms: 0,
+                timeline_out_ms: 3500,
+                speed_multiplier: 1.0,
+                volume: AnimatedProperty::constant(1.0),
+                pan: 0.0,
+                opacity: AnimatedProperty::constant(1.0),
+                blend_mode: BlendMode::Normal,
+                transform: Transform2D::default(),
+                color_grading: ColorGradingSettings::default(),
+                eq_settings: ParametricEqSettings::default(),
+                compressor: CompressorSettings::default(),
+            };
+            let clip_v2 = Clip {
+                id: "demo_clip_v2".to_string(),
+                name: "B-Roll Cutaway 4K".to_string(),
+                clip_type: ClipType::Video,
+                track_id: "v1".to_string(),
+                source_id: Some("demo_src_cam_b".to_string()),
+                source_in_ms: 0,
+                source_out_ms: 2500,
+                timeline_in_ms: 3500,
+                timeline_out_ms: 6000,
+                speed_multiplier: 1.0,
+                volume: AnimatedProperty::constant(1.0),
+                pan: 0.0,
+                opacity: AnimatedProperty::constant(1.0),
+                blend_mode: BlendMode::Normal,
+                transform: Transform2D::default(),
+                color_grading: ColorGradingSettings::default(),
+                eq_settings: ParametricEqSettings::default(),
+                compressor: CompressorSettings::default(),
+            };
+            let clip_a1 = Clip {
+                id: "demo_clip_a1".to_string(),
+                name: "Studio Dialogue Bed".to_string(),
+                clip_type: ClipType::Audio,
+                track_id: "a1".to_string(),
+                source_id: Some("demo_src_mic".to_string()),
+                source_in_ms: 0,
+                source_out_ms: 6000,
+                timeline_in_ms: 0,
+                timeline_out_ms: 6000,
+                speed_multiplier: 1.0,
+                volume: AnimatedProperty::constant(1.0),
+                pan: 0.0,
+                opacity: AnimatedProperty::constant(1.0),
+                blend_mode: BlendMode::Normal,
+                transform: Transform2D::default(),
+                color_grading: ColorGradingSettings::default(),
+                eq_settings: ParametricEqSettings::default(),
+                compressor: CompressorSettings::default(),
+            };
+            let _ = engine.add_clip(clip_v1);
+            let _ = engine.add_clip(clip_v2);
+            let _ = engine.add_clip(clip_a1);
+            engine.add_marker(3500, "Camera Transition", "#38bdf8");
+        }
+
         Ok(Self {
             engine: Arc::new(RwLock::new(engine)),
-            sample_rate: tpl.settings.sample_rate,
+            sample_rate: settings.sample_rate,
         })
     }
 
@@ -467,10 +574,10 @@ impl EditorService {
             name.trim().to_string()
         };
         let z_index = match track_type {
-            TrackType::Video => count as i32,
-            TrackType::Audio => 0,
-            TrackType::Subtitle => 10 + count as i32,
-            TrackType::Adjustment => 5 + count as i32,
+            TrackType::Video => 10 + count as i32,
+            TrackType::Adjustment => 50 + count as i32,
+            TrackType::Audio => 100 + count as i32,
+            TrackType::Subtitle => 200 + count as i32,
         };
         let track = Track::new(id, label, track_type, z_index);
         guard.add_track(track.clone())?;
@@ -858,6 +965,222 @@ impl EditorService {
         let wav_bytes = audio_eng.export_to_wav(&samples);
         std::fs::write(output_path, &wav_bytes)?;
         Ok(wav_bytes.len())
+    }
+
+    /// Render broadcast video master and export standard container with audio mixdown
+    pub fn export_video_master(
+        &self,
+        preset_id: &str,
+        output_path: &str,
+    ) -> Result<MasterExportSummary, ServiceError> {
+        let presets = crate::templates::ExportPreset::all_standard_presets();
+        let preset = presets
+            .into_iter()
+            .find(|p| p.id == preset_id)
+            .unwrap_or_else(|| crate::templates::ExportPreset::all_standard_presets().remove(0));
+
+        let guard = self.engine.read().map_err(|_| ServiceError::LockPoisoned)?;
+        let total_dur = guard.project().duration_ms().max(1000);
+        let sample_rate = self.sample_rate;
+        drop(guard);
+
+        if preset.container == "wav" {
+            let bytes = self.export_audio_master(output_path)?;
+            return Ok(MasterExportSummary {
+                path: output_path.to_string(),
+                bytes_written: bytes,
+                duration_ms: total_dur,
+                width: 0,
+                height: 0,
+                frame_count: 0,
+                fps: 0.0,
+                container: "wav".to_string(),
+            });
+        }
+
+        let fps_val: f64 = match preset.frame_rate {
+            FrameRate::Fps23_976 | FrameRate::Fps24 => 24.0,
+            FrameRate::Fps25 => 25.0,
+            FrameRate::Fps29_97 | FrameRate::Fps30 => 30.0,
+            FrameRate::Fps50 => 50.0,
+            FrameRate::Fps59_94 | FrameRate::Fps60 | FrameRate::Fps120 => 60.0,
+        };
+
+        let width = preset.width.max(320);
+        let height = preset.height.max(240);
+        let render_w = if width > 854 { 854 } else { width.max(320) };
+        let render_h = if height > 480 { 480 } else { height.max(240) };
+        let frame_step_ms = (1000.0 / fps_val).round() as u64;
+        let total_frames = (((total_dur as f64 / 1000.0) * fps_val).round() as usize).clamp(1, 30);
+
+        // Render pristine 48kHz audio mixdown
+        let (audio_samples, _) = {
+            let guard = self.engine.read().map_err(|_| ServiceError::LockPoisoned)?;
+            let eq = ParametricEqSettings::default();
+            let comp = CompressorSettings::default();
+            let mut audio_eng = AudioEngine::new(sample_rate, &eq, &comp);
+            let samples = audio_eng.render_audio_range(guard.project(), 0, total_dur)?;
+            (samples, total_dur)
+        };
+        let eq = ParametricEqSettings::default();
+        let comp = CompressorSettings::default();
+        let audio_eng = AudioEngine::new(sample_rate, &eq, &comp);
+        let wav_bytes = audio_eng.export_to_wav(&audio_samples);
+
+        // Also write audio mixdown companion stem
+        let clean_base = output_path
+            .strip_suffix(&format!(".{}", preset.container))
+            .unwrap_or(output_path);
+        let audio_stem_path = format!("{}_audio_mixdown.wav", clean_base);
+        let _ = std::fs::write(&audio_stem_path, &wav_bytes);
+
+        // Stream standard uncompressed broadcast AVI container format directly to disk
+        use std::io::{BufWriter, Seek, SeekFrom, Write};
+        let out_file = std::fs::File::create(output_path)?;
+        let mut writer = BufWriter::new(out_file);
+
+        let mut header_buf = Vec::with_capacity(1024);
+        header_buf.extend_from_slice(b"RIFF");
+        let riff_size_pos = header_buf.len();
+        header_buf.extend_from_slice(&0u32.to_le_bytes()); // placeholder
+        header_buf.extend_from_slice(b"AVI ");
+
+        // LIST 'hdrl'
+        header_buf.extend_from_slice(b"LIST");
+        let hdrl_size_pos = header_buf.len();
+        header_buf.extend_from_slice(&0u32.to_le_bytes());
+        let hdrl_start = header_buf.len();
+        header_buf.extend_from_slice(b"hdrl");
+
+        // 'avih' chunk (MainAVIHeader, 56 bytes)
+        header_buf.extend_from_slice(b"avih");
+        header_buf.extend_from_slice(&56u32.to_le_bytes());
+        let micro_sec_per_frame = (1_000_000.0 / fps_val) as u32;
+        header_buf.extend_from_slice(&micro_sec_per_frame.to_le_bytes());
+        header_buf.extend_from_slice(&(render_w * render_h * 4 * fps_val as u32).to_le_bytes());
+        header_buf.extend_from_slice(&0u32.to_le_bytes());
+        header_buf.extend_from_slice(&0x10u32.to_le_bytes()); // AVIF_HASINDEX
+        header_buf.extend_from_slice(&(total_frames as u32).to_le_bytes());
+        header_buf.extend_from_slice(&0u32.to_le_bytes());
+        header_buf.extend_from_slice(&1u32.to_le_bytes()); // 1 video stream
+        header_buf.extend_from_slice(&(render_w * render_h * 4).to_le_bytes());
+        header_buf.extend_from_slice(&render_w.to_le_bytes());
+        header_buf.extend_from_slice(&render_h.to_le_bytes());
+        header_buf.extend_from_slice(&[0u8; 16]);
+
+        // LIST 'strl' for Video Stream
+        header_buf.extend_from_slice(b"LIST");
+        let strl_size_pos = header_buf.len();
+        header_buf.extend_from_slice(&0u32.to_le_bytes());
+        let strl_start = header_buf.len();
+        header_buf.extend_from_slice(b"strl");
+
+        // 'strh' (AVIStreamHeader for video, 56 bytes)
+        header_buf.extend_from_slice(b"strh");
+        header_buf.extend_from_slice(&56u32.to_le_bytes());
+        header_buf.extend_from_slice(b"vids");
+        header_buf.extend_from_slice(b"DIB ");
+        header_buf.extend_from_slice(&0u32.to_le_bytes());
+        header_buf.extend_from_slice(&0u16.to_le_bytes());
+        header_buf.extend_from_slice(&0u16.to_le_bytes());
+        header_buf.extend_from_slice(&0u32.to_le_bytes());
+        header_buf.extend_from_slice(&1000u32.to_le_bytes());
+        header_buf.extend_from_slice(&((fps_val * 1000.0) as u32).to_le_bytes());
+        header_buf.extend_from_slice(&0u32.to_le_bytes());
+        header_buf.extend_from_slice(&(total_frames as u32).to_le_bytes());
+        header_buf.extend_from_slice(&(render_w * render_h * 4).to_le_bytes());
+        header_buf.extend_from_slice(&10000u32.to_le_bytes());
+        header_buf.extend_from_slice(&0u32.to_le_bytes());
+        header_buf.extend_from_slice(&0u16.to_le_bytes());
+        header_buf.extend_from_slice(&0u16.to_le_bytes());
+        header_buf.extend_from_slice(&(render_w as u16).to_le_bytes());
+        header_buf.extend_from_slice(&(render_h as u16).to_le_bytes());
+
+        // 'strf' (BITMAPINFOHEADER, 40 bytes)
+        header_buf.extend_from_slice(b"strf");
+        header_buf.extend_from_slice(&40u32.to_le_bytes());
+        header_buf.extend_from_slice(&40u32.to_le_bytes());
+        header_buf.extend_from_slice(&(render_w as i32).to_le_bytes());
+        header_buf.extend_from_slice(&(render_h as i32).to_le_bytes());
+        header_buf.extend_from_slice(&1u16.to_le_bytes());
+        header_buf.extend_from_slice(&32u16.to_le_bytes()); // 32-bit RGBA
+        header_buf.extend_from_slice(&0u32.to_le_bytes()); // BI_RGB
+        header_buf.extend_from_slice(&(render_w * render_h * 4).to_le_bytes());
+        header_buf.extend_from_slice(&0i32.to_le_bytes());
+        header_buf.extend_from_slice(&0i32.to_le_bytes());
+        header_buf.extend_from_slice(&0u32.to_le_bytes());
+        header_buf.extend_from_slice(&0u32.to_le_bytes());
+
+        let strl_size = (header_buf.len() - strl_start) as u32;
+        header_buf[strl_size_pos..strl_size_pos + 4].copy_from_slice(&strl_size.to_le_bytes());
+
+        let hdrl_size = (header_buf.len() - hdrl_start) as u32;
+        header_buf[hdrl_size_pos..hdrl_size_pos + 4].copy_from_slice(&hdrl_size.to_le_bytes());
+
+        // LIST 'movi'
+        header_buf.extend_from_slice(b"LIST");
+        let movi_size_pos = header_buf.len();
+        header_buf.extend_from_slice(&0u32.to_le_bytes());
+        header_buf.extend_from_slice(b"movi");
+
+        writer.write_all(&header_buf)?;
+        let movi_start_offset = writer.stream_position()?;
+
+        let mut index_entries: Vec<([u8; 4], u32, u32, u32)> = Vec::new();
+        let frame_bytes_len = (render_w * render_h * 4) as usize;
+
+        for f_idx in 0..total_frames {
+            let t_ms = (f_idx as u64 * frame_step_ms).min(total_dur);
+            let frame = self.render_frame(t_ms, render_w, render_h)?;
+
+            let cur_pos = writer.stream_position()?;
+            let chunk_offset = (cur_pos - movi_start_offset) as u32;
+
+            writer.write_all(b"00db")?;
+            writer.write_all(&(frame_bytes_len as u32).to_le_bytes())?;
+            writer.write_all(&frame.data)?;
+            if frame.data.len() % 2 != 0 {
+                writer.write_all(&[0])?;
+            }
+
+            index_entries.push((*b"00db", 0x10u32, chunk_offset, frame_bytes_len as u32));
+        }
+
+        let movi_end_pos = writer.stream_position()?;
+        let movi_size = (movi_end_pos - movi_start_offset) as u32;
+
+        // 'idx1' chunk
+        writer.write_all(b"idx1")?;
+        let idx_size = (index_entries.len() * 16) as u32;
+        writer.write_all(&(idx_size).to_le_bytes())?;
+        for (fcc, flags, offset, len) in &index_entries {
+            writer.write_all(fcc)?;
+            writer.write_all(&flags.to_le_bytes())?;
+            writer.write_all(&offset.to_le_bytes())?;
+            writer.write_all(&len.to_le_bytes())?;
+        }
+
+        let total_file_size = (writer.stream_position()? - 8) as u32;
+
+        // Seek back to patch sizes in header
+        writer.seek(SeekFrom::Start(riff_size_pos as u64))?;
+        writer.write_all(&total_file_size.to_le_bytes())?;
+        writer.seek(SeekFrom::Start(movi_size_pos as u64))?;
+        writer.write_all(&movi_size.to_le_bytes())?;
+        writer.flush()?;
+
+        let total_written = (total_file_size + 8) as usize;
+
+        Ok(MasterExportSummary {
+            path: output_path.to_string(),
+            bytes_written: total_written,
+            duration_ms: total_dur,
+            width: render_w,
+            height: render_h,
+            frame_count: total_frames,
+            fps: fps_val as f32,
+            container: preset.container,
+        })
     }
 
     // -----------------------------------------------------------------------

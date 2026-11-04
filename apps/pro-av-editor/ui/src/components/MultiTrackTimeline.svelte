@@ -218,14 +218,20 @@
 
   async function addNewTrack(trackType: 'Video' | 'Audio') {
     try {
-      await tauriInvoke('add_track_cmd', {
-        name: '',
+      const existing = project?.tracks.filter((t) => t.track_type === trackType).length || 0;
+      const trackName = `${trackType} ${existing + 1}`;
+      const updated = await tauriInvoke<TimelineProject>('add_track_cmd', {
+        name: trackName,
         trackType,
       });
-      showNotice(`Added ${trackType} track`);
+      if (updated && updated.tracks) {
+        project = updated;
+      }
+      showNotice(`Added ${trackName}`);
       dispatch('refreshProject');
     } catch (e) {
       console.error('Failed to add track:', e);
+      showNotice(`Failed to add track: ${e}`);
     }
   }
 

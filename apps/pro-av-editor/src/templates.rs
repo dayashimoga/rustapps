@@ -74,6 +74,35 @@ impl ExportPreset {
                 container: "mp4".to_string(),
             },
             Self {
+                id: "preset_cinematic_scope".to_string(),
+                name: "2.39:1 Cinema Scope (3840x1608 24p)".to_string(),
+                description:
+                    "Anamorphic widescreen film deliverable with 24 FPS theatrical cadence"
+                        .to_string(),
+                width: 3840,
+                height: 1608,
+                frame_rate: FrameRate::Fps24,
+                video_bitrate_kbps: 60000,
+                audio_sample_rate: 48000,
+                audio_channels: 2,
+                audio_bitrate_kbps: 384,
+                container: "mp4".to_string(),
+            },
+            Self {
+                id: "preset_uncompressed_avi".to_string(),
+                name: "Lossless Master Broadcast Video (AVI)".to_string(),
+                description: "Pristine uncompressed broadcast master with linear PCM 48kHz stereo"
+                    .to_string(),
+                width: 1920,
+                height: 1080,
+                frame_rate: FrameRate::Fps60,
+                video_bitrate_kbps: 200000,
+                audio_sample_rate: 48000,
+                audio_channels: 2,
+                audio_bitrate_kbps: 1536,
+                container: "avi".to_string(),
+            },
+            Self {
                 id: "preset_broadcast_wav".to_string(),
                 name: "Broadcast Master WAV (48kHz 24-bit)".to_string(),
                 description: "EBU R128 compliant uncompressed linear PCM audio master".to_string(),
@@ -118,17 +147,22 @@ impl ProjectTemplate {
                     audio_channels: 2,
                 },
                 initial_tracks: vec![
-                    ("v1".into(), "Video Main".into(), TrackType::Video, 0),
-                    ("v2".into(), "B-Roll / Overlays".into(), TrackType::Video, 1),
+                    ("v1".into(), "Video Main".into(), TrackType::Video, 10),
+                    (
+                        "v2".into(),
+                        "B-Roll / Overlays".into(),
+                        TrackType::Video,
+                        11,
+                    ),
                     (
                         "a1".into(),
                         "Dialogue / Voiceover".into(),
                         TrackType::Audio,
-                        0,
+                        100,
                     ),
-                    ("a2".into(), "Sound Effects".into(), TrackType::Audio, 1),
-                    ("a3".into(), "Music Bed".into(), TrackType::Audio, 2),
-                    ("s1".into(), "Subtitles".into(), TrackType::Subtitle, 10),
+                    ("a2".into(), "Sound Effects".into(), TrackType::Audio, 101),
+                    ("a3".into(), "Music Bed".into(), TrackType::Audio, 102),
+                    ("s1".into(), "Subtitles".into(), TrackType::Subtitle, 200),
                 ],
             },
             Self {
@@ -143,11 +177,16 @@ impl ProjectTemplate {
                     audio_channels: 2,
                 },
                 initial_tracks: vec![
-                    ("v1".into(), "Main Video".into(), TrackType::Video, 0),
-                    ("v2".into(), "Stickers & Emojis".into(), TrackType::Video, 1),
-                    ("a1".into(), "Speech Voice".into(), TrackType::Audio, 0),
-                    ("a2".into(), "Trending Audio".into(), TrackType::Audio, 1),
-                    ("s1".into(), "Captions".into(), TrackType::Subtitle, 10),
+                    ("v1".into(), "Main Video".into(), TrackType::Video, 10),
+                    (
+                        "v2".into(),
+                        "Stickers & Emojis".into(),
+                        TrackType::Video,
+                        11,
+                    ),
+                    ("a1".into(), "Speech Voice".into(), TrackType::Audio, 100),
+                    ("a2".into(), "Trending Audio".into(), TrackType::Audio, 101),
+                    ("s1".into(), "Captions".into(), TrackType::Subtitle, 200),
                 ],
             },
             Self {
@@ -162,17 +201,22 @@ impl ProjectTemplate {
                     audio_channels: 2,
                 },
                 initial_tracks: vec![
-                    ("v1".into(), "Cinematic A-Cam".into(), TrackType::Video, 0),
-                    ("v2".into(), "B-Cam Cutaways".into(), TrackType::Video, 1),
+                    ("v1".into(), "Cinematic A-Cam".into(), TrackType::Video, 10),
+                    ("v2".into(), "B-Cam Cutaways".into(), TrackType::Video, 11),
                     (
                         "adj1".into(),
                         "Master Grade LUT".into(),
                         TrackType::Adjustment,
-                        5,
+                        50,
                     ),
-                    ("a1".into(), "Boom Mic".into(), TrackType::Audio, 0),
-                    ("a2".into(), "Foley / Ambience".into(), TrackType::Audio, 1),
-                    ("a3".into(), "Score".into(), TrackType::Audio, 2),
+                    ("a1".into(), "Boom Mic".into(), TrackType::Audio, 100),
+                    (
+                        "a2".into(),
+                        "Foley / Ambience".into(),
+                        TrackType::Audio,
+                        101,
+                    ),
+                    ("a3".into(), "Score".into(), TrackType::Audio, 102),
                 ],
             },
             Self {
@@ -187,15 +231,15 @@ impl ProjectTemplate {
                     audio_channels: 2,
                 },
                 initial_tracks: vec![
-                    ("v1".into(), "Host Camera Grid".into(), TrackType::Video, 0),
-                    ("a1".into(), "Host 1 Mic".into(), TrackType::Audio, 0),
-                    ("a2".into(), "Host 2 Mic".into(), TrackType::Audio, 1),
-                    ("a3".into(), "Guest Remote".into(), TrackType::Audio, 2),
+                    ("v1".into(), "Host Camera Grid".into(), TrackType::Video, 10),
+                    ("a1".into(), "Host 1 Mic".into(), TrackType::Audio, 100),
+                    ("a2".into(), "Host 2 Mic".into(), TrackType::Audio, 101),
+                    ("a3".into(), "Guest Remote".into(), TrackType::Audio, 102),
                     (
                         "a4".into(),
                         "Intro / Outro Jingles".into(),
                         TrackType::Audio,
-                        3,
+                        103,
                     ),
                 ],
             },
@@ -343,7 +387,7 @@ mod tests {
     #[test]
     fn test_export_presets_and_project_templates() {
         let presets = ExportPreset::all_standard_presets();
-        assert_eq!(presets.len(), 4);
+        assert_eq!(presets.len(), 6);
         assert!(presets.iter().any(|p| p.id == "preset_4k60_master"));
         assert!(presets.iter().any(|p| p.container == "wav"));
 

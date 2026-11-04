@@ -30,6 +30,34 @@
   const EQ_FREQS = [40, 100, 250, 800, 2000, 5000, 10000, 18000];
   let eqGains = [0, 0, 0, 0, 0, 0, 0, 0];
 
+  type EqPreset =
+    | 'flat'
+    | 'dialogue_clarity'
+    | 'vocal_warmth'
+    | 'podcast_deesser'
+    | 'bass_punch'
+    | 'acoustic'
+    | 'telephone';
+
+  function applyEqPreset(preset: EqPreset) {
+    if (preset === 'dialogue_clarity') {
+      eqGains = [-6, -2, -3, 1, 3.5, 2.5, 1, 0];
+    } else if (preset === 'vocal_warmth') {
+      eqGains = [-2, 2.5, 2, 0, 1, 1.5, 3, 2];
+    } else if (preset === 'podcast_deesser') {
+      eqGains = [0, 0, 0, 0, 1, -4.5, -2, 0];
+    } else if (preset === 'bass_punch') {
+      eqGains = [5, 4, 1.5, -1, 0, 1, 1.5, 0];
+    } else if (preset === 'acoustic') {
+      eqGains = [-3, 1, 0, 1, 2, 3, 4, 3];
+    } else if (preset === 'telephone') {
+      eqGains = [-12, -8, 2, 4, 3, -6, -12, -12];
+    } else {
+      eqGains = [0, 0, 0, 0, 0, 0, 0, 0];
+    }
+    applyEqUpdate();
+  }
+
   async function applyEqUpdate() {
     try {
       loudness = await tauriInvoke<LoudnessMeterData>('update_master_eq_cmd', {
@@ -126,8 +154,29 @@
     <div class="eq-section">
       <div class="eq-header">
         <span class="section-title">8-Band Parametric Equalizer</span>
-        <button class="reset-eq-btn" on:click={() => { eqGains = [0, 0, 0, 0, 0, 0, 0, 0]; applyEqUpdate(); }}>
+        <button class="reset-eq-btn" on:click={() => applyEqPreset('flat')}>
           Flat EQ
+        </button>
+      </div>
+      <div class="eq-presets-bar">
+        <span class="preset-label">PRESETS:</span>
+        <button type="button" class="eq-chip" on:click={() => applyEqPreset('dialogue_clarity')}>
+          🎙️ Dialogue
+        </button>
+        <button type="button" class="eq-chip" on:click={() => applyEqPreset('vocal_warmth')}>
+          🗣️ Warm Voice
+        </button>
+        <button type="button" class="eq-chip" on:click={() => applyEqPreset('podcast_deesser')}>
+          🎧 De-Esser
+        </button>
+        <button type="button" class="eq-chip" on:click={() => applyEqPreset('bass_punch')}>
+          🔊 Bass Punch
+        </button>
+        <button type="button" class="eq-chip" on:click={() => applyEqPreset('acoustic')}>
+          🎸 Acoustic
+        </button>
+        <button type="button" class="eq-chip" on:click={() => applyEqPreset('telephone')}>
+          📻 Radio
         </button>
       </div>
       <div class="eq-bands-grid">
@@ -325,6 +374,37 @@
     font-size: 0.7rem;
     padding: 0.2rem 0.5rem;
     border-radius: var(--radius-sm);
+  }
+
+  .eq-presets-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    padding-bottom: 0.3rem;
+  }
+
+  .preset-label {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--text-faint, #64748b);
+  }
+
+  .eq-chip {
+    background: rgba(99, 102, 241, 0.12);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    color: #a5b4fc;
+    font-size: 0.68rem;
+    padding: 0.2rem 0.45rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .eq-chip:hover {
+    background: rgba(99, 102, 241, 0.25);
+    border-color: #818cf8;
+    color: #ffffff;
   }
 
   .eq-bands-grid {

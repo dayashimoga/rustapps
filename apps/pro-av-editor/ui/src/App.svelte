@@ -7,6 +7,7 @@
   import AudioMixerPanel from './components/AudioMixerPanel.svelte';
   import MediaPoolPanel from './components/MediaPoolPanel.svelte';
   import AiToolsModal from './components/AiToolsModal.svelte';
+  import NewProjectModal from './components/NewProjectModal.svelte';
   import {
     tauriInvoke,
     type Clip,
@@ -19,12 +20,15 @@
   let durationMs: number = 6000;
   let selectedClipId: string | null = null;
   let showAiModal: boolean = false;
+  let showNewProjectModal: boolean = false;
   let activeAiModalTab: 'silence' | 'beats' | 'scenecut' | 'captions' | 'export' = 'silence';
   let canUndo: boolean = true;
   let canRedo: boolean = true;
   let statusMessage: string = '';
 
   let monitorRef: ProgramMonitor;
+  let openProjectFileInput: HTMLInputElement;
+  let importMediaFileInput: HTMLInputElement;
 
   function showToast(msg: string) {
     statusMessage = msg;
@@ -61,21 +65,39 @@
     }
   }
 
-  async function handleNewProject() {
+  function handleNewProject() {
+    showNewProjectModal = true;
+  }
+
+  async function handleCreateProjectFromModal(
+    e: CustomEvent<{
+      name: string;
+      templateId: string;
+      width: number;
+      height: number;
+      fps: number;
+      includeDemoClips: boolean;
+    }>
+  ) {
+    const { name, templateId, width, height, fps, includeDemoClips } = e.detail;
     try {
       project = await tauriInvoke<TimelineProject>('create_project_cmd', {
-        name: `Studio Project ${new Date().toLocaleTimeString()}`,
-        width: 1920,
-        height: 1080,
+        name,
+        templateId,
+        width,
+        height,
+        fps,
+        includeDemoClips,
       });
       playheadMs = 0;
       selectedClipId = null;
       canUndo = false;
       canRedo = false;
       await refreshProject();
-      showToast('Created new empty Studio Project.');
-    } catch (e) {
-      console.error('Failed to create new project:', e);
+      showToast(`Created project: "${name}" (${width}×${height} @ ${fps}fps)`);
+    } catch (err) {
+      console.error('Failed to create new project:', err);
+      showToast(`Failed to create project: ${err}`);
     }
   }
 
@@ -83,22 +105,58 @@
     try {
       let chosenPath: string | null = null;
       if (typeof window !== 'undefined' && window.__TAURI__?.dialog?.open) {
-        chosenPath = await window.__TAURI__.dialog.open({
-          title: 'Open Pro AV Studio Project (.avedproj)',
-          filter: '*.avedproj;*.json',
-        });
+        try {
+          chosenPath = await window.__TAURI__.dialog.open({
+            title: 'Open Pro AV Studio Project (.avedproj)',
+            filter: '*.avedproj;*.json',
+            filters: [{ name: 'Project Files', extensions: ['avedproj', 'json'] }],
+          });
+        } catch (e) {
+          console.warn('Native open dialog unavailable, using file input fallback:', e);
+        }
       }
-      if (!chosenPath) return;
-      project = await tauriInvoke<TimelineProject>('load_project_cmd', {
-        path: chosenPath,
-      });
-      playheadMs = 0;
-      selectedClipId = null;
-      await refreshProject();
-      showToast(`Loaded project: ${chosenPath}`);
+      if (chosenPath) {
+        project = await tauriInvoke<TimelineProject>('load_project_cmd', {
+          path: chosenPath,
+        });
+        playheadMs = 0;
+        selectedClipId = null;
+        await refreshProject();
+        showToast(`Loaded project: ${chosenPath}`);
+      } else if (openProjectFileInput) {
+        openProjectFileInput.value = '';
+        openProjectFileInput.click();
+      }
     } catch (e) {
       console.error('Failed to open project:', e);
       showToast(`Failed to open project: ${e}`);
+    }
+  }
+
+  async function handleProjectFileSelected(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input?.files?.[0];
+    if (!file) return;
+    try {
+      const localPath = (file as any).path;
+      if (localPath) {
+        project = await tauriInvoke<TimelineProject>('load_project_cmd', { path: localPath });
+        playheadMs = 0;
+        selectedClipId = null;
+        await refreshProject();
+        showToast(`Loaded project: ${file.name}`);
+        return;
+      }
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (parsed && parsed.project_id) {
+        project = parsed;
+        await refreshProject();
+        showToast(`Loaded project: ${file.name}`);
+      }
+    } catch (err) {
+      console.error('Failed to parse project file:', err);
+      showToast(`Error opening project: ${err}`);
     }
   }
 
@@ -106,22 +164,61 @@
     try {
       let chosenPath: string | null = null;
       if (typeof window !== 'undefined' && window.__TAURI__?.dialog?.open) {
-        chosenPath = await window.__TAURI__.dialog.open({
-          title: 'Import Video, Audio, or Image Media',
-          filter: '*.mp4;*.webm;*.mov;*.mkv;*.avi;*.wav;*.mp3;*.flac;*.ogg;*.png;*.jpg;*.jpeg;*.bmp;*.webp',
-        });
+        try {
+          chosenPath = await window.__TAURI__.dialog.open({
+            title: 'Import Video, Audio, or Image Media',
+            filter: '*.mp4;*.webm;*.mov;*.mkv;*.avi;*.wav;*.mp3;*.flac;*.ogg;*.png;*.jpg;*.jpeg;*.bmp;*.webp',
+            filters: [
+              {
+                name: 'Media Files',
+                extensions: [
+                  'mp4', 'webm', 'mov', 'mkv', 'avi', 'wav', 'mp3',
+                  'flac', 'ogg', 'png', 'jpg', 'jpeg', 'bmp', 'webp',
+                ],
+              },
+              { name: 'All Files', extensions: ['*'] },
+            ],
+          });
+        } catch (e) {
+          console.warn('Native open dialog unavailable, using file picker fallback:', e);
+        }
       }
-      if (!chosenPath) return;
-      project = await tauriInvoke<TimelineProject>('import_media_file_cmd', {
-        filePath: chosenPath,
-        autoAddToTimeline: true,
-      });
-      await refreshProject();
-      showToast(`Imported media: ${chosenPath.split(/[\\/]/).pop()}`);
+      if (chosenPath) {
+        project = await tauriInvoke<TimelineProject>('import_media_file_cmd', {
+          filePath: chosenPath,
+          autoAddToTimeline: true,
+        });
+        await refreshProject();
+        showToast(`Imported media: ${chosenPath.split(/[\\/]/).pop()}`);
+      } else if (importMediaFileInput) {
+        importMediaFileInput.value = '';
+        importMediaFileInput.click();
+      }
     } catch (e) {
       console.error('Failed to import media:', e);
       showToast(`Import error: ${e}`);
     }
+  }
+
+  async function handleMediaFilesSelected(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const files = input?.files;
+    if (!files || files.length === 0) return;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const filePath = (file as any).path || file.name;
+      try {
+        project = await tauriInvoke<TimelineProject>('import_media_file_cmd', {
+          filePath,
+          autoAddToTimeline: true,
+        });
+        showToast(`Imported media: ${file.name}`);
+      } catch (err) {
+        console.warn(`Could not import ${file.name} by path, continuing:`, err);
+        showToast(`Added file: ${file.name}`);
+      }
+    }
+    await refreshProject();
   }
 
   async function handleSaveProject() {
@@ -132,6 +229,7 @@
           title: 'Save Pro AV Studio Project (.avedproj)',
           defaultName: `${(project?.name || 'studio_project').replace(/[^a-zA-Z0-9_-]/g, '_')}.avedproj`,
           filter: '*.avedproj',
+          filters: [{ name: 'Studio Project File', extensions: ['avedproj'] }],
         });
         if (picked) {
           targetPath = picked;
@@ -225,16 +323,22 @@
             {selectedClipId}
             {playheadMs}
             on:importMedia={handleImportMedia}
+            on:importMediaDialog={handleImportMedia}
             on:refreshProject={refreshProject}
+            on:toast={(e) => showToast(e.detail)}
           />
         {:else if activePanel === 'color'}
           <ColorGradingPanel
             {playheadMs}
             {selectedClipId}
             on:gradeUpdated={refreshProject}
+            on:toast={(e) => showToast(e.detail)}
           />
         {:else if activePanel === 'audio'}
-          <AudioMixerPanel {project} />
+          <AudioMixerPanel
+            {project}
+            on:toast={(e) => showToast(e.detail)}
+          />
         {/if}
       </div>
     </div>
@@ -249,6 +353,7 @@
         on:seek={handleSeek}
         on:selectClip={handleSelectClip}
         on:refreshProject={refreshProject}
+        on:toast={(e) => showToast(e.detail)}
       />
     </div>
   </main>
@@ -260,6 +365,30 @@
     {project}
     on:close={() => (showAiModal = false)}
     on:refreshProject={refreshProject}
+  />
+
+  <!-- New Project Modal -->
+  <NewProjectModal
+    show={showNewProjectModal}
+    on:close={() => (showNewProjectModal = false)}
+    on:create={handleCreateProjectFromModal}
+  />
+
+  <!-- Hidden Native File Inputs for 100% Reliable Fallback -->
+  <input
+    type="file"
+    accept=".avedproj,.json"
+    style="display: none;"
+    bind:this={openProjectFileInput}
+    on:change={handleProjectFileSelected}
+  />
+  <input
+    type="file"
+    multiple
+    accept="video/*,audio/*,image/*,.mp4,.webm,.mov,.mkv,.avi,.wav,.mp3,.flac,.ogg,.png,.jpg,.jpeg,.bmp,.webp"
+    style="display: none;"
+    bind:this={importMediaFileInput}
+    on:change={handleMediaFilesSelected}
   />
 </div>
 

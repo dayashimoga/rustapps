@@ -643,6 +643,12 @@ fn url_decode(input: &str) -> String {
 #[cfg(target_os = "windows")]
 fn build_windows_filter_string(opts: &Value) -> String {
     let mut parts = Vec::new();
+    if let Some(f_str) = opts.get("filter").and_then(|v| v.as_str()) {
+        let clean = f_str.trim();
+        if !clean.is_empty() {
+            parts.push(format!("Supported Files ({})|{}", clean, clean));
+        }
+    }
     if let Some(filters) = opts.get("filters").and_then(|v| v.as_array()) {
         for f in filters {
             let name = f
@@ -686,8 +692,7 @@ fn invoke_native_open_dialog(title: &str, is_dir: bool, multiple: bool, opts: &V
                  $f = New-Object System.Windows.Forms.FolderBrowserDialog; \
                  $f.Description = '{}'; \
                  $f.ShowNewFolderButton = $true; \
-                 $owner = New-Object System.Windows.Forms.Form -Property @{{TopMost = $true}}; \
-                 if ($f.ShowDialog($owner) -eq 'OK') {{ [Console]::Out.Write($f.SelectedPath) }}",
+                 if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ [Console]::Out.Write($f.SelectedPath) }}",
                 safe_title
             )
         } else {
@@ -699,8 +704,7 @@ fn invoke_native_open_dialog(title: &str, is_dir: bool, multiple: bool, opts: &V
                  $f.Title = '{}'; \
                  $f.Filter = '{}'; \
                  $f.Multiselect = {}; \
-                 $owner = New-Object System.Windows.Forms.Form -Property @{{TopMost = $true}}; \
-                 if ($f.ShowDialog($owner) -eq 'OK') {{ \
+                 if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ \
                    if ($f.Multiselect) {{ [Console]::Out.Write(($f.FileNames -join \"`n\")) }} \
                    else {{ [Console]::Out.Write($f.FileName) }} \
                  }}",
@@ -711,7 +715,6 @@ fn invoke_native_open_dialog(title: &str, is_dir: bool, multiple: bool, opts: &V
         if let Ok(output) = Command::new("powershell")
             .args([
                 "-NoProfile",
-                "-NonInteractive",
                 "-STA",
                 "-WindowStyle",
                 "Hidden",
@@ -802,14 +805,12 @@ fn invoke_native_save_dialog(title: &str, default_path: &str, opts: &Value) -> V
              $f.Title = '{}'; \
              $f.Filter = '{}'; \
              $f.FileName = '{}'; \
-             $owner = New-Object System.Windows.Forms.Form -Property @{{TopMost = $true}}; \
-             if ($f.ShowDialog($owner) -eq 'OK') {{ [Console]::Out.Write($f.FileName) }}",
+             if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ [Console]::Out.Write($f.FileName) }}",
             safe_title, filter, safe_default
         );
         if let Ok(output) = Command::new("powershell")
             .args([
                 "-NoProfile",
-                "-NonInteractive",
                 "-STA",
                 "-WindowStyle",
                 "Hidden",

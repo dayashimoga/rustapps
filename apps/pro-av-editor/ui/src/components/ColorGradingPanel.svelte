@@ -326,7 +326,21 @@
     }
   }
 
-  function applyPreset(preset: 'teal_orange' | 'bleach' | 'golden' | 'noir' | 'neutral') {
+  type ColorPreset =
+    | 'teal_orange'
+    | 'golden'
+    | 'bleach'
+    | 'noir'
+    | 'neutral'
+    | 'cyberpunk'
+    | 'portra400'
+    | 'velvia50'
+    | 'nordic'
+    | 'polaroid'
+    | 'cross_process'
+    | 'vibrant_hdr';
+
+  function applyPreset(preset: ColorPreset) {
     if (preset === 'teal_orange') {
       exposure = 0.2;
       contrast = 1.25;
@@ -335,14 +349,6 @@
       tint = -6;
       liftR = -0.08; liftG = 0.04; liftB = 0.12; // Cyan shadows
       gainR = 0.15; gainG = 0.06; gainB = -0.10; // Warm amber highlights
-    } else if (preset === 'bleach') {
-      exposure = 0.0;
-      contrast = 1.5;
-      saturation = 0.35;
-      temperature = -4;
-      tint = 2;
-      liftR = -0.05; liftG = -0.05; liftB = -0.05;
-      gainR = 0.08; gainG = 0.08; gainB = 0.08;
     } else if (preset === 'golden') {
       exposure = 0.15;
       contrast = 1.1;
@@ -351,6 +357,14 @@
       tint = 8;
       liftR = 0.04; liftG = 0.02; liftB = -0.06;
       gainR = 0.18; gainG = 0.12; gainB = -0.08;
+    } else if (preset === 'bleach') {
+      exposure = 0.0;
+      contrast = 1.5;
+      saturation = 0.35;
+      temperature = -4;
+      tint = 2;
+      liftR = -0.05; liftG = -0.05; liftB = -0.05;
+      gainR = 0.08; gainG = 0.08; gainB = 0.08;
     } else if (preset === 'noir') {
       exposure = -0.1;
       contrast = 1.6;
@@ -359,6 +373,62 @@
       tint = 0;
       liftR = -0.1; liftG = -0.1; liftB = -0.1;
       gainR = 0.12; gainG = 0.12; gainB = 0.12;
+    } else if (preset === 'cyberpunk') {
+      exposure = 0.1;
+      contrast = 1.4;
+      saturation = 1.55;
+      temperature = -12;
+      tint = 22;
+      liftR = -0.12; liftG = 0.08; liftB = 0.20;
+      gainR = 0.22; gainG = -0.05; gainB = 0.18;
+    } else if (preset === 'portra400') {
+      exposure = 0.1;
+      contrast = 0.95;
+      saturation = 1.08;
+      temperature = 12;
+      tint = 4;
+      liftR = 0.03; liftG = 0.01; liftB = -0.02;
+      gainR = 0.08; gainG = 0.06; gainB = 0.02;
+    } else if (preset === 'velvia50') {
+      exposure = 0.05;
+      contrast = 1.35;
+      saturation = 1.6;
+      temperature = -6;
+      tint = -8;
+      liftR = -0.06; liftG = 0.08; liftB = -0.02;
+      gainR = 0.12; gainG = 0.14; gainB = 0.04;
+    } else if (preset === 'nordic') {
+      exposure = -0.08;
+      contrast = 1.25;
+      saturation = 0.75;
+      temperature = -28;
+      tint = -4;
+      liftR = -0.04; liftG = 0.02; liftB = 0.15;
+      gainR = -0.02; gainG = 0.02; gainB = 0.08;
+    } else if (preset === 'polaroid') {
+      exposure = 0.18;
+      contrast = 0.88;
+      saturation = 1.15;
+      temperature = 16;
+      tint = 10;
+      liftR = 0.08; liftG = 0.06; liftB = 0.02;
+      gainR = 0.06; gainG = 0.08; gainB = -0.04;
+    } else if (preset === 'cross_process') {
+      exposure = 0.08;
+      contrast = 1.45;
+      saturation = 1.25;
+      temperature = -10;
+      tint = 18;
+      liftR = -0.08; liftG = 0.12; liftB = -0.04;
+      gainR = 0.18; gainG = -0.04; gainB = 0.14;
+    } else if (preset === 'vibrant_hdr') {
+      exposure = 0.22;
+      contrast = 1.3;
+      saturation = 1.45;
+      temperature = 6;
+      tint = 0;
+      liftR = -0.02; liftG = -0.02; liftB = -0.02;
+      gainR = 0.10; gainG = 0.10; gainB = 0.10;
     } else {
       resetGrading();
       return;
@@ -384,7 +454,7 @@
   <div class="wheels-and-sliders">
     <!-- Presets Toolbar -->
     <div class="presets-toolbar">
-      <span class="toolbar-title">Creative LUT Presets:</span>
+      <span class="toolbar-title">Creative Looks &amp; Film Stocks:</span>
       <div class="preset-btns">
         <button type="button" class="preset-btn" on:click={() => applyPreset('teal_orange')}>
           🎬 Teal &amp; Orange
@@ -392,14 +462,35 @@
         <button type="button" class="preset-btn" on:click={() => applyPreset('golden')}>
           ☀️ Golden Hour
         </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('cyberpunk')}>
+          🌆 Cyberpunk
+        </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('portra400')}>
+          📷 Portra 400
+        </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('velvia50')}>
+          🌄 Velvia 50
+        </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('nordic')}>
+          🧊 Nordic Cold
+        </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('polaroid')}>
+          📸 Polaroid 70s
+        </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('cross_process')}>
+          🌈 Cross-Process
+        </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('vibrant_hdr')}>
+          💥 Vibrant HDR
+        </button>
         <button type="button" class="preset-btn" on:click={() => applyPreset('bleach')}>
           ⚔️ Bleach Bypass
         </button>
         <button type="button" class="preset-btn" on:click={() => applyPreset('noir')}>
-          🎞️ Film Noir (B&amp;W)
+          🎞️ Film Noir
         </button>
         <button type="button" class="preset-btn" on:click={() => applyPreset('neutral')}>
-          ⚖️ Rec.709 Neutral
+          ⚖️ Rec.709 Flat
         </button>
       </div>
     </div>
