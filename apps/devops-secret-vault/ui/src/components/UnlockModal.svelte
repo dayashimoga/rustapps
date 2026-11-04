@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import { openNativeDialog } from '../lib/ipc';
 
   export let isInitialized: boolean = false;
   export let errorMessage: string = '';
@@ -43,36 +44,15 @@
 
   async function handleBrowseVaultFile() {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const tauri = (window as any).__TAURI__;
-      if (tauri?.dialog?.open) {
-        const picked = await tauri.dialog.open({
-          title: 'Open or Select DevOps Secret Vault Database (.db)',
-          directory: false,
-          multiple: false,
-          filters: 'Vault Database (*.db;*.sqlite)|*.db;*.sqlite|All Files (*.*)|*.*',
-        });
-        if (typeof picked === 'string' && picked.trim()) {
-          dispatch('switchVault', { path: picked.trim() });
-          return;
-        }
-      }
-      if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location?.protocol.startsWith('http')) {
-        const res = await fetch('/__dialog/open', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: 'Open or Select DevOps Secret Vault Database (.db)',
-            filters: [{ name: 'Vault Database', extensions: ['db', 'sqlite'] }],
-          }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.path) {
-            dispatch('switchVault', { path: data.path });
-            return;
-          }
-        }
+      const picked = await openNativeDialog({
+        title: 'Open or Select DevOps Secret Vault Database (.db)',
+        directory: false,
+        multiple: false,
+        filter: 'Vault Database (*.db;*.sqlite)|*.db;*.sqlite|All Files (*.*)|*.*',
+      });
+      if (typeof picked === 'string' && picked.trim()) {
+        dispatch('switchVault', { path: picked.trim() });
+        return;
       }
     } catch (e) {
       console.error('Vault file dialog error:', e);

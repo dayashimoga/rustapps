@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import { invokeIpc } from '../lib/ipc';
 
   export let isOpen: boolean = false;
   export let mode: 'split' | 'unlock' = 'split';
@@ -23,26 +24,6 @@
   let shareTokens: string[] = ['', '', ''];
   let isUnlocking: boolean = false;
   let unlockError: string = '';
-
-  async function invokeIpc<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
-    const tauri = (window as unknown as { __TAURI__?: { invoke?: (c: string, a: Record<string, unknown>) => Promise<T> } }).__TAURI__;
-    if (tauri?.invoke) {
-      return await tauri.invoke(cmd, args);
-    }
-    if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
-      const res = await fetch('/__ipc/' + encodeURIComponent(cmd), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(args || {}),
-      });
-      if (res.ok) {
-        const payload = await res.json();
-        if (payload && '__ipc_data' in payload) return payload.__ipc_data as T;
-        return payload as T;
-      }
-    }
-    throw new Error('IPC bridge not available');
-  }
 
   function formatShareToken(share: { index: number; threshold: number; total_shares: number; data: number[] }): string {
     const hexData = share.data.map(b => b.toString(16).padStart(2, '0')).join('');

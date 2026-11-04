@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { invokeIpc, openNativeDialog, getDrivesAndPlaces, isDesktopApp } from './lib/ipc';
   import Header from './components/Header.svelte';
   import FileBrowser from './components/FileBrowser.svelte';
   import FilePreviewPane from './components/FilePreviewPane.svelte';
@@ -66,324 +67,19 @@
   let inspectedDoc: ExtractedDocument | null = null;
   let isDocModalOpen = false;
 
-  // Tauri IPC Bridge
+  // Standardized Desktop IPC Bridge
   async function invokeTauri<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
-    const tauri = (window as unknown as {
-      __TAURI__?: {
-        invoke?: (cmd: string, args: Record<string, unknown>) => Promise<T>;
-        core?: { invoke: (cmd: string, args: Record<string, unknown>) => Promise<T> };
-      };
-    }).__TAURI__;
-    if (tauri?.core?.invoke) {
-      return await tauri.core.invoke(cmd, args);
-    }
-    if (tauri?.invoke) {
-      return await tauri.invoke(cmd, args);
-    }
-    if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
-      try {
-        const response = await fetch('/__ipc/' + encodeURIComponent(cmd), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(args || {}),
-        });
-        if (response.ok) {
-          const payload = await response.json();
-          if (payload && '__ipc_data' in payload) {
-            return payload.__ipc_data as T;
-          }
-        } else {
-          const errPayload = await response.json().catch(() => null);
-          if (errPayload && errPayload.__ipc_error) {
-            throw new Error(errPayload.__ipc_error);
-          }
-          throw new Error(`Command "${cmd}" failed with status ${response.status}`);
-        }
-      } catch (e: any) {
-        if (e && e.message && !e.message.includes('Failed to fetch')) {
-          throw e;
-        }
-        // Fallback for headless unit test environments
-      }
-    }
-
-    // Comprehensive in-browser development mock fallback
-    if (cmd === 'list_directory_cmd') {
-      const mockItems: FileItem[] = [
-        { path: `${currentPath}/shared`, file_name: 'shared', extension: null, size_bytes: 0, is_dir: true, modified_timestamp_secs: 1729300000, is_readonly: false },
-        { path: `${currentPath}/apps`, file_name: 'apps', extension: null, size_bytes: 0, is_dir: true, modified_timestamp_secs: 1729300001, is_readonly: false },
-        { path: `${currentPath}/docs`, file_name: 'docs', extension: null, size_bytes: 0, is_dir: true, modified_timestamp_secs: 1729300002, is_readonly: false },
-        { path: `${currentPath}/Cargo.toml`, file_name: 'Cargo.toml', extension: 'toml', size_bytes: 2118, is_dir: false, modified_timestamp_secs: 1729300003, is_readonly: false },
-        { path: `${currentPath}/README.md`, file_name: 'README.md', extension: 'md', size_bytes: 4096, is_dir: false, modified_timestamp_secs: 1729300004, is_readonly: false },
-        { path: `${currentPath}/photo_dup_1.jpg`, file_name: 'photo_dup_1.jpg', extension: 'jpg', size_bytes: 1048576, is_dir: false, modified_timestamp_secs: 1729300005, is_readonly: false },
-        { path: `${currentPath}/photo_dup_2.jpg`, file_name: 'photo_dup_2.jpg', extension: 'jpg', size_bytes: 1048576, is_dir: false, modified_timestamp_secs: 1729300006, is_readonly: false },
-      ];
-      return {
-        current_path: currentPath,
-        parent_path: 'H:/',
-        items: mockItems,
-        total_count: mockItems.length,
-        total_size_bytes: mockItems.reduce((acc, i) => acc + i.size_bytes, 0),
-      } as unknown as T;
-    }
-
-    if (cmd === 'search_files_cmd') {
-      const query = (args.query as string || '').toLowerCase();
-      const filtered = listing.items.filter(i => i.file_name.toLowerCase().includes(query));
-      return filtered as unknown as T;
-    }
-
-    if (cmd === 'scan_duplicates_cmd') {
-      return {
-        total_scanned_files: 42,
-        total_scanned_bytes: 25000000,
-        duplicate_groups: [
-          {
-            file_size: 1048576,
-            blake3_hash: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
-            file_paths: [`${currentPath}/photo_dup_1.jpg`, `${currentPath}/photo_dup_2.jpg`],
-            wasted_bytes: 1048576,
-          },
-        ],
-        total_duplicate_files: 2,
-        potential_reclaimed_bytes: 1048576,
-        elapsed_millis: 14,
-      } as unknown as T;
-    }
-
-    if (cmd === 'analyze_storage_cmd') {
-      return {
-        root_path: currentPath,
-        total_files: 38,
-        total_dirs: 12,
-        total_size_bytes: 145000000,
-        extension_counts: { rs: 24, svelte: 8, md: 4, toml: 2 },
-        extension_sizes: { rs: 95000000, svelte: 30000000, md: 15000000, toml: 5000000 },
-        largest_files: [
-          { path: `${currentPath}/target/debug/app.exe`, file_name: 'app.exe', extension: 'exe', size_bytes: 45000000, is_dir: false, modified_timestamp_secs: 1729300000, is_readonly: false },
-          { path: `${currentPath}/target/debug/lib.rlib`, file_name: 'lib.rlib', extension: 'rlib', size_bytes: 25000000, is_dir: false, modified_timestamp_secs: 1729300000, is_readonly: false },
-        ],
-      } as unknown as T;
-    }
-
-    if (cmd === 'get_treemap_cmd') {
-      return {
-        name: 'rustapps',
-        path: currentPath,
-        size_bytes: 145000000,
-        is_dir: true,
-        bounds: { x: 0, y: 0, width: (args.width as number) || 1024, height: (args.height as number) || 768 },
-        children: [
-          {
-            name: 'apps',
-            path: `${currentPath}/apps`,
-            size_bytes: 85000000,
-            is_dir: true,
-            bounds: { x: 0, y: 0, width: 600, height: 768 },
-            children: [],
-          },
-          {
-            name: 'shared',
-            path: `${currentPath}/shared`,
-            size_bytes: 45000000,
-            is_dir: true,
-            bounds: { x: 600, y: 0, width: 424, height: 450 },
-            children: [],
-          },
-          {
-            name: 'docs',
-            path: `${currentPath}/docs`,
-            size_bytes: 15000000,
-            is_dir: true,
-            bounds: { x: 600, y: 450, width: 424, height: 318 },
-            children: [],
-          },
-        ],
-      } as unknown as T;
-    }
-
-    if (cmd === 'preview_batch_rename_cmd') {
-      const paths = (args.paths as string[]) || [];
-      const rule = args.rule as BatchRenameRule;
-      const previews: RenamePreview[] = paths.map((p, idx) => {
-        const parts = p.split('/');
-        const originalName = parts.pop() || '';
-        let newName = originalName;
-
-        if (rule.type === 'RegexReplace') {
-          try {
-            const re = new RegExp(rule.config.pattern, 'g');
-            newName = originalName.replace(re, rule.config.replacement);
-          } catch {
-            newName = originalName;
-          }
-        } else if (rule.type === 'PrefixSuffix') {
-          const dot = originalName.lastIndexOf('.');
-          const stem = dot !== -1 ? originalName.slice(0, dot) : originalName;
-          const ext = dot !== -1 ? originalName.slice(dot) : '';
-          newName = `${rule.config.prefix}${stem}${rule.config.suffix}${ext}`;
-        } else if (rule.type === 'Numbering') {
-          const dot = originalName.lastIndexOf('.');
-          const ext = dot !== -1 ? originalName.slice(dot) : '';
-          const numStr = (rule.config.start_number + idx).toString().padStart(rule.config.pad_digits, '0');
-          newName = `${rule.config.prefix}${numStr}${ext}`;
-        } else if (rule.type === 'ToLowerCase') {
-          newName = originalName.toLowerCase();
-        } else if (rule.type === 'ToUpperCase') {
-          newName = originalName.toUpperCase();
-        }
-
-        const dir = parts.join('/');
-        const proposedPath = `${dir}/${newName}`;
-        return {
-          original_path: p,
-          proposed_path: proposedPath,
-          has_conflict: false,
-          conflict_reason: null,
-        };
-      });
-      return previews as unknown as T;
-    }
-
-    if (cmd === 'execute_batch_rename_cmd') {
-      const previews = (args.previews as RenamePreview[]) || [];
-      return {
-        total_requested: previews.length,
-        successful_renames: previews.length,
-        rolled_back: false,
-        error_message: null,
-      } as unknown as T;
-    }
-
-    if (cmd === 'delete_files_cmd') {
-      const paths = (args.paths as string[]) || [];
-      return {
-        deleted_count: paths.length,
-        reclaimed_bytes: paths.length * 1048576,
-        failed_paths: [],
-      } as unknown as T;
-    }
-
-    if (cmd === 'extract_document_cmd') {
-      const docPath = args.path as string;
-      const fileName = docPath.split('/').pop() || 'document.md';
-      return {
-        path: docPath,
-        file_name: fileName,
-        extension: 'md',
-        metadata: {
-          title: 'System Architecture Specification',
-          author: 'Lead Architect',
-          page_count: 5,
-          word_count: 1420,
-          format: 'Markdown Document',
-          creation_date: '2026-10-19',
-        },
-        content_text: `# System Architecture\n\nHigh-performance offline document indexing using Tantivy and 8-bit quantized embeddings.\n\nAll cryptographic keys are scrubbed from RAM on drop via zeroize.\nStrictly zero network egress is permitted in core binaries.`,
-        language: 'markdown',
-        extracted_at_secs: 1729300000,
-      } as unknown as T;
-    }
-
-    if (cmd === 'scan_compliance_cmd') {
-      const scanPath = (args.path as string) || currentPath;
-      const mockSummary: ComplianceScanSummary = {
-        scanned_files_count: 18,
-        findings_count: 2,
-        critical_count: 1,
-        high_count: 1,
-        medium_count: 0,
-        scan_duration_ms: 12.4,
-        findings: [
-          {
-            id: 'find-1',
-            data_type: 'private_key',
-            severity: 'critical',
-            file_path: `${scanPath}/id_rsa`,
-            line_number: 1,
-            redacted_preview: '-----BEGIN RSA PRIVATE KEY-----[REDACTED]-----END RSA PRIVATE KEY-----',
-          },
-          {
-            id: 'find-2',
-            data_type: 'ssn',
-            severity: 'high',
-            file_path: `${scanPath}/employees.csv`,
-            line_number: 42,
-            redacted_preview: 'Employee ID: 410, SSN: XXX-XX-6789, Status: Active',
-          },
-        ],
-      };
-      return mockSummary as unknown as T;
-    }
-
-    if (cmd === 'scan_screenshots_dir_cmd') {
-      const mockScreenshots: ScreenshotFingerprint[] = [
-        {
-          path: `${currentPath}/vscode_terminal_error.png`,
-          dhash: 0xa5a5_5a5a_3333_cccc,
-          ocr_text: 'cargo test --workspace --all-targets\nerror: connection timeout to PostgreSQL on port 5432\nfatal: worker process aborted unexpectedly',
-          dimensions: [1920, 1080],
-        },
-      ];
-      return mockScreenshots as unknown as T;
-    }
-
-    if (cmd === 'search_screenshots_by_hash_cmd') {
-      const results: ScreenshotSearchResult[] = [
-        {
-          path: `${currentPath}/vscode_terminal_error.png`,
-          dhash: 0xa5a5_5a5a_3333_cccc,
-          hamming_distance: 0,
-          similarity_pct: 100.0,
-          ocr_snippet: 'cargo test --workspace --all-targets\nerror: connection timeout',
-        },
-      ];
-      return results as unknown as T;
-    }
-
-    if (cmd === 'search_screenshots_by_text_cmd') {
-      const q = ((args.query as string) || '').toLowerCase();
-      const results: ScreenshotSearchResult[] = [
-        {
-          path: `${currentPath}/vscode_terminal_error.png`,
-          dhash: 0xa5a5_5a5a_3333_cccc,
-          hamming_distance: 0,
-          similarity_pct: 100.0,
-          ocr_snippet: `cargo test --workspace (Matched: ${q})`,
-        },
-      ];
-      return results as unknown as T;
-    }
-
-    if (cmd === 'list_drives_and_places_cmd') {
-      const places: FsLocationEntry[] = [
-        { name: 'Local Disk (C:)', path: 'C:\\', kind: 'drive', available: true },
-        { name: 'Local Disk (H:)', path: 'H:\\', kind: 'drive', available: true },
-        { name: 'Workspace', path: 'H:\\rustapps', kind: 'quick_access', available: true },
-      ];
-      return places as unknown as T;
-    }
-
-    if (cmd === 'index_directory_cmd' || cmd === 'open_in_os_cmd') {
-      return true as unknown as T;
-    }
-
-    throw new Error(`Unhandled mock Tauri command: ${cmd}`);
+    return await invokeIpc<T>(cmd, args);
   }
 
   async function loadDrivesAndPlaces() {
     try {
-      const tauriFs = (window as unknown as {
-        __TAURI__?: { fs?: { getDrivesAndPlaces?: () => Promise<FsLocationEntry[]> } };
-      }).__TAURI__?.fs;
-      if (tauriFs?.getDrivesAndPlaces) {
-        const list = await tauriFs.getDrivesAndPlaces();
-        if (list && list.length > 0) {
-          drivesAndPlaces = list;
-          return;
-        }
+      const list = await getDrivesAndPlaces();
+      if (list && list.length > 0) {
+        drivesAndPlaces = list;
+        return;
       }
-      drivesAndPlaces = await invokeTauri<FsLocationEntry[]>('list_drives_and_places_cmd');
+      drivesAndPlaces = await invokeIpc<FsLocationEntry[]>('list_drives_and_places_cmd');
     } catch (err) {
       console.error('Failed to enumerate drives and places:', err);
     }
@@ -391,17 +87,12 @@
 
   async function handleBrowseFolder() {
     try {
-      const dialog = (window as unknown as {
-        __TAURI__?: { dialog?: { open?: (opts: Record<string, unknown>) => Promise<string | null> } };
-      }).__TAURI__?.dialog;
-      if (dialog?.open) {
-        const chosen = await dialog.open({
-          directory: true,
-          title: 'Select Folder to Browse in AI File Explorer',
-        });
-        if (chosen && typeof chosen === 'string') {
-          await loadDirectory(chosen);
-        }
+      const chosen = await openNativeDialog({
+        directory: true,
+        title: 'Select Folder to Browse in AI File Explorer',
+      });
+      if (chosen && typeof chosen === 'string') {
+        await loadDirectory(chosen);
       }
     } catch (err) {
       console.error('Browse folder dialog error:', err);

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { BackupExportSummary, BackupImportSummary } from '../types';
+  import { openNativeDialog, saveNativeDialog } from '../lib/ipc';
 
   export let onExport: (passphrase: string, outputPath: string) => Promise<BackupExportSummary>;
   export let onImport: (passphrase: string, inputPath: string, overwrite: boolean) => Promise<BackupImportSummary>;
@@ -31,35 +32,13 @@
 
   async function browseExportPath() {
     try {
-      const dialog = (window as any).__TAURI__?.dialog;
-      if (dialog?.save) {
-        const chosen = await dialog.save({
-          title: 'Export Encrypted Vault Backup (.vaultbackup)',
-          defaultName: exportPath || `vault_backup_${new Date().toISOString().slice(0, 10)}.vaultbackup`,
-          filters: 'Vault Backup (*.vaultbackup)|*.vaultbackup|All Files (*.*)|*.*',
-        });
-        if (chosen) {
-          exportPath = chosen;
-          return;
-        }
-      }
-      if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location?.protocol.startsWith('http')) {
-        const res = await fetch('/__dialog/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: 'Export Encrypted Vault Backup (.vaultbackup)',
-            defaultName: exportPath || `vault_backup_${new Date().toISOString().slice(0, 10)}.vaultbackup`,
-            filters: 'Vault Backup (*.vaultbackup)|*.vaultbackup|All Files (*.*)|*.*',
-          }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.path) {
-            exportPath = data.path;
-            return;
-          }
-        }
+      const chosen = await saveNativeDialog({
+        title: 'Export Encrypted Vault Backup (.vaultbackup)',
+        defaultPath: exportPath || `vault_backup_${new Date().toISOString().slice(0, 10)}.vaultbackup`,
+        filter: 'Vault Backup (*.vaultbackup)|*.vaultbackup|All Files (*.*)|*.*',
+      });
+      if (chosen) {
+        exportPath = chosen;
       }
     } catch (err) {
       console.error('Export browse error:', err);
@@ -68,33 +47,12 @@
 
   async function browseImportPath() {
     try {
-      const dialog = (window as any).__TAURI__?.dialog;
-      if (dialog?.open) {
-        const chosen = await dialog.open({
-          title: 'Select Encrypted Vault Backup Archive (.vaultbackup)',
-          filters: 'Vault Backup (*.vaultbackup)|*.vaultbackup|All Files (*.*)|*.*',
-        });
-        if (chosen) {
-          importPath = chosen;
-          return;
-        }
-      }
-      if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location?.protocol.startsWith('http')) {
-        const res = await fetch('/__dialog/open', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: 'Select Encrypted Vault Backup Archive (.vaultbackup)',
-            filters: 'Vault Backup (*.vaultbackup)|*.vaultbackup|All Files (*.*)|*.*',
-          }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.path) {
-            importPath = data.path;
-            return;
-          }
-        }
+      const chosen = await openNativeDialog({
+        title: 'Select Encrypted Vault Backup Archive (.vaultbackup)',
+        filter: 'Vault Backup (*.vaultbackup)|*.vaultbackup|All Files (*.*)|*.*',
+      });
+      if (chosen && typeof chosen === 'string') {
+        importPath = chosen;
       }
     } catch (err) {
       console.error('Import browse error:', err);

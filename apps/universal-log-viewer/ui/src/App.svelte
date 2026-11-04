@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { invokeIpc, openNativeDialog, isDesktopApp } from './lib/ipc';
   import Header from './components/Header.svelte';
   import VirtualizedViewport from './components/VirtualizedViewport.svelte';
   import BookmarksDrawer from './components/BookmarksDrawer.svelte';
@@ -80,72 +81,20 @@
   let openFileError = '';
   let hiddenFileInput: HTMLInputElement;
 
+  // Standardized Desktop IPC Bridge
   async function tauriInvoke<T>(cmd: string, args: Record<string, any> = {}): Promise<T> {
-    const tauri = (window as unknown as {
-      __TAURI__?: {
-        invoke?: (cmd: string, args: Record<string, unknown>) => Promise<T>;
-        core?: { invoke: (cmd: string, args: Record<string, unknown>) => Promise<T> };
-      };
-    }).__TAURI__;
-    if (tauri?.core?.invoke) {
-      return await tauri.core.invoke(cmd, args);
-    }
-    if (tauri?.invoke) {
-      return await tauri.invoke(cmd, args);
-    }
-    if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
-      const response = await fetch('/__ipc/' + encodeURIComponent(cmd), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(args || {}),
-      });
-      if (response.ok) {
-        const payload = await response.json();
-        if (payload && '__ipc_data' in payload) {
-          return payload.__ipc_data as T;
-        }
-        return payload as T;
-      } else {
-        const errPayload = await response.json().catch(() => null);
-        if (errPayload && errPayload.__ipc_error) {
-          throw new Error(errPayload.__ipc_error);
-        }
-        throw new Error(`Command "${cmd}" failed with status ${response.status}`);
-      }
-    }
-    throw new Error(`No IPC transport available for "${cmd}"`);
+    return await invokeIpc<T>(cmd, args);
   }
 
   async function pickNativeFileOrFolder(directory: boolean = false): Promise<string | null> {
-    const tauriDialog = (window as any).__TAURI__?.dialog;
-    if (tauriDialog?.open) {
-      const res = await tauriDialog.open({
-        directory,
-        multiple: false,
-        title: directory ? 'Select Folder with Log Files' : 'Open Log File',
-        filters: directory ? undefined : [{ name: 'Log Files', extensions: ['log', 'txt', 'jsonl', 'json', 'csv', 'tsv', 'out', 'err'] }],
-      });
-      if (typeof res === 'string' && res.trim()) return res.trim();
-    }
-    if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location?.protocol.startsWith('http')) {
-      try {
-        const res = await fetch('/__dialog/open', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            directory,
-            title: directory ? 'Select Folder with Log Files' : 'Open Log File',
-            filters: directory ? undefined : [{ name: 'Log Files', extensions: ['log', 'txt', 'jsonl', 'json', 'csv', 'tsv', 'out', 'err'] }],
-          }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.path) return data.path;
-        }
-      } catch (e) {
-        console.warn('Native dialog error:', e);
-      }
-    }
+    const res = await openNativeDialog({
+      directory,
+      multiple: false,
+      title: directory ? 'Select Folder with Log Files' : 'Open Log File',
+      filters: directory ? undefined : [{ name: 'Log Files', extensions: ['log', 'txt', 'jsonl', 'json', 'csv', 'tsv', 'out', 'err'] }],
+    });
+    if (typeof res === 'string' && res.trim()) return res.trim();
+    if (Array.isArray(res) && res.length > 0) return res[0];
     return null;
   }
 

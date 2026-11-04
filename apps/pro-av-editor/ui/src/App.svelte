@@ -13,6 +13,7 @@
     type Clip,
     type TimelineProject,
   } from './types';
+  import { openNativeDialog, saveNativeDialog, isDesktopApp } from './lib/ipc';
 
   let project: TimelineProject | null = null;
   let activePanel: 'edit' | 'color' | 'audio' = 'edit';
@@ -103,19 +104,14 @@
 
   async function handleOpenProject() {
     try {
-      const hasNativeDialog = typeof window !== 'undefined' && Boolean(window.__TAURI__?.dialog?.open);
-      let chosenPath: string | null = null;
-      if (hasNativeDialog) {
-        try {
-          chosenPath = await window.__TAURI__!.dialog.open({
-            title: 'Open Pro AV Studio Project (.avedproj)',
-            filter: '*.avedproj;*.json',
-            filters: [{ name: 'Project Files', extensions: ['avedproj', 'json'] }],
-          });
-        } catch (e) {
-          console.warn('Native open dialog error:', e);
-        }
-        if (chosenPath) {
+      if (isDesktopApp()) {
+        const chosen = await openNativeDialog({
+          title: 'Open Pro AV Studio Project (.avedproj)',
+          filter: '*.avedproj;*.json',
+          filters: [{ name: 'Project Files', extensions: ['avedproj', 'json'] }],
+        });
+        if (chosen) {
+          const chosenPath = Array.isArray(chosen) ? chosen[0] : chosen;
           project = await tauriInvoke<TimelineProject>('load_project_cmd', {
             path: chosenPath,
           });
@@ -163,28 +159,23 @@
 
   async function handleImportMedia() {
     try {
-      const hasNativeDialog = typeof window !== 'undefined' && Boolean(window.__TAURI__?.dialog?.open);
-      let chosenPath: string | null = null;
-      if (hasNativeDialog) {
-        try {
-          chosenPath = await window.__TAURI__!.dialog.open({
-            title: 'Import Video, Audio, or Image Media',
-            filter: '*.mp4;*.webm;*.mov;*.mkv;*.avi;*.wav;*.mp3;*.flac;*.ogg;*.png;*.jpg;*.jpeg;*.bmp;*.webp',
-            filters: [
-              {
-                name: 'Media Files',
-                extensions: [
-                  'mp4', 'webm', 'mov', 'mkv', 'avi', 'wav', 'mp3',
-                  'flac', 'ogg', 'png', 'jpg', 'jpeg', 'bmp', 'webp',
-                ],
-              },
-              { name: 'All Files', extensions: ['*'] },
-            ],
-          });
-        } catch (e) {
-          console.warn('Native open dialog error:', e);
-        }
-        if (chosenPath) {
+      if (isDesktopApp()) {
+        const chosen = await openNativeDialog({
+          title: 'Import Video, Audio, or Image Media',
+          filter: '*.mp4;*.webm;*.mov;*.mkv;*.avi;*.wav;*.mp3;*.flac;*.ogg;*.png;*.jpg;*.jpeg;*.bmp;*.webp',
+          filters: [
+            {
+              name: 'Media Files',
+              extensions: [
+                'mp4', 'webm', 'mov', 'mkv', 'avi', 'wav', 'mp3',
+                'flac', 'ogg', 'png', 'jpg', 'jpeg', 'bmp', 'webp',
+              ],
+            },
+            { name: 'All Files', extensions: ['*'] },
+          ],
+        });
+        if (chosen) {
+          const chosenPath = Array.isArray(chosen) ? chosen[0] : chosen;
           project = await tauriInvoke<TimelineProject>('import_media_file_cmd', {
             filePath: chosenPath,
             autoAddToTimeline: true,
@@ -226,10 +217,11 @@
   async function handleSaveProject() {
     try {
       let targetPath: string | undefined = undefined;
-      if (typeof window !== 'undefined' && window.__TAURI__?.dialog?.save) {
-        const picked = await window.__TAURI__.dialog.save({
+      if (isDesktopApp()) {
+        const defaultName = `${(project?.name || 'studio_project').replace(/[^a-zA-Z0-9_-]/g, '_')}.avedproj`;
+        const picked = await saveNativeDialog({
           title: 'Save Pro AV Studio Project (.avedproj)',
-          defaultName: `${(project?.name || 'studio_project').replace(/[^a-zA-Z0-9_-]/g, '_')}.avedproj`,
+          defaultPath: defaultName,
           filter: '*.avedproj',
           filters: [{ name: 'Studio Project File', extensions: ['avedproj'] }],
         });

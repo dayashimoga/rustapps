@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ContentSearchResult, ContentSearchQuery, SearchMode, SemanticSearchResult } from '../types';
+  import { invokeIpc } from '../lib/ipc';
 
   export let onInspectDoc: (path: string) => void = () => {};
 
@@ -37,69 +38,10 @@
         limit: 50,
         extension_filter: selectedExtension,
       };
-      if ((window as any).__TAURI__?.invoke) {
-        results = await (window as any).__TAURI__.invoke('search_content_cmd', { query: queryPayload });
-      } else if ((window as any).__TAURI_INTERNALS__?.invoke) {
-        results = await (window as any).__TAURI_INTERNALS__.invoke('search_content_cmd', { query: queryPayload });
-      } else if (typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
-        const res = await fetch('/__ipc/search_content_cmd', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: queryPayload }),
-        });
-        if (res.ok) {
-          const payload = await res.json();
-          if (payload && '__ipc_data' in payload) {
-            results = payload.__ipc_data;
-          } else {
-            results = payload;
-          }
-        }
-      } else {
-        // Mock offline demo results
-        await new Promise((r) => setTimeout(r, 45));
-        const mockHits: SemanticSearchResult[] = [
-          {
-            path: 'H:/projects/docs/SecurityArchitecture.md',
-            file_name: 'SecurityArchitecture.md',
-            score: 0.94,
-            snippet: '...Argon2id key derivation parameters ($m=64\\,\\text{MiB}, t=3, p=4$) and AES-256-GCM authenticated encryption...',
-            format: 'MD',
-          },
-          {
-            path: 'H:/projects/apps/universal-log-viewer/src/mmap_engine.rs',
-            file_name: 'mmap_engine.rs',
-            score: 0.88,
-            snippet: '...pub fn open_mmap(path: &Path) -> Result<MmapLogEngine, StorageError> with zero-copy page slicing...',
-            format: 'RS',
-          },
-          {
-            path: 'H:/reports/quarterly_audit_2026.docx',
-            file_name: 'quarterly_audit_2026.docx',
-            score: 0.81,
-            snippet: '...Compliance report verifying 100% air-gap guarantees and zero network socket bindings across all targets...',
-            format: 'DOCX',
-          },
-          {
-            path: 'H:/specs/TechnicalRequirements.pdf',
-            file_name: 'TechnicalRequirements.pdf',
-            score: 0.76,
-            snippet: '...FR-AFE-05: Local Quantized Embedding Inference and Offline OCR running in sub-50ms within 300MB RAM...',
-            format: 'PDF',
-          },
-        ].filter((item) => {
-          if (!selectedExtension) return true;
-          return item.format.toLowerCase() === selectedExtension.toLowerCase();
-        });
-
-        results = {
-          items: mockHits,
-          total_matches: mockHits.length,
-          execution_time_ms: 21.58,
-        };
-      }
+      results = await invokeIpc<ContentSearchResult>('search_content_cmd', { query: queryPayload });
     } catch (e) {
       console.error('Content search failed:', e);
+      results = { items: [], total_matches: 0, execution_time_ms: 0 };
     } finally {
       isSearching = false;
     }

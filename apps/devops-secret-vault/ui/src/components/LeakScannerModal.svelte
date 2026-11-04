@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import { openNativeDialog } from '../lib/ipc';
 
   export let isOpen = false;
   export let onScanDirectory: (dirPath: string) => Promise<any[]>;
@@ -29,34 +30,13 @@
 
   async function browseFolder() {
     try {
-      const tauri = (window as any).__TAURI__;
-      if (tauri?.dialog?.open) {
-        const picked = await tauri.dialog.open({
-          directory: true,
-          multiple: false,
-          title: 'Select Folder / Repo to Scan for Leaks',
-        });
-        if (typeof picked === 'string' && picked.trim()) {
-          scanPath = picked.trim();
-          return;
-        }
-      }
-      if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location?.protocol.startsWith('http')) {
-        const res = await fetch('/__dialog/open', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            directory: true,
-            title: 'Select Folder / Repo to Scan for Leaks',
-          }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.path) {
-            scanPath = data.path;
-            return;
-          }
-        }
+      const picked = await openNativeDialog({
+        directory: true,
+        multiple: false,
+        title: 'Select Folder / Repo to Scan for Leaks',
+      });
+      if (typeof picked === 'string' && picked.trim()) {
+        scanPath = picked.trim();
       }
     } catch (e) {
       console.warn('Dialog error:', e);

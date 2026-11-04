@@ -2,6 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import type { DecryptedSecret, PasswordStrength, SecretPayload, SecretType } from '../types';
   import EntropyMeter from './EntropyMeter.svelte';
+  import { invokeIpc } from '../lib/ipc';
 
   export let isOpen: boolean = false;
   export let isLoading: boolean = false;
@@ -73,26 +74,6 @@
   let showTfvarsParser = false;
   let tfvarsParseResult: Record<string, string> | null = null;
   let parsedTfvarsCount = 0;
-
-  async function invokeIpc<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
-    const tauri = (window as unknown as { __TAURI__?: { invoke?: (c: string, a: Record<string, unknown>) => Promise<T> } }).__TAURI__;
-    if (tauri?.invoke) {
-      return await tauri.invoke(cmd, args);
-    }
-    if (typeof fetch !== 'undefined' && typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
-      const res = await fetch('/__ipc/' + encodeURIComponent(cmd), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(args || {}),
-      });
-      if (res.ok) {
-        const payload = await res.json();
-        if (payload && '__ipc_data' in payload) return payload.__ipc_data as T;
-        return payload as T;
-      }
-    }
-    throw new Error('IPC bridge not available');
-  }
 
   async function handleParseAwsIni() {
     awsParseError = '';

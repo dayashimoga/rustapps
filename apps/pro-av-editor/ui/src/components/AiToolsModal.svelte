@@ -5,6 +5,7 @@
     type ExportPreset,
     type TimelineProject,
   } from '../types';
+  import { saveNativeDialog } from '../lib/ipc';
 
   export let show: boolean = false;
   export let project: TimelineProject | null = null;
@@ -203,20 +204,18 @@
       const defaultFileName = `${cleanProjectName}_${preset.id}.${preset.container}`;
       let outPath: string | undefined = undefined;
 
-      if (typeof window !== 'undefined' && window.__TAURI__?.dialog?.save) {
-        try {
-          const picked = await window.__TAURI__.dialog.save({
-            title: `Save Master ${isWav ? 'Mixdown (.wav)' : `Video (.${preset.container})`}`,
-            defaultName: defaultFileName,
-            filter: `*.${preset.container}`,
-            filters: [{ name: preset.name, extensions: [preset.container] }],
-          });
-          if (picked) {
-            outPath = picked;
-          }
-        } catch (e) {
-          console.warn('Native save dialog skipped or unavailable, using default exports path:', e);
+      try {
+        const picked = await saveNativeDialog({
+          title: `Save Master ${isWav ? 'Mixdown (.wav)' : `Video (.${preset.container})`}`,
+          defaultPath: defaultFileName,
+          filter: `*.${preset.container}`,
+          filters: [{ name: preset.name, extensions: [preset.container] }],
+        });
+        if (picked) {
+          outPath = picked;
         }
+      } catch (e) {
+        console.warn('Native save dialog skipped or unavailable, using default exports path:', e);
       }
 
       if (isWav) {

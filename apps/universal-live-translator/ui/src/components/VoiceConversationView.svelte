@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
+  import { openNativeDialog } from '../lib/ipc';
   import {
     SUPPORTED_LANGUAGES,
     tauriInvoke,
@@ -289,25 +290,23 @@
   async function importAudioFileForParty(speaker: 'party_a' | 'party_b') {
     const lang = speaker === 'party_a' ? partyALang : partyBLang;
     try {
-      if (window.__TAURI__?.dialog?.open) {
-        const picked = await window.__TAURI__.dialog.open({
-          title: `Select Audio File (.wav) for ${speaker === 'party_a' ? 'Party A' : 'Party B'}`,
-          directory: false,
-          multiple: false,
-          filters: 'WAV Audio (*.wav)|*.wav|All Files (*.*)|*.*',
+      const picked = await openNativeDialog({
+        title: `Select Audio File (.wav) for ${speaker === 'party_a' ? 'Party A' : 'Party B'}`,
+        directory: false,
+        multiple: false,
+        filter: 'WAV Audio (*.wav)|*.wav|All Files (*.*)|*.*',
+      });
+      if (typeof picked === 'string' && picked.trim()) {
+        const asrRes = await tauriInvoke<SpeechRecognitionResponse>('recognize_speech_cmd', {
+          filePath: picked.trim(),
+          language: lang,
         });
-        if (typeof picked === 'string' && picked.trim()) {
-          const asrRes = await tauriInvoke<SpeechRecognitionResponse>('recognize_speech_cmd', {
-            filePath: picked.trim(),
-            language: lang,
-          });
-          if (asrRes && asrRes.text) {
-            if (speaker === 'party_a') inputPartyA = asrRes.text;
-            else inputPartyB = asrRes.text;
-            await submitTurn(speaker);
-          }
-          return;
+        if (asrRes && asrRes.text) {
+          if (speaker === 'party_a') inputPartyA = asrRes.text;
+          else inputPartyB = asrRes.text;
+          await submitTurn(speaker);
         }
+        return;
       }
     } catch (e) {
       console.error('Native audio file dialog failed:', e);

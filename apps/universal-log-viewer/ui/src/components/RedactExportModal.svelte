@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import { saveNativeDialog } from '../lib/ipc';
 
   export let isOpen = false;
   export let totalLines = 0;
@@ -26,18 +27,13 @@
   }
 
   async function handleBrowseSavePath() {
-    const dialog = (window as unknown as {
-      __TAURI__?: { dialog?: { save?: (opts: Record<string, unknown>) => Promise<string | null> } };
-    }).__TAURI__?.dialog;
-    if (dialog?.save) {
-      const selected = await dialog.save({
-        title: 'Save Sanitized Redacted Log File',
-        defaultPath: destPath,
-        filters: [{ name: 'Log Files', extensions: ['log', 'txt', 'jsonl', 'csv'] }],
-      });
-      if (selected && typeof selected === 'string') {
-        destPath = selected;
-      }
+    const selected = await saveNativeDialog({
+      title: 'Save Sanitized Redacted Log File',
+      defaultPath: destPath,
+      filters: [{ name: 'Log Files', extensions: ['log', 'txt', 'jsonl', 'csv'] }],
+    });
+    if (selected && typeof selected === 'string') {
+      destPath = selected;
     }
   }
 

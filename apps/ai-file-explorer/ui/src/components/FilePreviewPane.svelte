@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { FileItem, FilePreviewData } from '../types';
+  import { invokeIpc, getLocalFileUrl } from '../lib/ipc';
 
   export let item: FileItem;
   export let onClose: () => void = () => {};
@@ -24,38 +25,7 @@
     loadError = '';
     preview = null;
     try {
-      if ((window as any).__TAURI__?.invoke) {
-        preview = await (window as any).__TAURI__.invoke('get_file_preview_cmd', { path });
-      } else if ((window as any).__TAURI_INTERNALS__?.invoke) {
-        preview = await (window as any).__TAURI_INTERNALS__.invoke('get_file_preview_cmd', { path });
-      } else if (typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
-        const res = await fetch('/__ipc/get_file_preview_cmd', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path }),
-        });
-        if (res.ok) {
-          const payload = await res.json();
-          preview = (payload && '__ipc_data' in payload) ? payload.__ipc_data : payload;
-        } else {
-          loadError = `HTTP ${res.status}`;
-        }
-      } else {
-        // Mock fallback for test runner
-        preview = {
-          path,
-          file_name: item.file_name,
-          extension: item.extension || '',
-          size_bytes: item.size_bytes,
-          is_text: true,
-          is_image: false,
-          is_pdf: false,
-          is_media: false,
-          text_content: '// Mock preview file content\nconsole.log("Offline AI File Explorer");',
-          total_lines: 2,
-          modified_timestamp_secs: item.modified_timestamp_secs,
-        };
-      }
+      preview = await invokeIpc<FilePreviewData>('get_file_preview_cmd', { path });
     } catch (e: any) {
       loadError = e?.message || String(e);
     } finally {
@@ -84,7 +54,7 @@
   }
 
   function getMediaUrl(path: string): string {
-    return '/__file?path=' + encodeURIComponent(path);
+    return getLocalFileUrl(path);
   }
 
   async function copyToClipboard(text: string, type: 'path' | 'hash' | 'content') {

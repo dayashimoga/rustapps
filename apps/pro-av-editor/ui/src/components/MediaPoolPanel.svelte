@@ -8,6 +8,7 @@
     type MediaSource,
     type TimelineProject,
   } from '../types';
+  import { isDesktopApp } from '../lib/ipc';
 
   export let project: TimelineProject | null = null;
   export let selectedClipId: string | null = null;
@@ -26,7 +27,7 @@
   let fileInputRef: HTMLInputElement;
 
   function triggerBrowseMedia() {
-    if (typeof window !== 'undefined' && window.__TAURI__?.dialog?.open) {
+    if (isDesktopApp()) {
       dispatch('importMedia');
     } else if (fileInputRef) {
       fileInputRef.value = '';
