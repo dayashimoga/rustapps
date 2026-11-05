@@ -89,6 +89,10 @@ impl DesktopIpcHandler for LogViewerDesktopHandler {
                 command: "correlate_traces",
                 payload: json!({ "traceId": "89231" }),
             },
+            SelfTestCheck {
+                command: "aggregate_fields",
+                payload: json!({ "maxRecords": 5000, "topN": 5 }),
+            },
         ]
     }
 }

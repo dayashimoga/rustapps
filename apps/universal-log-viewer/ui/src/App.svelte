@@ -80,6 +80,7 @@
   let minedTemplates: TemplateClusterUi[] = [];
   let detectedAnomalies: AnomalySpikeUi[] = [];
   let detectedErrorClusters: ErrorClusterUi[] = [];
+  let fieldBreakdowns: any[] = [];
   let isAiAnalyzing = false;
 
   let viewportComponent: VirtualizedViewport;
@@ -307,11 +308,12 @@
     if (!filePath) return;
     isAiAnalyzing = true;
     try {
-      const [hist, templates, anomalies, errors] = await Promise.all([
+      const [hist, templates, anomalies, errors, fieldsReport] = await Promise.all([
         tauriInvoke<TimelineHistogramUi>('get_timeline_histogram', { targetBuckets: 60 }),
         tauriInvoke<TemplateClusterUi[]>('mine_templates', { maxRecords: 50000 }),
         tauriInvoke<AnomalySpikeUi[]>('detect_anomalies', { targetBuckets: 60, zThreshold: 2.5 }),
         tauriInvoke<ErrorClusterUi[]>('cluster_errors', { maxRecords: 50000 }),
+        tauriInvoke<{ total_records_inspected: number; fields: any[] }>('aggregate_fields', { maxRecords: 50000, topN: 8 }),
       ]);
       if (hist) {
         timelineBuckets = hist.buckets;
@@ -321,6 +323,9 @@
       if (templates) minedTemplates = templates;
       if (anomalies) detectedAnomalies = anomalies;
       if (errors) detectedErrorClusters = errors;
+      if (fieldsReport && Array.isArray(fieldsReport.fields)) {
+        fieldBreakdowns = fieldsReport.fields;
+      }
     } catch (e) {
       console.warn('Failed to load AI insights from backend:', e);
     } finally {
@@ -464,6 +469,32 @@
         error_count: Math.floor(count * 0.14),
         affected_sources: ['auth-service'],
         sample_lines: [4, 11, 18, 25],
+      },
+    ];
+
+    fieldBreakdowns = [
+      {
+        field_name: 'service',
+        total_occurrences: count,
+        distinct_values_count: 5,
+        top_values: [
+          { value: 'auth-service', count: Math.floor(count * 0.3), percentage: 30 },
+          { value: 'payment-gateway', count: Math.floor(count * 0.25), percentage: 25 },
+          { value: 'ingress-controller', count: Math.floor(count * 0.2), percentage: 20 },
+          { value: 'database-pool', count: Math.floor(count * 0.15), percentage: 15 },
+          { value: 'worker-queue', count: Math.floor(count * 0.1), percentage: 10 },
+        ],
+      },
+      {
+        field_name: 'severity',
+        total_occurrences: count,
+        distinct_values_count: 4,
+        top_values: [
+          { value: 'INFO', count: Math.floor(count * 0.5), percentage: 50 },
+          { value: 'WARN', count: Math.floor(count * 0.25), percentage: 25 },
+          { value: 'ERROR', count: Math.floor(count * 0.15), percentage: 15 },
+          { value: 'DEBUG', count: Math.floor(count * 0.1), percentage: 10 },
+        ],
       },
     ];
 
@@ -1320,6 +1351,7 @@
     templates={minedTemplates}
     anomalies={detectedAnomalies}
     errorClusters={detectedErrorClusters}
+    {fieldBreakdowns}
     isAnalyzing={isAiAnalyzing}
     on:close={() => (showAiInsights = false)}
     on:jumpToLine={(e) => {
@@ -1334,6 +1366,12 @@
       searchQuery = e.detail.pattern;
       isRegex = false;
       handleSearch(new CustomEvent('search', { detail: { query: e.detail.pattern, isRegex: false, caseSensitive: false } }));
+      showAiInsights = false;
+    }}
+    on:filterField={(e) => {
+      searchQuery = `${e.detail.field}=${e.detail.value}`;
+      isRegex = false;
+      handleSearch(new CustomEvent('search', { detail: { query: searchQuery, isRegex: false, caseSensitive: false } }));
       showAiInsights = false;
     }}
     on:refresh={loadAiInsights}

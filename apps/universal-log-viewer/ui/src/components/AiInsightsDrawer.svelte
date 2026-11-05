@@ -6,6 +6,12 @@
   export let templates: TemplateClusterUi[] = [];
   export let anomalies: AnomalySpikeUi[] = [];
   export let errorClusters: ErrorClusterUi[] = [];
+  export let fieldBreakdowns: Array<{
+    field_name: string;
+    total_occurrences: number;
+    distinct_values_count: number;
+    top_values: Array<{ value: string; count: number; percentage: number }>;
+  }> = [];
   export let isAnalyzing = false;
 
   const dispatch = createEventDispatcher<{
@@ -13,10 +19,11 @@
     jumpToLine: number;
     filterTimeRange: { startMs: number; endMs: number };
     filterTemplate: { pattern: string };
+    filterField: { field: string; value: string };
     refresh: void;
   }>();
 
-  let activeTab: 'templates' | 'anomalies' | 'errors' = 'templates';
+  let activeTab: 'templates' | 'anomalies' | 'errors' | 'fields' = 'templates';
 
   function formatTime(epochMs: number): string {
     const d = new Date(epochMs);
@@ -91,6 +98,13 @@
         on:click={() => (activeTab = 'errors')}
       >
         Error Causes ({errorClusters.length})
+      </button>
+      <button
+        class="tab-btn"
+        class:active={activeTab === 'fields'}
+        on:click={() => (activeTab = 'fields')}
+      >
+        Fields ({fieldBreakdowns.length})
       </button>
     </div>
 
@@ -207,6 +221,45 @@
               </div>
             </div>
           {/each}
+        </div>
+      {:else if activeTab === 'fields'}
+        <div class="tab-content">
+          <div class="tab-desc">
+            Top-N frequency distributions of structured JSON, Logfmt, and container attributes.
+          </div>
+          {#if fieldBreakdowns.length === 0}
+            <div class="empty-state">No structured key-value attributes detected in current log stream.</div>
+          {:else}
+            {#each fieldBreakdowns as f}
+              <div class="insight-card">
+                <div class="card-meta">
+                  <span class="badge freq"><strong>{f.field_name}</strong></span>
+                  <span class="badge tokens">{f.distinct_values_count} distinct ({f.total_occurrences} total)</span>
+                </div>
+                <div class="fields-list">
+                  {#each f.top_values as v}
+                    <div class="field-value-row">
+                      <div class="val-left">
+                        <span class="val-text" title={v.value}>{v.value}</span>
+                        <span class="val-count">{v.count} ({v.percentage}%)</span>
+                      </div>
+                      <div class="val-bar-wrap">
+                        <div class="val-bar" style="width: {v.percentage}%"></div>
+                      </div>
+                      <button
+                        type="button"
+                        class="btn-action-xs"
+                        on:click={() => dispatch('filterField', { field: f.field_name, value: v.value })}
+                        title="Filter logs by {f.field_name}={v.value}"
+                      >
+                        Filter
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/each}
+          {/if}
         </div>
       {/if}
     </div>
@@ -519,5 +572,71 @@
     text-align: center;
     color: var(--text-muted);
     font-size: 12px;
+  }
+
+  .fields-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .field-value-row {
+    display: grid;
+    grid-template-columns: 1fr 90px 45px;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.02);
+    padding: 3px 6px;
+    border-radius: 4px;
+  }
+
+  .val-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  .val-text {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .val-count {
+    font-size: 10px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .val-bar-wrap {
+    height: 6px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .val-bar {
+    height: 100%;
+    background: var(--accent-blue);
+    border-radius: 3px;
+  }
+
+  .btn-action-xs {
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    color: var(--accent-blue);
+    font-size: 10px;
+    padding: 2px 4px;
+    border-radius: 3px;
+    cursor: pointer;
+    text-align: center;
+  }
+  .btn-action-xs:hover {
+    background: rgba(59, 130, 246, 0.2);
   }
 </style>

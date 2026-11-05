@@ -471,6 +471,16 @@ impl LogViewerService {
         Ok(KubernetesImporter::correlate_failures(&records, window_ms))
     }
 
+    /// Compute structured field aggregations (Top-N Breakdown)
+    pub async fn aggregate_fields(
+        &self,
+        max_records: usize,
+        top_n_per_field: usize,
+    ) -> anyhow::Result<crate::parsers::FieldAggregationReport> {
+        let records = self.parse_records(max_records).await?;
+        Ok(crate::parsers::compute_field_aggregations(&records, top_n_per_field))
+    }
+
     /// Redact active log records and export to destination file (Business Tier)
     pub async fn export_redacted(
         &self,
@@ -1171,6 +1181,23 @@ pub fn dispatch_ipc_command(
                     format!("No log records found matching trace ID: {}", trace_id)
                 })?;
 
+                serde_json::to_value(report).map_err(|e| e.to_string())
+            }
+            "aggregate_fields" => {
+                let max_records = args
+                    .get("maxRecords")
+                    .or_else(|| args.get("max_records"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(25_000) as usize;
+                let top_n = args
+                    .get("topN")
+                    .or_else(|| args.get("top_n"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(10) as usize;
+                let report = svc
+                    .aggregate_fields(max_records, top_n)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 serde_json::to_value(report).map_err(|e| e.to_string())
             }
             _ => Err(format!("Unknown Universal Log Viewer IPC command: {}", cmd)),

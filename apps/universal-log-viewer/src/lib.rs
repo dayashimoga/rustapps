@@ -28,7 +28,8 @@ pub use local_ai::{
 };
 pub use mmap_engine::MmapLogEngine;
 pub use parsers::{
-    detect_format, parse_timestamp, LogFormat, LogSeverity, NormalizedLogRecord,
+    compute_field_aggregations, detect_format, parse_timestamp, FieldAggregationReport,
+    FieldBreakdown, FieldValueCount, LogFormat, LogSeverity, NormalizedLogRecord,
     StreamingCsvParser, StreamingJsonParser,
 };
 pub use plugin_integration::LogViewerPluginManager;

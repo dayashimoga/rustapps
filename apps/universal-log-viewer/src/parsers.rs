@@ -5,7 +5,7 @@
 //! and raw log formats with automatic format detection and normalized representations.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Supported log format categories
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -519,6 +519,119 @@ impl StreamingCsvParser {
     }
 }
 
+/// Individual field frequency value count
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FieldValueCount {
+    pub value: String,
+    pub count: usize,
+    pub percentage: f64,
+}
+
+/// Aggregated breakdown for a specific structured field key
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FieldBreakdown {
+    pub field_name: String,
+    pub total_occurrences: usize,
+    pub distinct_values_count: usize,
+    pub top_values: Vec<FieldValueCount>,
+}
+
+/// Comprehensive Top-N field frequency distribution report
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FieldAggregationReport {
+    pub total_records_inspected: usize,
+    pub fields: Vec<FieldBreakdown>,
+}
+
+/// Compute frequency distribution of structured fields across records
+pub fn compute_field_aggregations(
+    records: &[NormalizedLogRecord],
+    top_n_per_field: usize,
+) -> FieldAggregationReport {
+    let mut field_tallies: HashMap<String, HashMap<String, usize>> = HashMap::new();
+
+    for r in records {
+        for (k, v) in &r.attributes {
+            if !k.is_empty() && !v.is_empty() {
+                *field_tallies.entry(k.clone()).or_default().entry(v.clone()).or_insert(0) += 1;
+            }
+        }
+
+        let sev_str = r.severity.as_str().to_string();
+        if sev_str != "UNKNOWN" {
+            *field_tallies.entry("severity".to_string()).or_default().entry(sev_str).or_insert(0) += 1;
+        }
+
+        if let Some(ref src) = r.source {
+            if !src.is_empty() {
+                *field_tallies.entry("service".to_string()).or_default().entry(src.clone()).or_insert(0) += 1;
+            }
+        }
+
+        if r.message.starts_with('{') && r.message.ends_with('}') {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&r.message) {
+                if let Some(obj) = val.as_object() {
+                    for (k, v) in obj {
+                        if k == "timestamp" || k == "time" || k == "raw" || k == "message" || k == "msg" {
+                            continue;
+                        }
+                        let val_str = match v {
+                            serde_json::Value::String(s) => s.clone(),
+                            serde_json::Value::Number(n) => n.to_string(),
+                            serde_json::Value::Bool(b) => b.to_string(),
+                            _ => continue,
+                        };
+                        if !val_str.is_empty() && val_str.len() < 120 {
+                            *field_tallies.entry(k.clone()).or_default().entry(val_str).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut breakdowns = Vec::new();
+
+    for (field_name, val_map) in field_tallies {
+        let total_occurrences: usize = val_map.values().sum();
+        let distinct_values_count = val_map.len();
+
+        let mut sorted_values: Vec<(String, usize)> = val_map.into_iter().collect();
+        sorted_values.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+        let top_values: Vec<FieldValueCount> = sorted_values
+            .into_iter()
+            .take(top_n_per_field)
+            .map(|(value, count)| {
+                let percentage = if total_occurrences > 0 {
+                    (count as f64 / total_occurrences as f64) * 100.0
+                } else {
+                    0.0
+                };
+                FieldValueCount {
+                    value,
+                    count,
+                    percentage: (percentage * 10.0).round() / 10.0,
+                }
+            })
+            .collect();
+
+        breakdowns.push(FieldBreakdown {
+            field_name,
+            total_occurrences,
+            distinct_values_count,
+            top_values,
+        });
+    }
+
+    breakdowns.sort_by(|a, b| b.total_occurrences.cmp(&a.total_occurrences).then_with(|| a.field_name.cmp(&b.field_name)));
+
+    FieldAggregationReport {
+        total_records_inspected: records.len(),
+        fields: breakdowns,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -589,5 +702,44 @@ mod tests {
             record.attributes.get("ip").map(String::as_str),
             Some("192.168.1.100")
         );
+    }
+
+    #[test]
+    fn test_compute_field_aggregations() {
+        let mut rec1 = NormalizedLogRecord {
+            line_number: 1,
+            raw: String::new(),
+            timestamp_raw: None,
+            timestamp_epoch_ms: None,
+            severity: LogSeverity::Error,
+            message: r#"{"status": 500, "service": "auth", "client_ip": "10.0.0.1"}"#.to_string(),
+            source: Some("auth".to_string()),
+            attributes: BTreeMap::new(),
+        };
+        rec1.attributes.insert("cluster".to_string(), "prod-us-east".to_string());
+
+        let mut rec2 = NormalizedLogRecord {
+            line_number: 2,
+            raw: String::new(),
+            timestamp_raw: None,
+            timestamp_epoch_ms: None,
+            severity: LogSeverity::Info,
+            message: r#"{"status": 200, "service": "auth", "client_ip": "10.0.0.2"}"#.to_string(),
+            source: Some("auth".to_string()),
+            attributes: BTreeMap::new(),
+        };
+        rec2.attributes.insert("cluster".to_string(), "prod-us-east".to_string());
+
+        let report = compute_field_aggregations(&[rec1, rec2], 5);
+        assert_eq!(report.total_records_inspected, 2);
+
+        let cluster_field = report.fields.iter().find(|f| f.field_name == "cluster").unwrap();
+        assert_eq!(cluster_field.total_occurrences, 2);
+        assert_eq!(cluster_field.top_values[0].value, "prod-us-east");
+        assert_eq!(cluster_field.top_values[0].percentage, 100.0);
+
+        let sev_field = report.fields.iter().find(|f| f.field_name == "severity").unwrap();
+        assert_eq!(sev_field.total_occurrences, 2);
+        assert_eq!(sev_field.distinct_values_count, 2);
     }
 }
