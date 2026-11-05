@@ -24,6 +24,7 @@ members = [
     "apps/api-protocol-studio",
     "apps/parquet-analytics-workbench",
     "apps/dfir-triage-kit",
+    "apps/screen-recorder-studio",
     "tests",
     "benchmarks",
 ]

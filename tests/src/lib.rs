@@ -1468,7 +1468,26 @@ mod integration_tests {
         let zero_entropy = dfir_triage_kit::ForensicCollector::calculate_entropy(&[0u8; 512]);
         assert_eq!(zero_entropy, 0.0);
 
-        // 10. shared-licensing: 100% offline Ed25519 signature verification across entire suite
+        // 10. screen-recorder-studio: 100% offline screen capture, auto-zoom keyframe generation, and tutorial synthesis
+        let recorder_service = screen_recorder_studio::RecorderService::open_in_memory().unwrap();
+        let rec_session = recorder_service.seed_demo_session().unwrap();
+        assert_eq!(rec_session.total_clicks, 4);
+        assert_eq!(rec_session.auto_zooms_count, 4);
+        assert_eq!(rec_session.tutorial_steps.len(), 4);
+        let srs_stats = recorder_service.get_stats().unwrap();
+        assert_eq!(srs_stats.total_recordings, 1);
+        let html_export = recorder_service
+            .export_tutorial(
+                &rec_session.session_id,
+                &screen_recorder_studio::ExportConfig {
+                    format: screen_recorder_studio::ExportFormat::InteractiveHtml,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(html_export.contains("<!DOCTYPE html>"));
+
+        // 11. shared-licensing: 100% offline Ed25519 signature verification across entire suite
         let verified = verifier.verify(&cert, shared_licensing::AppId::AiFileExplorer, 1700000001);
         assert!(
             verified.is_ok(),

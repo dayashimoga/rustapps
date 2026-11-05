@@ -41,6 +41,7 @@ pub enum AppId {
     ApiProtocolStudio,
     ParquetAnalyticsWorkbench,
     DfirTriageKit,
+    ScreenRecorderStudio,
     AllAppsSuite,
 }
 

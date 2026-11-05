@@ -1053,6 +1053,91 @@ fn benchmark_dfir_triage_kit(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_screen_recorder_studio(c: &mut Criterion) {
+    use screen_recorder_studio::{
+        ClickType, CursorEvent, SubtitleCue, TutorialEngine, TutorialStep,
+    };
+
+    let mut group = c.benchmark_group("screen_recorder_studio");
+
+    // 1. Auto-zoom generation on 100 cursor events
+    let mut events = Vec::with_capacity(100);
+    for i in 0..100 {
+        let click = if i % 10 == 0 {
+            ClickType::Left
+        } else if i % 15 == 0 {
+            ClickType::Right
+        } else {
+            ClickType::None
+        };
+        events.push(CursorEvent {
+            timestamp_ms: (i as u64) * 200,
+            x: ((i * 13) % 100) as f32 / 100.0,
+            y: ((i * 29) % 100) as f32 / 100.0,
+            click,
+        });
+    }
+
+    group.bench_function("srs_auto_zoom_generation_100_events", |b| {
+        b.iter(|| {
+            let zooms = TutorialEngine::generate_auto_zooms(black_box(&events), 20_000, 1.45);
+            black_box(zooms.len());
+        });
+    });
+
+    // 2. Dead-air silence detection across 1,000 samples (100s audio)
+    let mut mock_rms = vec![-20.0f32; 1000];
+    for chunk in mock_rms.chunks_mut(100) {
+        if chunk.len() > 30 {
+            for s in chunk.iter_mut().take(30) {
+                *s = -52.0;
+            }
+        }
+    }
+
+    group.bench_function("srs_silence_detection_1000_samples", |b| {
+        b.iter(|| {
+            let silences =
+                TutorialEngine::detect_silence_intervals(black_box(&mock_rms), -45.0, 1000);
+            black_box(silences.len());
+        });
+    });
+
+    // 3. Interactive HTML tutorial synthesis
+    let steps: Vec<TutorialStep> = (1..=10)
+        .map(|i| TutorialStep {
+            step_number: i,
+            timestamp_ms: (i as u64) * 2000,
+            title: format!("Step {}: Action Milestone", i),
+            instruction: "Click and confirm target module".to_string(),
+            action_type: "Click".to_string(),
+            target_x: 0.5,
+            target_y: 0.5,
+        })
+        .collect();
+    let subtitles: Vec<SubtitleCue> = (1..=10)
+        .map(|i| SubtitleCue {
+            start_ms: (i as u64) * 2000,
+            end_ms: (i as u64) * 2000 + 1500,
+            text: format!("Subtitle text for step {}", i),
+            speaker: Some("Instructor".to_string()),
+        })
+        .collect();
+
+    group.bench_function("srs_interactive_html_synthesis", |b| {
+        b.iter(|| {
+            let html = TutorialEngine::render_interactive_html(
+                black_box("Benchmark Walkthrough"),
+                black_box(&steps),
+                black_box(&subtitles),
+            );
+            black_box(html.len());
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -1073,6 +1158,7 @@ criterion_group!(
     benchmark_personal_knowledge_graph,
     benchmark_api_protocol_studio,
     benchmark_parquet_analytics_workbench,
-    benchmark_dfir_triage_kit
+    benchmark_dfir_triage_kit,
+    benchmark_screen_recorder_studio
 );
 criterion_main!(benches);
