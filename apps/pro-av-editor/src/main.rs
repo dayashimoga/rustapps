@@ -2,7 +2,7 @@
 //! Professional Audio & Video Editor Desktop GUI & CLI Entrypoint
 
 use pave_core::{
-    commands::dispatch_ipc_command, AnimatedProperty, BlendMode, Clip, ClipType,
+    commands::dispatch_ipc_command, AnimatedProperty, BlendMode, ChromaKeySettings, Clip, ClipType,
     ColorGradingSettings, CompressorSettings, EditorService, ParametricEqSettings, Transform2D,
 };
 use platform_common::{run_desktop_app, DesktopIpcHandler, EmbeddedUiBundle, SelfTestCheck};
@@ -75,6 +75,19 @@ impl DesktopIpcHandler for ProAvDesktopHandler {
             SelfTestCheck {
                 command: "get_templates_cmd",
                 payload: json!({}),
+            },
+            SelfTestCheck {
+                command: "update_clip_chroma_key_cmd",
+                payload: json!({
+                    "clipId": "clip_v1_intro",
+                    "chromaKey": {
+                        "enabled": true,
+                        "key_color": [0, 255, 0],
+                        "similarity": 0.4,
+                        "smoothness": 0.1,
+                        "despill": 0.5
+                    }
+                }),
             },
         ]
     }
@@ -153,6 +166,8 @@ fn run_cli_diagnostics() {
         opacity: AnimatedProperty::constant(1.0),
         blend_mode: BlendMode::Normal,
         transform: Transform2D::default(),
+        keyframed_transform: None,
+        chroma_key: ChromaKeySettings::default(),
         color_grading: ColorGradingSettings::default(),
         eq_settings: ParametricEqSettings::default(),
         compressor: CompressorSettings::default(),

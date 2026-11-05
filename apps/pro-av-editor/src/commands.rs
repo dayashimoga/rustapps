@@ -6,8 +6,8 @@
 use crate::audio_engine::LoudnessMeterData;
 use crate::color::VideoScopeData;
 use crate::models::{
-    BlendMode, Clip, ColorGradingSettings, FrameRate, MasterExportSummary, TimelineProject,
-    TrackType, Transform2D,
+    BlendMode, ChromaKeySettings, Clip, ColorGradingSettings, FrameRate, MasterExportSummary,
+    TimelineProject, TrackType, Transform2D,
 };
 use crate::service::EditorService;
 use crate::templates::{ExportPreset, ProjectTemplate};
@@ -294,6 +294,18 @@ pub fn update_clip_color_grading_cmd(
     let service = get_service();
     let svc = service.lock().map_err(|e| e.to_string())?;
     svc.update_clip_color_grading(clip_id.as_deref(), grading)
+        .map_err(|e| e.to_string())?;
+    svc.get_project().map_err(|e| e.to_string())
+}
+
+/// Update clip green/blue screen chroma key settings
+pub fn update_clip_chroma_key_cmd(
+    clip_id: Option<String>,
+    chroma_key: ChromaKeySettings,
+) -> Result<TimelineProject, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.update_clip_chroma_key(clip_id.as_deref(), chroma_key)
         .map_err(|e| e.to_string())?;
     svc.get_project().map_err(|e| e.to_string())
 }
@@ -824,6 +836,22 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let grading: ColorGradingSettings =
                 serde_json::from_value(grading_val).map_err(|e| e.to_string())?;
             let res = update_clip_color_grading_cmd(clip_id, grading)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "update_clip_chroma_key_cmd" => {
+            let clip_id = args
+                .get("clipId")
+                .or_else(|| args.get("clip_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let chroma_val = args
+                .get("chromaKey")
+                .or_else(|| args.get("chroma_key"))
+                .cloned()
+                .ok_or_else(|| "Missing chromaKey payload".to_string())?;
+            let chroma_key: ChromaKeySettings =
+                serde_json::from_value(chroma_val).map_err(|e| e.to_string())?;
+            let res = update_clip_chroma_key_cmd(clip_id, chroma_key)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "update_track_state_cmd" => {

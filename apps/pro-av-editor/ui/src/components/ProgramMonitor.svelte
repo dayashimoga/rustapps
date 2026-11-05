@@ -99,10 +99,15 @@
     ctx: CanvasRenderingContext2D,
     w: number,
     h: number,
-    cg?: any
+    cg?: any,
+    chromaKey?: any
   ) {
-    if (!cg) return;
+    if (!cg && !chromaKey?.enabled) {
+      if (canvasRef) canvasRef.style.filter = 'none';
+      return;
+    }
     const isDefault =
+      !chromaKey?.enabled &&
       (cg.exposure || 0) === 0 &&
       (cg.contrast ?? 1.0) === 1.0 &&
       (cg.saturation ?? 1.0) === 1.0 &&
@@ -112,12 +117,23 @@
       (cg.gamma?.r || 0) === 0 && (cg.gamma?.g || 0) === 0 && (cg.gamma?.b || 0) === 0 &&
       (cg.gain?.r || 0) === 0 && (cg.gain?.g || 0) === 0 && (cg.gain?.b || 0) === 0;
 
-    if (isDefault) return;
+    if (isDefault) {
+      if (canvasRef) canvasRef.style.filter = 'none';
+      return;
+    }
 
     try {
       const imgData = ctx.getImageData(0, 0, w, h);
       const data = imgData.data;
       const len = data.length;
+
+      const hasChroma = chromaKey && chromaKey.enabled;
+      const keyR = ((chromaKey?.key_color?.[0] ?? 0) as number) / 255.0;
+      const keyG = ((chromaKey?.key_color?.[1] ?? 255) as number) / 255.0;
+      const keyB = ((chromaKey?.key_color?.[2] ?? 0) as number) / 255.0;
+      const sim = (chromaKey?.similarity ?? 0.4) as number;
+      const smooth = (chromaKey?.smoothness ?? 0.1) as number;
+      const despill = (chromaKey?.despill ?? 0.5) as number;
 
       const expMultiplier = Math.pow(2.0, cg.exposure || 0);
       const contrastVal = cg.contrast ?? 1.0;
@@ -141,6 +157,22 @@
         let r = data[i] / 255.0;
         let g = data[i + 1] / 255.0;
         let b = data[i + 2] / 255.0;
+
+        // Chroma Key (green/blue screen removal)
+        if (hasChroma) {
+          const dist = Math.sqrt((r - keyR) ** 2 + (g - keyG) ** 2 + (b - keyB) ** 2) / 1.732;
+          if (dist < sim) {
+            data[i + 3] = 0;
+            continue;
+          } else if (dist < sim + smooth && smooth > 0) {
+            const edgeA = (dist - sim) / smooth;
+            data[i + 3] = Math.round(data[i + 3] * edgeA);
+          }
+          if (despill > 0 && g > Math.max(r, b)) {
+            const maxRb = Math.max(r, b);
+            g = g - (g - maxRb) * despill;
+          }
+        }
 
         // 1. Exposure
         if (expMultiplier !== 1.0) {
@@ -189,8 +221,16 @@
       }
 
       ctx.putImageData(imgData, 0, 0);
+      if (canvasRef) canvasRef.style.filter = 'none';
     } catch (e) {
-      console.warn('Canvas pixel color grading fallback:', e);
+      console.warn('Canvas pixel color grading fallback to CSS filter:', e);
+      if (canvasRef && cg) {
+        const brightness = Math.max(0.2, Math.min(3.0, Math.pow(2.0, cg.exposure || 0)));
+        const contrast = Math.max(0.2, Math.min(3.0, cg.contrast ?? 1.0));
+        const saturate = Math.max(0.0, Math.min(3.0, cg.saturation ?? 1.0));
+        const hueRotate = Math.round(((cg.temperature || 0) * -0.25) + ((cg.tint || 0) * 0.25));
+        canvasRef.style.filter = `brightness(${brightness.toFixed(2)}) contrast(${contrast.toFixed(2)}) saturate(${saturate.toFixed(2)}) hue-rotate(${hueRotate}deg)`;
+      }
     }
   }
 
@@ -437,8 +477,8 @@
         ctx.drawImage(videoEl, -320, -180, 640, 360);
         ctx.restore();
 
-        // Apply mathematical 3-way color grading + exposure/contrast/saturation
-        applyFullColorGradingToCanvas(ctx, 640, 360, clip.color_grading);
+        // Apply mathematical 3-way color grading + exposure/contrast/saturation + chroma key
+        applyFullColorGradingToCanvas(ctx, 640, 360, clip.color_grading, clip.chroma_key);
 
         drawHudOverlays(ctx, 640, 360);
         previewBmpBase64 = 'LIVE_VIDEO';
@@ -498,7 +538,7 @@
           ctx.drawImage(img, -320, -180, 640, 360);
           ctx.restore();
 
-          applyFullColorGradingToCanvas(ctx, 640, 360, clip.color_grading);
+          applyFullColorGradingToCanvas(ctx, 640, 360, clip.color_grading, clip.chroma_key);
 
           drawHudOverlays(ctx, 640, 360);
           previewBmpBase64 = 'LIVE_IMAGE';
@@ -723,6 +763,7 @@
     <!-- svelte-ignore a11y-media-has-caption -->
     <video
       bind:this={videoEl}
+      crossorigin="anonymous"
       style="display: none;"
       preload="auto"
       playsinline

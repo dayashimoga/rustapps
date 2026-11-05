@@ -510,6 +510,7 @@
           }
         }
       }
+      project = { ...project };
     }
     if (monitorRef && monitorRef.updateFrame) {
       await monitorRef.updateFrame();

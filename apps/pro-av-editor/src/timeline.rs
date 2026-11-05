@@ -704,8 +704,8 @@ struct ProjectFileEnvelope {
 mod tests {
     use super::*;
     use crate::models::{
-        AnimatedProperty, BlendMode, ClipType, ColorGradingSettings, CompressorSettings,
-        ParametricEqSettings, Transform2D,
+        AnimatedProperty, BlendMode, ChromaKeySettings, ClipType, ColorGradingSettings,
+        CompressorSettings, ParametricEqSettings, Transform2D,
     };
 
     fn make_test_clip(id: &str, track_id: &str, in_ms: u64, out_ms: u64) -> Clip {
@@ -725,6 +725,8 @@ mod tests {
             opacity: AnimatedProperty::constant(1.0),
             blend_mode: BlendMode::Normal,
             transform: Transform2D::default(),
+            keyframed_transform: None,
+            chroma_key: ChromaKeySettings::default(),
             color_grading: ColorGradingSettings::default(),
             eq_settings: ParametricEqSettings::default(),
             compressor: CompressorSettings::default(),

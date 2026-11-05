@@ -682,6 +682,8 @@ mod tests {
             opacity: AnimatedProperty::constant(1.0),
             blend_mode: BlendMode::Normal,
             transform: Transform2D::default(),
+            keyframed_transform: None,
+            chroma_key: crate::models::ChromaKeySettings::default(),
             color_grading: ColorGradingSettings::default(),
             eq_settings: ParametricEqSettings::default(),
             compressor: CompressorSettings::default(),

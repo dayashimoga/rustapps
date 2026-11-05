@@ -176,6 +176,13 @@ impl AnimatedProperty {
         }
     }
 
+    /// Add a keyframe, maintaining timestamp ordering
+    pub fn add_keyframe(&mut self, timestamp_ms: u64, value: f32, curve: KeyframeCurve) {
+        self.keyframes
+            .push(Keyframe::new(timestamp_ms, value, curve));
+        self.keyframes.sort_by_key(|k| k.timestamp_ms);
+    }
+
     /// Evaluate property value at specific timestamp with interpolation
     pub fn evaluate_at(&self, timestamp_ms: u64) -> f32 {
         if self.keyframes.is_empty() {
@@ -283,6 +290,51 @@ impl Default for Transform2D {
     }
 }
 
+/// Keyframe-animated 2D spatial transformations
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct KeyframedTransform {
+    pub scale_x: Option<AnimatedProperty>,
+    pub scale_y: Option<AnimatedProperty>,
+    pub translate_x: Option<AnimatedProperty>,
+    pub translate_y: Option<AnimatedProperty>,
+    pub rotation_degrees: Option<AnimatedProperty>,
+}
+
+impl KeyframedTransform {
+    /// Evaluate all animated transform channels at a given timestamp against base transform
+    pub fn evaluate_at(&self, timestamp_ms: u64, base: &Transform2D) -> Transform2D {
+        Transform2D {
+            scale_x: self
+                .scale_x
+                .as_ref()
+                .map(|p| p.evaluate_at(timestamp_ms))
+                .unwrap_or(base.scale_x),
+            scale_y: self
+                .scale_y
+                .as_ref()
+                .map(|p| p.evaluate_at(timestamp_ms))
+                .unwrap_or(base.scale_y),
+            translate_x: self
+                .translate_x
+                .as_ref()
+                .map(|p| p.evaluate_at(timestamp_ms))
+                .unwrap_or(base.translate_x),
+            translate_y: self
+                .translate_y
+                .as_ref()
+                .map(|p| p.evaluate_at(timestamp_ms))
+                .unwrap_or(base.translate_y),
+            rotation_degrees: self
+                .rotation_degrees
+                .as_ref()
+                .map(|p| p.evaluate_at(timestamp_ms))
+                .unwrap_or(base.rotation_degrees),
+            anchor_x: base.anchor_x,
+            anchor_y: base.anchor_y,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 3-Way Color Grading & Scopes
 // ---------------------------------------------------------------------------
@@ -354,6 +406,28 @@ impl ColorGradingSettings {
             && self.gamma.is_zero()
             && self.gain.is_zero()
             && self.lut_file_path.is_none()
+    }
+}
+
+/// Green/blue screen chroma key extraction configuration
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChromaKeySettings {
+    pub enabled: bool,
+    pub key_color: (u8, u8, u8), // RGB, default (0, 255, 0)
+    pub similarity: f32,         // 0.0 to 1.0 (threshold)
+    pub smoothness: f32,         // 0.0 to 1.0 (feather edge)
+    pub despill: f32,            // 0.0 to 1.0 (color neutralization)
+}
+
+impl Default for ChromaKeySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            key_color: (0, 255, 0),
+            similarity: 0.4,
+            smoothness: 0.1,
+            despill: 0.5,
+        }
     }
 }
 
@@ -500,12 +574,25 @@ pub struct Clip {
     pub opacity: AnimatedProperty,
     pub blend_mode: BlendMode,
     pub transform: Transform2D,
+    #[serde(default)]
+    pub keyframed_transform: Option<KeyframedTransform>,
+    #[serde(default)]
+    pub chroma_key: ChromaKeySettings,
     pub color_grading: ColorGradingSettings,
     pub eq_settings: ParametricEqSettings,
     pub compressor: CompressorSettings,
 }
 
 impl Clip {
+    /// Return the active 2D transform at a timestamp, evaluating keyframes if configured
+    pub fn transform_at(&self, timestamp_ms: u64) -> Transform2D {
+        if let Some(ref kt) = self.keyframed_transform {
+            kt.evaluate_at(timestamp_ms, &self.transform)
+        } else {
+            self.transform.clone()
+        }
+    }
+
     /// Calculate current clip duration on the timeline in milliseconds
     pub fn duration_ms(&self) -> u64 {
         self.timeline_out_ms.saturating_sub(self.timeline_in_ms)
@@ -751,6 +838,8 @@ mod tests {
             opacity: AnimatedProperty::constant(1.0),
             blend_mode: BlendMode::Normal,
             transform: Transform2D::default(),
+            keyframed_transform: None,
+            chroma_key: ChromaKeySettings::default(),
             color_grading: ColorGradingSettings::default(),
             eq_settings: ParametricEqSettings::default(),
             compressor: CompressorSettings::default(),
@@ -763,6 +852,81 @@ mod tests {
 
         // At timeline 2500 (offset 500ms * 2.0x = 1000ms source advance)
         assert_eq!(clip.map_timeline_to_source_ms(2500), 2000);
+    }
+
+    #[test]
+    fn test_keyframe_interpolation_curves() {
+        // EaseIn curve: factor = t * t (starts slow, accelerates)
+        let mut ease_in_prop = AnimatedProperty::constant(0.0);
+        ease_in_prop.add_keyframe(0, 0.0, KeyframeCurve::EaseIn);
+        ease_in_prop.add_keyframe(1000, 100.0, KeyframeCurve::EaseIn);
+
+        // At t = 0.5 (500ms): 0.5^2 * 100 = 25.0
+        let val_ease_in = ease_in_prop.evaluate_at(500);
+        assert!((val_ease_in - 25.0).abs() < 1e-3);
+
+        // EaseOut curve: factor = t * (2 - t) (starts fast, decelerates)
+        let mut ease_out_prop = AnimatedProperty::constant(0.0);
+        ease_out_prop.add_keyframe(0, 0.0, KeyframeCurve::EaseOut);
+        ease_out_prop.add_keyframe(1000, 100.0, KeyframeCurve::EaseOut);
+
+        // At t = 0.5 (500ms): 0.5 * (2 - 0.5) * 100 = 75.0
+        let val_ease_out = ease_out_prop.evaluate_at(500);
+        assert!((val_ease_out - 75.0).abs() < 1e-3);
+
+        // EaseInOut curve: smoothstep
+        let mut ease_in_out = AnimatedProperty::constant(0.0);
+        ease_in_out.add_keyframe(0, 0.0, KeyframeCurve::EaseInOut);
+        ease_in_out.add_keyframe(1000, 100.0, KeyframeCurve::EaseInOut);
+
+        // At t = 0.5 (500ms): 2 * 0.5^2 * 100 = 50.0
+        let val_ease_in_out = ease_in_out.evaluate_at(500);
+        assert!((val_ease_in_out - 50.0).abs() < 1e-3);
+
+        // Bezier curve: p1_y=0.1, p2_y=0.9
+        let mut bezier_prop = AnimatedProperty::constant(0.0);
+        bezier_prop.add_keyframe(
+            0,
+            0.0,
+            KeyframeCurve::Bezier {
+                p1_x: 0.25,
+                p1_y: 0.1,
+                p2_x: 0.25,
+                p2_y: 0.9,
+            },
+        );
+        bezier_prop.add_keyframe(1000, 100.0, KeyframeCurve::Linear);
+        let val_bezier = bezier_prop.evaluate_at(500);
+        assert!(val_bezier > 0.0 && val_bezier < 100.0);
+    }
+
+    #[test]
+    fn test_keyframed_transform_evaluation() {
+        let base = Transform2D {
+            scale_x: 1.0,
+            scale_y: 1.0,
+            translate_x: 0.0,
+            translate_y: 0.0,
+            rotation_degrees: 0.0,
+            anchor_x: 0.5,
+            anchor_y: 0.5,
+        };
+
+        let mut kt = KeyframedTransform::default();
+        let mut scale_x = AnimatedProperty::constant(1.0);
+        scale_x.add_keyframe(0, 1.0, KeyframeCurve::Linear);
+        scale_x.add_keyframe(1000, 2.0, KeyframeCurve::Linear);
+        kt.scale_x = Some(scale_x);
+
+        let mut rot = AnimatedProperty::constant(0.0);
+        rot.add_keyframe(0, 0.0, KeyframeCurve::Linear);
+        rot.add_keyframe(1000, 90.0, KeyframeCurve::Linear);
+        kt.rotation_degrees = Some(rot);
+
+        let evaluated_mid = kt.evaluate_at(500, &base);
+        assert!((evaluated_mid.scale_x - 1.5).abs() < 1e-3);
+        assert!((evaluated_mid.scale_y - 1.0).abs() < 1e-3); // Unanimated falls back to base
+        assert!((evaluated_mid.rotation_degrees - 45.0).abs() < 1e-3);
     }
 
     #[test]
@@ -786,6 +950,8 @@ mod tests {
             opacity: AnimatedProperty::constant(1.0),
             blend_mode: BlendMode::Normal,
             transform: Transform2D::default(),
+            keyframed_transform: None,
+            chroma_key: ChromaKeySettings::default(),
             color_grading: ColorGradingSettings::default(),
             eq_settings: ParametricEqSettings::default(),
             compressor: CompressorSettings::default(),

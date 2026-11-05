@@ -380,8 +380,8 @@ impl FcpxmlExporter {
 mod tests {
     use super::*;
     use crate::models::{
-        AnimatedProperty, BlendMode, Clip, ClipType, ColorGradingSettings, CompressorSettings,
-        ParametricEqSettings, Track, Transform2D,
+        AnimatedProperty, BlendMode, ChromaKeySettings, Clip, ClipType, ColorGradingSettings,
+        CompressorSettings, ParametricEqSettings, Track, Transform2D,
     };
 
     #[test]
@@ -423,6 +423,8 @@ mod tests {
             opacity: AnimatedProperty::constant(1.0),
             blend_mode: BlendMode::Normal,
             transform: Transform2D::default(),
+            keyframed_transform: None,
+            chroma_key: ChromaKeySettings::default(),
             color_grading: ColorGradingSettings::default(),
             eq_settings: ParametricEqSettings::default(),
             compressor: CompressorSettings::default(),

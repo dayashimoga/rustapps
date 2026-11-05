@@ -83,6 +83,22 @@ export interface AnimatedProperty {
   keyframes: Array<{ timestamp_ms: number; value: number; curve: string }>;
 }
 
+export interface ChromaKeySettings {
+  enabled: boolean;
+  key_color: [number, number, number];
+  similarity: number;
+  smoothness: number;
+  despill: number;
+}
+
+export interface KeyframedTransform {
+  scale_x?: AnimatedProperty | null;
+  scale_y?: AnimatedProperty | null;
+  translate_x?: AnimatedProperty | null;
+  translate_y?: AnimatedProperty | null;
+  rotation_degrees?: AnimatedProperty | null;
+}
+
 export interface Clip {
   id: string;
   name: string;
@@ -99,6 +115,8 @@ export interface Clip {
   opacity: AnimatedProperty;
   blend_mode: BlendMode;
   transform: Transform2D;
+  keyframed_transform?: KeyframedTransform | null;
+  chroma_key?: ChromaKeySettings;
   color_grading: ColorGradingSettings;
   eq_settings: ParametricEqSettings;
   compressor: CompressorSettings;

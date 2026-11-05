@@ -294,6 +294,15 @@ impl LayerCompositor {
                                         }
                                     }
                                 }
+                                if clip.chroma_key.enabled {
+                                    Self::chroma_key(
+                                        &mut f.data,
+                                        clip.chroma_key.key_color,
+                                        clip.chroma_key.similarity,
+                                        clip.chroma_key.smoothness,
+                                        clip.chroma_key.despill,
+                                    );
+                                }
                                 let _ = ColorGradingEngine::apply(
                                     &mut f.data,
                                     render_width,
@@ -326,6 +335,17 @@ impl LayerCompositor {
             ClipType::Audio => VideoFrame::new_black(render_width, render_height, timestamp_ms),
         };
 
+        // Apply clip chroma key if enabled
+        if clip.chroma_key.enabled {
+            Self::chroma_key(
+                &mut frame.data,
+                clip.chroma_key.key_color,
+                clip.chroma_key.similarity,
+                clip.chroma_key.smoothness,
+                clip.chroma_key.despill,
+            );
+        }
+
         // Apply clip color grading
         let _ = ColorGradingEngine::apply(
             &mut frame.data,
@@ -352,7 +372,7 @@ impl LayerCompositor {
             return;
         }
 
-        let transform = &clip.transform;
+        let transform = clip.transform_at(timestamp_ms);
         let scale_x = if transform.scale_x > 0.001 {
             transform.scale_x
         } else {
@@ -579,8 +599,8 @@ fn overlay_channel(src: f32, dst: f32) -> f32 {
 mod tests {
     use super::*;
     use crate::models::{
-        AnimatedProperty, ColorGradingSettings, CompressorSettings, ParametricEqSettings,
-        ProjectSettings, Track, Transform2D,
+        AnimatedProperty, ChromaKeySettings, ColorGradingSettings, CompressorSettings,
+        ParametricEqSettings, ProjectSettings, Track, Transform2D,
     };
     use std::time::Instant;
 
@@ -632,6 +652,14 @@ mod tests {
             opacity: AnimatedProperty::constant(1.0),
             blend_mode: BlendMode::Normal,
             transform: Transform2D::default(),
+            keyframed_transform: None,
+            chroma_key: ChromaKeySettings {
+                enabled: true,
+                key_color: (0, 255, 0),
+                similarity: 0.4,
+                smoothness: 0.1,
+                despill: 0.5,
+            },
             color_grading: ColorGradingSettings::default(),
             eq_settings: ParametricEqSettings::default(),
             compressor: CompressorSettings::default(),

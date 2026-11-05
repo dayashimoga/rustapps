@@ -12,9 +12,9 @@ use crate::audio_engine::{AudioEngine, AudioError, LoudnessMeterData};
 use crate::color::{VideoScopeData, VideoScopeGenerator};
 use crate::compositor::{CompositorError, LayerCompositor, VideoFrame};
 use crate::models::{
-    AnimatedProperty, BlendMode, Clip, ClipType, ColorGradingSettings, CompressorSettings, EqBand,
-    FilterType, FrameRate, MasterExportSummary, MediaSource, ParametricEqSettings, TimelineProject,
-    Track, TrackType, Transform2D,
+    AnimatedProperty, BlendMode, ChromaKeySettings, Clip, ClipType, ColorGradingSettings,
+    CompressorSettings, EqBand, FilterType, FrameRate, MasterExportSummary, MediaSource,
+    ParametricEqSettings, TimelineProject, Track, TrackType, Transform2D,
 };
 use crate::templates::{EdlExporter, FcpxmlExporter, ProjectTemplate};
 use crate::timeline::{TimelineEngine, TimelineError};
@@ -74,6 +74,8 @@ impl EditorService {
             opacity: AnimatedProperty::constant(1.0),
             blend_mode: BlendMode::Normal,
             transform: Transform2D::default(),
+            keyframed_transform: None,
+            chroma_key: ChromaKeySettings::default(),
             color_grading: ColorGradingSettings::default(),
             eq_settings: ParametricEqSettings::default(),
             compressor: CompressorSettings::default(),
@@ -94,6 +96,8 @@ impl EditorService {
             opacity: AnimatedProperty::constant(1.0),
             blend_mode: BlendMode::Normal,
             transform: Transform2D::default(),
+            keyframed_transform: None,
+            chroma_key: ChromaKeySettings::default(),
             color_grading: ColorGradingSettings::default(),
             eq_settings: ParametricEqSettings::default(),
             compressor: CompressorSettings::default(),
@@ -114,6 +118,8 @@ impl EditorService {
             opacity: AnimatedProperty::constant(1.0),
             blend_mode: BlendMode::Normal,
             transform: Transform2D::default(),
+            keyframed_transform: None,
+            chroma_key: ChromaKeySettings::default(),
             color_grading: ColorGradingSettings::default(),
             eq_settings: ParametricEqSettings::default(),
             compressor: CompressorSettings::default(),
@@ -206,6 +212,8 @@ impl EditorService {
                 opacity: AnimatedProperty::constant(1.0),
                 blend_mode: BlendMode::Normal,
                 transform: Transform2D::default(),
+                keyframed_transform: None,
+                chroma_key: ChromaKeySettings::default(),
                 color_grading: ColorGradingSettings::default(),
                 eq_settings: ParametricEqSettings::default(),
                 compressor: CompressorSettings::default(),
@@ -226,6 +234,8 @@ impl EditorService {
                 opacity: AnimatedProperty::constant(1.0),
                 blend_mode: BlendMode::Normal,
                 transform: Transform2D::default(),
+                keyframed_transform: None,
+                chroma_key: ChromaKeySettings::default(),
                 color_grading: ColorGradingSettings::default(),
                 eq_settings: ParametricEqSettings::default(),
                 compressor: CompressorSettings::default(),
@@ -246,6 +256,8 @@ impl EditorService {
                 opacity: AnimatedProperty::constant(1.0),
                 blend_mode: BlendMode::Normal,
                 transform: Transform2D::default(),
+                keyframed_transform: None,
+                chroma_key: ChromaKeySettings::default(),
                 color_grading: ColorGradingSettings::default(),
                 eq_settings: ParametricEqSettings::default(),
                 compressor: CompressorSettings::default(),
@@ -539,6 +551,8 @@ impl EditorService {
             opacity: AnimatedProperty::constant(1.0),
             blend_mode: BlendMode::Normal,
             transform: Transform2D::default(),
+            keyframed_transform: None,
+            chroma_key: ChromaKeySettings::default(),
             color_grading: ColorGradingSettings::default(),
             eq_settings: ParametricEqSettings::default(),
             compressor: CompressorSettings::default(),
@@ -834,6 +848,31 @@ impl EditorService {
                     }
                 } else if track.track_type == crate::models::TrackType::Video {
                     clip.color_grading = grading.clone();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn update_clip_chroma_key(
+        &self,
+        clip_id: Option<&str>,
+        chroma_key: ChromaKeySettings,
+    ) -> Result<(), ServiceError> {
+        let mut guard = self
+            .engine
+            .write()
+            .map_err(|_| ServiceError::LockPoisoned)?;
+        let project = guard.project_mut();
+        for track in &mut project.tracks {
+            for clip in &mut track.clips {
+                if let Some(target_id) = clip_id {
+                    if clip.id == target_id {
+                        clip.chroma_key = chroma_key;
+                        return Ok(());
+                    }
+                } else if track.track_type == crate::models::TrackType::Video {
+                    clip.chroma_key = chroma_key.clone();
                 }
             }
         }
@@ -1433,6 +1472,8 @@ mod tests {
             opacity: AnimatedProperty::constant(1.0),
             blend_mode: BlendMode::Normal,
             transform: Transform2D::default(),
+            keyframed_transform: None,
+            chroma_key: ChromaKeySettings::default(),
             color_grading: ColorGradingSettings::default(),
             eq_settings: ParametricEqSettings::default(),
             compressor: CompressorSettings::default(),

@@ -412,7 +412,15 @@
     | 'nordic'
     | 'polaroid'
     | 'cross_process'
-    | 'vibrant_hdr';
+    | 'vibrant_hdr'
+    | 'eterna'
+    | 'kodachrome'
+    | 'blockbuster'
+    | 'sepia_vintage'
+    | 'moody_forest'
+    | 'sunset_glow'
+    | 'scifi_matrix'
+    | 'monochrome_high';
 
   function applyPreset(preset: ColorPreset) {
     if (preset === 'teal_orange') {
@@ -503,6 +511,78 @@
       tint = 0;
       liftR = -0.02; liftG = -0.02; liftB = -0.02;
       gainR = 0.10; gainG = 0.10; gainB = 0.10;
+    } else if (preset === 'eterna') {
+      exposure = 0.05;
+      contrast = 0.90;
+      saturation = 0.85;
+      temperature = -4;
+      tint = -2;
+      liftR = 0.02; liftG = 0.02; liftB = 0.04;
+      gammaR = -0.02; gammaG = 0.0; gammaB = 0.02;
+      gainR = 0.04; gainG = 0.03; gainB = 0.01;
+    } else if (preset === 'kodachrome') {
+      exposure = 0.15;
+      contrast = 1.35;
+      saturation = 1.25;
+      temperature = 14;
+      tint = 6;
+      liftR = 0.06; liftG = 0.01; liftB = -0.05;
+      gammaR = 0.04; gammaG = 0.02; gammaB = -0.02;
+      gainR = 0.16; gainG = 0.08; gainB = -0.06;
+    } else if (preset === 'blockbuster') {
+      exposure = 0.12;
+      contrast = 1.40;
+      saturation = 1.20;
+      temperature = 8;
+      tint = -4;
+      liftR = -0.12; liftG = 0.02; liftB = 0.18; // Teal shadows
+      gammaR = 0.02; gammaG = 0.01; gammaB = -0.02;
+      gainR = 0.18; gainG = 0.10; gainB = -0.08; // Amber highlights
+    } else if (preset === 'sepia_vintage') {
+      exposure = 0.05;
+      contrast = 1.15;
+      saturation = 0.25;
+      temperature = 38;
+      tint = 16;
+      liftR = 0.12; liftG = 0.08; liftB = 0.02;
+      gammaR = 0.08; gammaG = 0.05; gammaB = 0.01;
+      gainR = 0.14; gainG = 0.10; gainB = 0.03;
+    } else if (preset === 'moody_forest') {
+      exposure = -0.05;
+      contrast = 1.25;
+      saturation = 0.95;
+      temperature = -16;
+      tint = -12;
+      liftR = -0.06; liftG = 0.08; liftB = 0.02;
+      gammaR = -0.04; gammaG = 0.06; gammaB = 0.01;
+      gainR = 0.02; gainG = 0.08; gainB = 0.04;
+    } else if (preset === 'sunset_glow') {
+      exposure = 0.18;
+      contrast = 1.10;
+      saturation = 1.30;
+      temperature = 36;
+      tint = 12;
+      liftR = 0.08; liftG = 0.02; liftB = 0.02;
+      gammaR = 0.10; gammaG = 0.04; gammaB = -0.04;
+      gainR = 0.22; gainG = 0.12; gainB = -0.06;
+    } else if (preset === 'scifi_matrix') {
+      exposure = 0.0;
+      contrast = 1.45;
+      saturation = 1.10;
+      temperature = -18;
+      tint = -35;
+      liftR = -0.10; liftG = 0.12; liftB = -0.08;
+      gammaR = -0.08; gammaG = 0.16; gammaB = -0.06;
+      gainR = -0.04; gainG = 0.18; gainB = 0.02;
+    } else if (preset === 'monochrome_high') {
+      exposure = 0.05;
+      contrast = 1.75;
+      saturation = 0.0;
+      temperature = 0;
+      tint = 0;
+      liftR = -0.12; liftG = -0.12; liftB = -0.12;
+      gammaR = 0.0; gammaG = 0.0; gammaB = 0.0;
+      gainR = 0.16; gainG = 0.16; gainB = 0.16;
     } else {
       resetGrading();
       return;
@@ -556,6 +636,30 @@
         </button>
         <button type="button" class="preset-btn" on:click={() => applyPreset('vibrant_hdr')}>
           💥 Vibrant HDR
+        </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('eterna')}>
+          🎥 Fuji Eterna
+        </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('kodachrome')}>
+          🎞️ Kodachrome 64
+        </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('blockbuster')}>
+          🍿 Blockbuster
+        </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('sepia_vintage')}>
+          📜 Sepia Vintage
+        </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('moody_forest')}>
+          🌲 Moody Forest
+        </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('sunset_glow')}>
+          🌇 Sunset Glow
+        </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('scifi_matrix')}>
+          🟢 Matrix Neon
+        </button>
+        <button type="button" class="preset-btn" on:click={() => applyPreset('monochrome_high')}>
+          🏁 High-Con B&W
         </button>
         <button type="button" class="preset-btn" on:click={() => applyPreset('bleach')}>
           ⚔️ Bleach Bypass
