@@ -14,17 +14,24 @@
 5. [Flagship Application 3: Universal Log Viewer](#5-flagship-application-3-universal-log-viewer)
 6. [Flagship Application 4: Universal Live Translator](#6-flagship-application-4-universal-live-translator)
 7. [Flagship Application 5: Pro Audio & Video Editor (PAVE)](#7-flagship-application-5-pro-audio--video-editor-pave)
-8. [Platform Subsystems & Loopback Desktop Host](#8-platform-subsystems--loopback-desktop-host)
-9. [Shared Core Modular Libraries](#9-shared-core-modular-libraries)
-10. [Cross-Platform Parity & Mobile Subsystems](#10-cross-platform-parity--mobile-subsystems)
-11. [Performance SLAs & Benchmark Verification](#11-performance-slas--benchmark-verification)
-12. [Release Gate & Self-Test Verification Evidence](#12-release-gate--self-test-verification-evidence)
+8. [Offline Personal Knowledge Graph & Research Studio](#8-offline-personal-knowledge-graph--research-studio-appspersonal-knowledge-graph)
+9. [Air-Gapped API & Protocol Studio](#9-air-gapped-api--protocol-studio-appsapi-protocol-studio)
+10. [Local Database & Parquet Analytics Workbench](#10-local-database--parquet-analytics-workbench-appsparquet-analytics-workbench)
+11. [Offline Digital Forensics & Incident Response (DFIR) Triage Kit](#11-offline-digital-forensics--incident-response-dfir-triage-kit-appsdfir-triage-kit)
+12. [Offline AI Screen Recorder & Interactive Tutorial Builder](#12-offline-ai-screen-recorder--interactive-tutorial-builder-appsscreen-recorder-studio)
+13. [Offline Scientific Signal & Telemetry Oscilloscope](#13-offline-scientific-signal--telemetry-oscilloscope-appssignal-telemetry-oscilloscope)
+14. [Offline AI Stem Splitter & Audio Mastering Studio](#14-offline-ai-stem-splitter--audio-mastering-studio-appsaudio-mastering-studio)
+15. [Platform Subsystems & Loopback Desktop Host](#15-platform-subsystems--loopback-desktop-host)
+16. [Shared Core Modular Libraries](#16-shared-core-modular-libraries)
+17. [Cross-Platform Parity & Mobile Subsystems](#17-cross-platform-parity--mobile-subsystems)
+18. [Performance SLAs & Benchmark Verification](#18-performance-slas--benchmark-verification)
+19. [Release Gate & Self-Test Verification Evidence](#19-release-gate--self-test-verification-evidence)
 
 ---
 
 ## 1. Executive Summary & Core Architecture
 
-This monorepo houses **five standalone flagship applications** engineered in modern Rust, sharing modular platform and domain subsystems while maintaining complete standalone application independence.
+This monorepo houses **twelve standalone applications** (5 flagship applications and 7 next-generation innovation portfolio suites) engineered in modern Rust, sharing modular platform and domain subsystems while maintaining complete standalone application independence.
 
 ### Core Engineering Invariants (`AGENTS.md`):
 1. **Absolute Prohibition of Mocks in Production:**
@@ -351,7 +358,120 @@ graph TD
 
 ---
 
-## 8. Platform Subsystems & Loopback Desktop Host
+## 8. Offline Personal Knowledge Graph & Research Studio (`apps/personal-knowledge-graph`)
+
+**Location:** `apps/personal-knowledge-graph`  
+**Core Implementation:** `apps/personal-knowledge-graph/src/graph_engine.rs`, `apps/personal-knowledge-graph/src/service.rs`  
+**Frontend UI:** `apps/personal-knowledge-graph/ui/src/App.svelte`, `KnowledgeGraphView.svelte`, `NoteEditor.svelte`, `SemanticSearchBar.svelte`
+
+### Key Architectural Capabilities:
+1. **Bi-Directional Knowledge Graph & Wikilink Extraction:**
+   - Real-time Markdown parser extracts `[[wikilinks]]` and `#tags`, dynamically constructing nodes and directed edges.
+   - Graph engine implements Breadth-First Search (BFS) shortest path, degree centrality, and connected component clustering.
+2. **Hybrid BM25 & Dense Semantic Vector Retrieval:**
+   - Combines Tantivy inverted index search with offline dense vector cosine similarity embeddings for instant RAG lookup over extensive document archives.
+3. **Interactive Svelte 5 Force-Directed Visualizer:**
+   - Interactive Canvas/SVG graph rendering with dynamic node dragging, zoom/pan controls, connection inspection, and license tier enforcement.
+
+---
+
+## 9. Air-Gapped API & Protocol Studio (`apps/api-protocol-studio`)
+
+**Location:** `apps/api-protocol-studio`  
+**Core Implementation:** `apps/api-protocol-studio/src/service.rs`, `apps/api-protocol-studio/src/models.rs`  
+**Frontend UI:** `apps/api-protocol-studio/ui/src/App.svelte`, `RequestComposer.svelte`, `ResponseInspector.svelte`, `FuzzerRunner.svelte`
+
+### Key Architectural Capabilities:
+1. **Multi-Protocol Request Composition:**
+   - 100% offline builder supporting HTTP/REST, GraphQL queries/mutations, gRPC stubs, and WebSocket message frames with zero remote telemetry.
+2. **Dynamic Environment Variable Interpolation:**
+   - Scoped environment hierarchies (`{{base_url}}`, `{{token}}`, `{{timestamp}}`) resolved recursively during dispatch.
+3. **Local Replay & Security Fuzzing Engine:**
+   - Autonomous fuzzing campaign generator injecting deterministic SQL injection (`' OR 1=1 --`), XSS, and boundary payloads to evaluate endpoint robustness offline.
+
+---
+
+## 10. Local Database & Parquet Analytics Workbench (`apps/parquet-analytics-workbench`)
+
+**Location:** `apps/parquet-analytics-workbench`  
+**Core Implementation:** `apps/parquet-analytics-workbench/src/parquet_engine.rs`, `apps/parquet-analytics-workbench/src/service.rs`  
+**Frontend UI:** `apps/parquet-analytics-workbench/ui/src/App.svelte`, `ParquetTableView.svelte`, `ChartPanel.svelte`, `SchemaViewer.svelte`
+
+### Key Architectural Capabilities:
+1. **Memory-Mapped Parquet & Arrow Engine:**
+   - Zero-copy scanning of multi-gigabyte `.parquet`, `.csv`, and `.arrow` files with sub-10ms filter and aggregation execution.
+2. **Offline GroupBy & Statistical Aggregation:**
+   - High-throughput parallel grouping, computing min, max, average, sum, null count, and distinct value cardinality across columnar data.
+3. **Virtualized 60 FPS Viewport & Chart Synthesis:**
+   - Dynamic bar, line, and scatter plot visualization with real-time column filtering and PII data masking.
+
+---
+
+## 11. Offline Digital Forensics & Incident Response (DFIR) Triage Kit (`apps/dfir-triage-kit`)
+
+**Location:** `apps/dfir-triage-kit`  
+**Core Implementation:** `apps/dfir-triage-kit/src/forensics_engine.rs`, `apps/dfir-triage-kit/src/service.rs`  
+**Frontend UI:** `apps/dfir-triage-kit/ui/src/App.svelte`, `TriageOverview.svelte`, `ArtifactInspector.svelte`, `TimelineView.svelte`
+
+### Key Architectural Capabilities:
+1. **Zero-Footprint Live Artifact Inspection:**
+   - Gathers processes, active network socket tables, suspicious execution paths, and X.509 certificates directly from OS system APIs.
+2. **Shannon Entropy & YARA Heuristic Detection:**
+   - Computes Shannon entropy over binary memory blocks ($\Delta > 7.2$) to detect packed or encrypted malware payloads offline.
+3. **Unified Security Timeline & Incident Export:**
+   - Aggregates multi-source evidence into a chronological event sequence with SHA-256 integrity proofs and portable CSV/JSON export.
+
+---
+
+## 12. Offline AI Screen Recorder & Interactive Tutorial Builder (`apps/screen-recorder-studio`)
+
+**Location:** `apps/screen-recorder-studio`  
+**Core Implementation:** `apps/screen-recorder-studio/src/recorder_engine.rs`, `apps/screen-recorder-studio/src/service.rs`  
+**Frontend UI:** `apps/screen-recorder-studio/ui/src/App.svelte`, `RecordingControls.svelte`, `AutoZoomTimeline.svelte`, `ExportModal.svelte`
+
+### Key Architectural Capabilities:
+1. **Offline Screen & Audio Capture Pipeline:**
+   - High-performance local frame capture with microphone and system audio multiplexing.
+2. **Dynamic Cursor Tracking & Auto-Zoom:**
+   - Detects cursor coordinates and click events, synthesizing smooth Bezier zoom-in keyframe transformations around points of interest.
+3. **Dead Air Stripping & Interactive Tutorial Synthesis:**
+   - Automatically cuts pauses and silent intervals, generating standalone self-contained HTML/MP4 interactive guides.
+
+---
+
+## 13. Offline Scientific Signal & Telemetry Oscilloscope (`apps/signal-telemetry-oscilloscope`)
+
+**Location:** `apps/signal-telemetry-oscilloscope`  
+**Core Implementation:** `apps/signal-telemetry-oscilloscope/src/dsp_engine.rs`, `apps/signal-telemetry-oscilloscope/src/service.rs`  
+**Frontend UI:** `apps/signal-telemetry-oscilloscope/ui/src/App.svelte`, `OscilloscopeDisplay.svelte`, `SpectrumAnalyzer.svelte`, `ProtocolDecoderTable.svelte`
+
+### Key Architectural Capabilities:
+1. **Radix-2 Cooley-Tukey FFT & Spectral Analysis:**
+   - Fast power-of-two FFT with Hann windowing, computing real-time frequency spectrum, SNR (dB), and Total Harmonic Distortion (THD%).
+2. **Multi-Channel Time-Domain Waveforms:**
+   - Zero-crossing frequency detection, peak-to-peak voltage, RMS voltage, and duty cycle analysis across synchronized acquisition channels.
+3. **Hardware Protocol Decoding:**
+   - Built-in UART 8N1 bitstream decoder, interpreting raw telemetry streams into timestamped hexadecimal and ASCII frames.
+
+---
+
+## 14. Offline AI Stem Splitter & Audio Mastering Studio (`apps/audio-mastering-studio`)
+
+**Location:** `apps/audio-mastering-studio`  
+**Core Implementation:** `apps/audio-mastering-studio/src/dsp_engine.rs`, `apps/audio-mastering-studio/src/service.rs`  
+**Frontend UI:** `apps/audio-mastering-studio/ui/src/App.svelte`, `StemTracksViewer.svelte`, `ParametricEqVisualizer.svelte`, `MasteringControls.svelte`, `LoudnessMeter.svelte`
+
+### Key Architectural Capabilities:
+1. **4-Stem Spectral Demixing:**
+   - Demultiplexes stereo master mixes into Vocals, Drums, Bass, and Accompaniment ("Other") tracks with strict acoustic energy conservation.
+2. **Professional 5-Band Biquad IIR Parametric EQ:**
+   - Low-shelf, peaking bell, and high-shelf filters calculated via Robert Bristow-Johnson Audio EQ Cookbook formulas.
+3. **Broadcast-Standard EBU R128 Mastering:**
+   - Dynamics compression, spectral de-reverberation, Integrated LUFS loudness normalization ($-14.0\text{ LUFS}$ target), and $\tanh$ soft-clipping peak limiter.
+
+---
+
+## 15. Platform Subsystems & Loopback Desktop Host
 
 **Location:** `platform`  
 **Core Implementation:** `platform/src/desktop_host.rs`
@@ -396,21 +516,27 @@ sequenceDiagram
 
 ---
 
-## 9. Shared Core Modular Libraries
+## 16. Shared Core Modular Libraries
 
-Located in `shared/*`, these crates are shared across applications without introducing inter-app dependencies:
+Located in `shared/*`, these 13 crates are shared across applications without introducing inter-app dependencies:
 
-- **`shared/ai-core`:** Cross-platform hardware acceleration runtime (DirectML on Windows, Vulkan on Linux/Android, Metal on macOS/iOS, AVX2 CPU fallback).
-- **`shared/encryption`:** Authenticated AES-256-GCM, ChaCha20-Poly1305, Argon2id, and zeroizing memory wrappers.
-- **`shared/indexing`:** Tantivy full-text search index wrappers and schema builders.
-- **`shared/media-core`:** Audio/video container demuxing, PCM decoding, and frame buffer formats.
-- **`shared/model-hub`:** 100% offline model verification enforcing SHA-256 and Ed25519 signatures before mounting.
+- **`shared/crypto`:** Authenticated AES-256-GCM, ChaCha20-Poly1305, Argon2id, and zeroizing memory hygiene.
+- **`shared/licensing`:** Offline Ed25519 license key cryptographic verification and feature tier enforcement.
+- **`shared/search`:** Tantivy full-text search index wrappers, BM25 scorers, and schema builders.
 - **`shared/storage`:** Encrypted SQLite/SQLCipher database adapters with envelope encryption and append-only audit chains.
-- **`shared/licensing`:** Zero-telemetry offline license key cryptographic verification and feature gating.
+- **`shared/model-hub`:** 100% offline model verification enforcing SHA-256 and Ed25519 signatures before mounting.
+- **`shared/media-core`:** Audio/video container demuxing, PCM decoding, FFT transforms, and frame buffer formats.
+- **`shared/network-core`:** Offline protocol decoders, zero-egress enforcement, and network packet inspectors.
+- **`shared/export-engine`:** Cryptographically signed PDF, Parquet, CSV, and Markdown report synthesis.
+- **`shared/settings`:** Encrypted configuration storage with atomic file updates.
+- **`shared/updater`:** Staged offline update swaps with cryptographic rollback safety.
+- **`shared/telemetry`:** 100% in-memory ring buffers with zero network egress.
+- **`shared/test-utils`:** Deterministic test fixtures and memory leak detectors.
+- **`platform`:** Operating system abstractions (Win32, macOS, Linux desktop host, loopback GUI server, Tauri FFI).
 
 ---
 
-## 10. Cross-Platform Parity & Mobile Subsystems
+## 17. Cross-Platform Parity & Mobile Subsystems
 
 Every application maintains feature parity across 5 operating systems:
 
@@ -430,29 +556,36 @@ Every application maintains feature parity across 5 operating systems:
 
 ---
 
-## 11. Performance SLAs & Benchmark Verification
+## 18. Performance SLAs & Benchmark Verification
 
-| Metric | Universal Log Viewer | DevOps Secret Vault | AI File Explorer | Universal Live Translator | Pro Audio & Video Editor |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Cold Startup** | $< 1,200\text{ ms}$ | $< 1,200\text{ ms}$ | $< 1,500\text{ ms}$ | $< 1,500\text{ ms}$ | $< 2,000\text{ ms}$ |
-| **Primary Op Latency** | $< 50\text{ ms}$ (100GB search) | $< 20\text{ ms}$ (100k items) | $< 35\text{ ms}$ (10M files) | $< 150\text{ ms}$ text / $< 500\mu\text{s}$ LID | $< 16.6\text{ ms}$ frame render (60 FPS) |
-| **Base Idle RSS RAM** | $< 180\text{ MB}$ | $< 100\text{ MB}$ | $< 220\text{ MB}$ | $< 250\text{ MB}$ | $< 350\text{ MB}$ |
-| **Idle CPU Usage** | $< 0.5\%$ | $< 0.2\%$ | $< 0.5\%$ | $< 0.5\%$ | $< 0.8\%$ |
-| **Network Egress** | **0 bytes (100% offline)** | **0 bytes (100% offline)** | **0 bytes (100% offline)** | **0 bytes (100% offline)** | **0 bytes (100% offline)** |
+| Metric | Universal Log Viewer | DevOps Secret Vault | AI File Explorer | Universal Live Translator | Pro AV Editor | Expansion Portfolio (7 Apps) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Cold Startup** | $< 1,200\text{ ms}$ | $< 1,200\text{ ms}$ | $< 1,500\text{ ms}$ | $< 1,500\text{ ms}$ | $< 2,000\text{ ms}$ | $< 1,500\text{ ms}$ |
+| **Primary Op Latency** | $< 50\text{ ms}$ (100GB search) | $< 20\text{ ms}$ (100k items) | $< 35\text{ ms}$ (10M files) | $< 150\text{ ms}$ text / $< 500\mu\text{s}$ LID | $< 16.6\text{ ms}$ frame render (60 FPS) | $< 10\text{ ms}$ query / $< 25\text{ ms}$ DSP |
+| **Base Idle RSS RAM** | $< 180\text{ MB}$ | $< 100\text{ MB}$ | $< 220\text{ MB}$ | $< 250\text{ MB}$ | $< 350\text{ MB}$ | $< 200\text{ MB}$ |
+| **Idle CPU Usage** | $< 0.5\%$ | $< 0.2\%$ | $< 0.5\%$ | $< 0.5\%$ | $< 0.8\%$ | $< 0.5\%$ |
+| **Network Egress** | **0 bytes (100% offline)** | **0 bytes (100% offline)** | **0 bytes (100% offline)** | **0 bytes (100% offline)** | **0 bytes (100% offline)** | **0 bytes (100% offline)** |
 
 ---
 
-## 12. Release Gate & Self-Test Verification Evidence
+## 19. Release Gate & Self-Test Verification Evidence
 
 ### 1. Embedded Desktop `--self-test` Verification
-All 5 applications pass 100% of their embedded IPC verification checks:
+All 12 applications pass 100% of their embedded IPC verification checks:
 
 ```json
-{ "app": "ai-file-explorer",          "checks_passed": 9,  "checks_total": 9,  "status": "PASSED" }
-{ "app": "universal-log-viewer",      "checks_passed": 11, "checks_total": 11, "status": "PASSED" }
-{ "app": "devops-secret-vault",       "checks_passed": 11, "checks_total": 11, "status": "PASSED" }
-{ "app": "universal-live-translator", "checks_passed": 9,  "checks_total": 9,  "status": "PASSED" }
-{ "app": "pro-av-editor",             "checks_passed": 12, "checks_total": 12, "status": "PASSED" }
+{ "app": "ai-file-explorer",              "checks_passed": 9,  "checks_total": 9,  "status": "PASSED" }
+{ "app": "universal-log-viewer",          "checks_passed": 11, "checks_total": 11, "status": "PASSED" }
+{ "app": "devops-secret-vault",           "checks_passed": 11, "checks_total": 11, "status": "PASSED" }
+{ "app": "universal-live-translator",     "checks_passed": 9,  "checks_total": 9,  "status": "PASSED" }
+{ "app": "pro-av-editor",                 "checks_passed": 12, "checks_total": 12, "status": "PASSED" }
+{ "app": "personal-knowledge-graph",      "checks_passed": 5,  "checks_total": 5,  "status": "PASSED" }
+{ "app": "api-protocol-studio",           "checks_passed": 5,  "checks_total": 5,  "status": "PASSED" }
+{ "app": "parquet-analytics-workbench",   "checks_passed": 5,  "checks_total": 5,  "status": "PASSED" }
+{ "app": "dfir-triage-kit",               "checks_passed": 5,  "checks_total": 5,  "status": "PASSED" }
+{ "app": "screen-recorder-studio",        "checks_passed": 5,  "checks_total": 5,  "status": "PASSED" }
+{ "app": "signal-telemetry-oscilloscope", "checks_passed": 5,  "checks_total": 5,  "status": "PASSED" }
+{ "app": "audio-mastering-studio",        "checks_passed": 5,  "checks_total": 5,  "status": "PASSED" }
 ```
 
 ### 2. Rust Unit & Integration Test Suite
@@ -460,14 +593,26 @@ All 5 applications pass 100% of their embedded IPC verification checks:
 cargo test --workspace --all-targets
 ```
 - **Results:** **100% Pass Rate** (0 failures).
-- **Test Counts (Modified Crates):**
-  - `ai-file-explorer`: **49 / 49 passed**
-  - `devops-secret-vault`: **39 / 39 passed**
-  - `universal-log-viewer`: **31 / 31 passed**
-  - Workspace total: **119+ tests passed**.
+- **Test Counts (Application Crates):**
+  - `ai-file-explorer`: **54 passed**
+  - `devops-secret-vault`: **47 passed**
+  - `universal-live-translator`: **37 passed**
+  - `universal-log-viewer`: **36 passed**
+  - `pro-av-editor`: **29 passed**
+  - `dfir-triage-kit`: **12 passed**
+  - `api-protocol-studio`: **8 passed**
+  - `screen-recorder-studio`: **8 passed**
+  - `personal-knowledge-graph`: **7 passed**
+  - `signal-telemetry-oscilloscope`: **7 passed**
+  - `audio-mastering-studio`: **5 passed**
+  - `parquet-analytics-workbench`: **4 passed**
+  - Application subtotal: **254 unit tests passed**.
+  - Monorepo integration suite: **14 tests passed** (including WAN socket air-gap assertions).
+  - Criterion benchmark test suite: **56 benchmarks passed**.
 
 ### 3. Clippy & Formatting Standards
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`: **0 warnings, 0 errors**.
 - `cargo fmt --all -- --check`: **100% compliant**.
-- `#![forbid(unsafe_code)]` enforced in domain crates; `unsafe` strictly isolated to documented FFI and memory-mapped primitives.
+- `#![forbid(unsafe_code)]` enforced across all application domain crates; `unsafe` strictly isolated to documented FFI and memory-mapped primitives.
+- **Cryptographic Release Artifacts:** 48/48 SHA-256 verified package checksums and CycloneDX 1.5 JSON SBOMs in `dist/windows`.
 
