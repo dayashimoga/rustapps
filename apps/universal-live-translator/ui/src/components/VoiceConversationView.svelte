@@ -22,7 +22,13 @@
   let inputPartyB: string = '';
   let activeSpeaker: 'none' | 'party_a' | 'party_b' = 'none';
 
-  // Live Microphone & Waveform state
+  // Live Microphone, Loopback & Waveform state
+  let audioSourceMode: 'mic' | 'loopback' = 'mic';
+  let isHudOpen: boolean = false;
+  let hudPosition: 'bottom' | 'top' = 'bottom';
+  let hudFontSize: 'normal' | 'large' = 'normal';
+  let latestTurn: ConversationTurn | null = null;
+
   let recordingParty: 'none' | 'party_a' | 'party_b' = 'none';
   let recordingDurationSec: number = 0;
   let recordingStatus: string = '';
@@ -108,7 +114,25 @@
     }
 
     try {
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      if (
+        audioSourceMode === 'loopback' &&
+        navigator.mediaDevices &&
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (navigator.mediaDevices as any).getDisplayMedia
+      ) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        mediaStream = await (navigator.mediaDevices as any).getDisplayMedia({
+          video: true,
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          },
+        });
+        // Stop video tracks immediately since we only capture system audio
+        mediaStream.getVideoTracks().forEach((track) => track.stop());
+        recordingStatus = 'Capturing System Audio Loopback (16kHz ASR)...';
+      } else if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         mediaStream = await navigator.mediaDevices.getUserMedia({
           audio: {
             channelCount: 1,
@@ -117,6 +141,9 @@
             noiseSuppression: true,
           },
         });
+      }
+
+      if (mediaStream && mediaStream.getAudioTracks().length > 0) {
         audioCtx = new AudioContext({ sampleRate: 16000 });
         if (audioCtx.state === 'suspended') {
           await audioCtx.resume();
@@ -138,10 +165,10 @@
         analyserNode.connect(scriptProcessor);
         scriptProcessor.connect(audioCtx.destination);
       } else {
-        recordingStatus = 'Capturing simulated studio mic signal (no hardware mic)...';
+        recordingStatus = 'Capturing simulated audio signal (no active hardware track)...';
       }
     } catch {
-      recordingStatus = 'Hardware mic unavailable — using offline acoustic synthesizer...';
+      recordingStatus = 'Audio stream unavailable — using offline acoustic synthesizer...';
     }
 
     durationTimer = setInterval(() => {
@@ -358,6 +385,7 @@
       });
 
       turns = [...turns, turn];
+      latestTurn = turn;
       if (speaker === 'party_a') inputPartyA = '';
       else inputPartyB = '';
 
@@ -450,6 +478,28 @@
       </select>
     </div>
 
+    <!-- Audio Source: Mic vs System Audio Loopback -->
+    <div class="audio-source-pill-group">
+      <button
+        type="button"
+        class="audio-source-btn"
+        class:active={audioSourceMode === 'mic'}
+        on:click={() => (audioSourceMode = 'mic')}
+        title="Capture microphone input"
+      >
+        🎤 Mic
+      </button>
+      <button
+        type="button"
+        class="audio-source-btn"
+        class:active={audioSourceMode === 'loopback'}
+        on:click={() => (audioSourceMode = 'loopback')}
+        title="Capture system audio loopback from video call, meeting or video stream"
+      >
+        🔊 Loopback
+      </button>
+    </div>
+
     <div class="conv-badge">
       <span class="pulse-dot" class:recording-dot={recordingParty !== 'none'}></span>
       <span>{recordingStatus || 'Live Split-Screen Voice & Text Interpreter'}</span>
@@ -458,6 +508,16 @@
         <span>Auto-TTS</span>
       </label>
     </div>
+
+    <button
+      type="button"
+      class="hud-toggle-btn"
+      class:active={isHudOpen}
+      on:click={() => (isHudOpen = !isHudOpen)}
+      title="Toggle floating subtitle HUD overlay"
+    >
+      📺 {isHudOpen ? 'Close HUD' : 'Floating HUD'}
+    </button>
 
     <div class="party-setup">
       <span class="party-label">Party B:</span>
@@ -604,6 +664,72 @@
       </div>
     </div>
   </div>
+
+  <!-- Floating Subtitle HUD Overlay (Subphase 2.4.2) -->
+  {#if isHudOpen}
+    <aside
+      class="floating-subtitle-hud"
+      class:hud-top={hudPosition === 'top'}
+      class:hud-large={hudFontSize === 'large'}
+      aria-label="Floating Subtitle HUD"
+    >
+      <div class="hud-header">
+        <div class="hud-left">
+          <span class="hud-dot"></span>
+          <span class="hud-title">LIVE SUBTITLES</span>
+          <span class="hud-mode-tag">
+            {audioSourceMode === 'loopback' ? '🔊 Loopback' : '🎤 Mic'}
+          </span>
+        </div>
+        <div class="hud-actions">
+          <button
+            type="button"
+            class="hud-btn"
+            on:click={() => (hudFontSize = hudFontSize === 'normal' ? 'large' : 'normal')}
+            title="Toggle Font Size"
+          >
+            {hudFontSize === 'normal' ? 'A+' : 'A-'}
+          </button>
+          <button
+            type="button"
+            class="hud-btn"
+            on:click={() => (hudPosition = hudPosition === 'bottom' ? 'top' : 'bottom')}
+            title="Toggle Screen Position"
+          >
+            {hudPosition === 'bottom' ? '⬆ Top' : '⬇ Bottom'}
+          </button>
+          <button
+            type="button"
+            class="hud-btn hud-close"
+            on:click={() => (isHudOpen = false)}
+            title="Close HUD"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+      <div class="hud-content">
+        {#if latestTurn}
+          <div class="hud-original">
+            <span class="hud-speaker-tag">{latestTurn.speaker === 'party_a' ? 'Party A' : 'Party B'}:</span>
+            {latestTurn.originalText}
+          </div>
+          <div class="hud-translated">
+            {latestTurn.translatedText}
+          </div>
+        {:else if recordingParty !== 'none'}
+          <div class="hud-listening">
+            <span class="spinner-sm"></span>
+            Listening for {recordingParty === 'party_a' ? 'Party A' : 'Party B'} audio...
+          </div>
+        {:else}
+          <div class="hud-idle">
+            Ready for live speech or system audio loopback capture
+          </div>
+        {/if}
+      </div>
+    </aside>
+  {/if}
 </div>
 
 <style>
@@ -878,5 +1004,217 @@
   .send-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+
+  .audio-source-pill-group {
+    display: flex;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--border-subtle);
+    border-radius: 9999px;
+    padding: 2px;
+  }
+
+  .audio-source-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 0.25rem 0.6rem;
+    border-radius: 9999px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .audio-source-btn:hover {
+    color: var(--text-main);
+  }
+
+  .audio-source-btn.active {
+    background: rgba(56, 189, 248, 0.2);
+    color: #38bdf8;
+    font-weight: 600;
+  }
+
+  .hud-toggle-btn {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    padding: 0.35rem 0.75rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .hud-toggle-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-main);
+  }
+
+  .hud-toggle-btn.active {
+    background: rgba(34, 197, 94, 0.15);
+    border-color: rgba(34, 197, 94, 0.4);
+    color: #4ade80;
+  }
+
+  .floating-subtitle-hud {
+    position: absolute;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(850px, 92%);
+    background: rgba(10, 15, 30, 0.88);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(56, 189, 248, 0.3);
+    border-radius: var(--radius-md);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.65), 0 0 15px rgba(56, 189, 248, 0.15);
+    z-index: 1000;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    animation: hudFadeIn 0.25s ease-out;
+  }
+
+  .floating-subtitle-hud.hud-top {
+    bottom: auto;
+    top: 4.5rem;
+  }
+
+  @keyframes hudFadeIn {
+    from {
+      opacity: 0;
+      transform: translate(-50%, 15px);
+    }
+    to {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+  }
+
+  .hud-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.45rem 0.9rem;
+    background: rgba(0, 0, 0, 0.35);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .hud-left {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .hud-dot {
+    width: 8px;
+    height: 8px;
+    background: #ef4444;
+    border-radius: 50%;
+    animation: pulse 1.2s infinite;
+  }
+
+  .hud-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: #38bdf8;
+  }
+
+  .hud-mode-tag {
+    font-size: 0.7rem;
+    color: var(--text-faint);
+    background: rgba(255, 255, 255, 0.06);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+
+  .hud-actions {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .hud-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    padding: 2px 7px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .hud-btn:hover {
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.16);
+  }
+
+  .hud-close:hover {
+    color: #f87171;
+  }
+
+  .hud-content {
+    padding: 0.9rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    min-height: 70px;
+    justify-content: center;
+  }
+
+  .hud-original {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .hud-speaker-tag {
+    font-weight: 600;
+    color: #a5b4fc;
+    margin-right: 0.3rem;
+  }
+
+  .hud-translated {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #f8fafc;
+    line-height: 1.35;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.7);
+  }
+
+  .hud-large .hud-translated {
+    font-size: 1.45rem;
+  }
+
+  .hud-listening {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #38bdf8;
+    font-size: 0.9rem;
+    font-style: italic;
+  }
+
+  .hud-idle {
+    color: var(--text-faint);
+    font-size: 0.85rem;
+    text-align: center;
+    font-style: italic;
+  }
+
+  .spinner-sm {
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #38bdf8;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    display: inline-block;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
 </style>
