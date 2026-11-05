@@ -40,6 +40,7 @@ pub enum AppId {
     PersonalKnowledgeGraph,
     ApiProtocolStudio,
     ParquetAnalyticsWorkbench,
+    DfirTriageKit,
     AllAppsSuite,
 }
 

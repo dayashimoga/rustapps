@@ -33,3 +33,4 @@ export async function invokeIpc<T = unknown>(command: string, args: Record<strin
   }
   return result as T;
 }
+

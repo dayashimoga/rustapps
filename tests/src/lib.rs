@@ -1446,7 +1446,29 @@ mod integration_tests {
             .unwrap();
         assert_eq!(paw_chart.points.len(), 4); // 4 distinct datacenters in demo data
 
-        // 9. shared-licensing: 100% offline Ed25519 signature verification across entire suite
+        // 9. dfir-triage-kit: 100% offline host artifact acquisition, entropy calculation, & triage package persistence
+        let dfir_service = dfir_triage_kit::DfirService::open_in_memory().unwrap();
+        let triage_pkg = dfir_service.execute_triage(None).unwrap();
+        assert!(
+            !triage_pkg.processes.is_empty(),
+            "Live triage must acquire processes"
+        );
+        assert!(
+            !triage_pkg.sockets.is_empty(),
+            "Live triage must acquire network sockets"
+        );
+        assert!(
+            !triage_pkg.summary.triage_id.is_empty(),
+            "Triage package must have valid triage_id"
+        );
+        let dfir_stats = dfir_service.get_stats().unwrap();
+        assert_eq!(dfir_stats.total_triage_runs, 1);
+
+        // Shannon entropy calculation test
+        let zero_entropy = dfir_triage_kit::ForensicCollector::calculate_entropy(&[0u8; 512]);
+        assert_eq!(zero_entropy, 0.0);
+
+        // 10. shared-licensing: 100% offline Ed25519 signature verification across entire suite
         let verified = verifier.verify(&cert, shared_licensing::AppId::AiFileExplorer, 1700000001);
         assert!(
             verified.is_ok(),

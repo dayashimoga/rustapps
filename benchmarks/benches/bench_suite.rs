@@ -1015,6 +1015,44 @@ fn benchmark_parquet_analytics_workbench(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_dfir_triage_kit(c: &mut Criterion) {
+    use dfir_triage_kit::{DfirService, ForensicCollector};
+
+    let mut group = c.benchmark_group("dfir_triage_kit");
+
+    // 1. Shannon entropy calculation throughput on 64KB buffer
+    let mut payload = vec![0u8; 64 * 1024];
+    for (i, b) in payload.iter_mut().enumerate() {
+        *b = ((i * 37 + 13) % 256) as u8;
+    }
+
+    group.bench_function("dfir_shannon_entropy_64kb", |b| {
+        b.iter(|| {
+            let entropy = ForensicCollector::calculate_entropy(black_box(&payload));
+            black_box(entropy);
+        });
+    });
+
+    // 2. Triage service in-memory execution & persistence
+    let service = DfirService::open_in_memory().unwrap();
+    group.bench_function("dfir_service_triage_execution", |b| {
+        b.iter(|| {
+            let pkg = service.execute_triage(None).unwrap();
+            black_box(pkg.summary.threat_score);
+        });
+    });
+
+    // 3. Global stats retrieval from SQLite
+    group.bench_function("dfir_stats_retrieval", |b| {
+        b.iter(|| {
+            let stats = service.get_stats().unwrap();
+            black_box(stats.total_triage_runs);
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -1034,6 +1072,7 @@ criterion_group!(
     benchmark_pro_av_editor,
     benchmark_personal_knowledge_graph,
     benchmark_api_protocol_studio,
-    benchmark_parquet_analytics_workbench
+    benchmark_parquet_analytics_workbench,
+    benchmark_dfir_triage_kit
 );
 criterion_main!(benches);

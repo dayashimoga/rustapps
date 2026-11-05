@@ -206,6 +206,7 @@ dependencies = [
  "api-protocol-studio",
  "criterion",
  "devops-secret-vault",
+ "dfir-triage-kit",
  "parquet-analytics-workbench",
  "personal-knowledge-graph",
  "pro-av-editor",
@@ -609,6 +610,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "dfir-triage-kit"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "platform-common",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shared-encryption",
+ "shared-licensing",
+ "shared-storage",
+ "shared-telemetry",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -887,6 +909,7 @@ dependencies = [
  "ai-file-explorer",
  "api-protocol-studio",
  "devops-secret-vault",
+ "dfir-triage-kit",
  "parquet-analytics-workbench",
  "personal-knowledge-graph",
  "platform-common",
