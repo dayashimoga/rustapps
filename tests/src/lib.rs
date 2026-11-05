@@ -1356,7 +1356,22 @@ mod integration_tests {
         let frame_bmp = pave_service.render_frame(0, 160, 90).unwrap();
         assert!(!frame_bmp.data.is_empty());
 
-        // 6. shared-licensing: 100% offline Ed25519 signature verification across entire suite
+        // 6. personal-knowledge-graph: 100% offline graph traversal, Tantivy index & semantic search
+        let pkg_service = personal_knowledge_graph::KnowledgeService::open_in_memory().unwrap();
+        let pkg_note = pkg_service
+            .save_note(
+                None,
+                "Air-Gapped Synthesis",
+                "Testing [[Isolated Research]] in air-gapped container.",
+                Some(personal_knowledge_graph::NodeType::Note),
+                None,
+            )
+            .unwrap();
+        assert_eq!(pkg_note.title, "Air-Gapped Synthesis");
+        let pkg_graph = pkg_service.get_graph().unwrap();
+        assert_eq!(pkg_graph.nodes.len(), 2);
+
+        // 7. shared-licensing: 100% offline Ed25519 signature verification across entire suite
         let verified = verifier.verify(&cert, shared_licensing::AppId::AiFileExplorer, 1700000001);
         assert!(
             verified.is_ok(),

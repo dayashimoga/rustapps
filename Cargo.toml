@@ -20,6 +20,7 @@ members = [
     "apps/ai-file-explorer",
     "apps/universal-live-translator",
     "apps/pro-av-editor",
+    "apps/personal-knowledge-graph",
     "tests",
     "benchmarks",
 ]
@@ -70,6 +71,7 @@ regex = "1.11"
 
 # Utilities & System
 tempfile = "3.12"
+uuid = { version = "1.10", features = ["v4"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 flate2 = "1.0"
 

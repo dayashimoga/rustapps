@@ -180,6 +180,7 @@ dependencies = [
  "ai-file-explorer",
  "criterion",
  "devops-secret-vault",
+ "personal-knowledge-graph",
  "pro-av-editor",
  "rusqlite",
  "shared-encryption",
@@ -858,6 +859,7 @@ version = "0.1.0"
 dependencies = [
  "ai-file-explorer",
  "devops-secret-vault",
+ "personal-knowledge-graph",
  "platform-common",
  "pro-av-editor",
  "rusqlite",
@@ -1187,6 +1189,34 @@ dependencies = [
  "base64ct",
  "rand_core",
  "subtle",
+]
+
+[[package]]
+name = "personal-knowledge-graph"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "platform-common",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "shared-ai-core",
+ "shared-indexing",
+ "shared-licensing",
+ "shared-logging",
+ "shared-plugins",
+ "shared-search",
+ "shared-settings",
+ "shared-storage",
+ "shared-telemetry",
+ "tantivy",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

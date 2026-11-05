@@ -775,6 +775,81 @@ fn benchmark_pro_av_editor(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_personal_knowledge_graph(c: &mut Criterion) {
+    use personal_knowledge_graph::{DocumentParser, KnowledgeService, NodeType};
+
+    let service = KnowledgeService::open_in_memory().unwrap();
+
+    // Seed 100 notes
+    for i in 0..100 {
+        let note_text = format!(
+            "Research excerpt #{} discussing [[Topic-{}]] and #ai.",
+            i,
+            (i + 1) % 100
+        );
+        service
+            .save_note(
+                Some(&format!("node-{}", i)),
+                &format!("Note {}", i),
+                &note_text,
+                Some(NodeType::Note),
+                None,
+            )
+            .unwrap();
+    }
+
+    let mut group = c.benchmark_group("personal_knowledge_graph");
+
+    // 1. Shortest Path BFS Traversal
+    group.bench_function("pkg_bfs_shortest_path_100_nodes", |b| {
+        b.iter(|| {
+            let path = service
+                .find_path(black_box("node-0"), black_box("node-50"))
+                .unwrap();
+            black_box(path.len());
+        });
+    });
+
+    // 2. Full-Text BM25 Search
+    group.bench_function("pkg_full_text_bm25_search", |b| {
+        b.iter(|| {
+            let results = service
+                .search(
+                    black_box("research excerpt"),
+                    black_box(false),
+                    black_box(20),
+                )
+                .unwrap();
+            black_box(results.len());
+        });
+    });
+
+    // 3. Dense Semantic Vector Search
+    group.bench_function("pkg_dense_semantic_vector_search", |b| {
+        b.iter(|| {
+            let results = service
+                .search(
+                    black_box("machine learning neural network"),
+                    black_box(true),
+                    black_box(10),
+                )
+                .unwrap();
+            black_box(results.len());
+        });
+    });
+
+    // 4. Document Wiki-Link & Citation Parsing
+    let test_doc = "Analyzing [[Deep Residual Networks]] and [@he2016] for #computer-vision tasks.";
+    group.bench_function("pkg_markdown_wikilink_parse", |b| {
+        b.iter(|| {
+            let parsed = DocumentParser::parse(black_box(test_doc));
+            black_box(parsed.wiki_links.len());
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -791,6 +866,7 @@ criterion_group!(
     benchmark_file_explorer_operations,
     benchmark_file_explorer_advanced_features,
     benchmark_universal_live_translator,
-    benchmark_pro_av_editor
+    benchmark_pro_av_editor,
+    benchmark_personal_knowledge_graph
 );
 criterion_main!(benches);

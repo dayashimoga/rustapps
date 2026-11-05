@@ -15,7 +15,7 @@ echo "=========================================================="
 if [ -n "${FILTER_APP}" ]; then
     APPS=("${FILTER_APP}")
 else
-    APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor")
+    APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor" "personal-knowledge-graph")
 fi
 mkdir -p "${OUTPUT_DIR}"
 

@@ -37,6 +37,7 @@ pub enum AppId {
     UniversalLogViewer,
     UniversalLiveTranslator,
     ProAvEditor,
+    PersonalKnowledgeGraph,
     AllAppsSuite,
 }
 
