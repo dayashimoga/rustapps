@@ -9,6 +9,7 @@
   import RedactExportModal from './components/RedactExportModal.svelte';
   import StatusBar from './components/StatusBar.svelte';
   import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
+  import TraceWaterfallModal from './components/TraceWaterfallModal.svelte';
   import type {
     LogLineRecord,
     OpenedFileInfo,
@@ -61,6 +62,9 @@
   let showTimeline = true;
   let showAiInsights = false;
   let isRedactModalOpen = false;
+  let isTraceModalOpen = false;
+  let activeTraceId = '';
+  let isMergingLogs = false;
 
   let bookmarks: BookmarkRecord[] = [];
   let systemMetrics: ProcessResourceUsage = {
@@ -160,6 +164,45 @@
     } catch (e: any) {
       openFileError = e?.message || String(e);
     }
+  }
+
+  async function mergeAllInFolder() {
+    if (folderFiles.length === 0) return;
+    openFileError = '';
+    isMergingLogs = true;
+    try {
+      const paths = folderFiles.map((f) => f.path);
+      const res: any = await tauriInvoke('merge_log_files', { filePaths: paths, maxLines: 50000 });
+      if (res && res.file_info) {
+        await openRealFile(res.file_info.path);
+      }
+    } catch (e: any) {
+      openFileError = e?.message || String(e);
+    } finally {
+      isMergingLogs = false;
+    }
+  }
+
+  async function mergeOpenTabs() {
+    if (openTabs.length < 2) return;
+    openFileError = '';
+    isMergingLogs = true;
+    try {
+      const paths = openTabs.map((t) => t.path);
+      const res: any = await tauriInvoke('merge_log_files', { filePaths: paths, maxLines: 50000 });
+      if (res && res.file_info) {
+        await openRealFile(res.file_info.path);
+      }
+    } catch (e: any) {
+      openFileError = e?.message || String(e);
+    } finally {
+      isMergingLogs = false;
+    }
+  }
+
+  function openTraceModal(traceId: string = '') {
+    activeTraceId = traceId;
+    isTraceModalOpen = true;
   }
 
   async function openSystemLogsModal() {
@@ -789,6 +832,24 @@
       run: () => { isRedactExportOpen = true; },
     },
     {
+      id: 'act-trace-waterfall',
+      title: 'OpenTelemetry Trace Waterfall...',
+      subtitle: 'Correlate distributed trace spans and latency across services',
+      category: 'Analytics',
+      icon: '⚡',
+      shortcut: 'Ctrl+Shift+W',
+      run: () => openTraceModal(),
+    },
+    {
+      id: 'act-merge-tabs',
+      title: 'Merge Open Tab Streams',
+      subtitle: 'Interleave and correlate multi-file logs chronologically',
+      category: 'File',
+      icon: '🔀',
+      shortcut: 'Ctrl+Shift+M',
+      run: mergeOpenTabs,
+    },
+    {
       id: 'filter-all',
       title: 'Severity: Show ALL Records',
       subtitle: 'Clear severity level filter',
@@ -842,6 +903,11 @@
         isCommandPaletteOpen = false;
         return;
       }
+      if (isTraceModalOpen) {
+        e.preventDefault();
+        isTraceModalOpen = false;
+        return;
+      }
       if (isRedactExportOpen) {
         e.preventDefault();
         isRedactExportOpen = false;
@@ -890,6 +956,12 @@
     if (isCtrl && e.shiftKey && e.key.toLowerCase() === 'o') {
       e.preventDefault();
       handleOpenFolderPrompt();
+    } else if (isCtrl && e.shiftKey && e.key.toLowerCase() === 'w') {
+      e.preventDefault();
+      openTraceModal();
+    } else if (isCtrl && e.shiftKey && e.key.toLowerCase() === 'm') {
+      e.preventDefault();
+      mergeOpenTabs();
     } else if (isCtrl && e.shiftKey && e.key.toLowerCase() === 't') {
       e.preventDefault();
       showTimeline = !showTimeline;
@@ -1008,6 +1080,27 @@
           </button>
         </button>
       {/each}
+
+      {#if openTabs.length > 1}
+        <button
+          type="button"
+          class="tab-action-btn tab-merge-btn"
+          on:click={mergeOpenTabs}
+          disabled={isMergingLogs}
+          title="Chronologically interleave all open tabs into a single correlated stream"
+        >
+          {isMergingLogs ? '⏳ Merging...' : '🔀 Merge Tabs'}
+        </button>
+      {/if}
+
+      <button
+        type="button"
+        class="tab-action-btn tab-trace-btn"
+        on:click={() => openTraceModal()}
+        title="OpenTelemetry Distributed Trace Waterfall (Ctrl+Shift+W)"
+      >
+        ⚡ Trace Waterfall
+      </button>
     </div>
   {/if}
 
@@ -1129,6 +1222,19 @@
               <span class="folder-title" title={folderPath}>📁 {folderPath.split(/[/\\]/).pop()}</span>
               <button class="close-sidebar-btn" on:click={() => (isFolderSidebarOpen = false)}>✕</button>
             </div>
+            {#if folderFiles.length > 1}
+              <div class="folder-merge-bar">
+                <button
+                  type="button"
+                  class="btn-merge-all"
+                  on:click={mergeAllInFolder}
+                  disabled={isMergingLogs}
+                  title="Chronologically interleave and correlate all {folderFiles.length} logs in this folder"
+                >
+                  {isMergingLogs ? '⏳ Merging Logs...' : `🔀 Merge All (${folderFiles.length} logs)`}
+                </button>
+              </div>
+            {/if}
             <div class="folder-file-list">
               {#each folderFiles as f (f.path)}
                 <button
@@ -1240,6 +1346,14 @@
     {filePath}
     onExport={handleExportRedacted}
     on:close={() => (isRedactModalOpen = false)}
+  />
+
+  <!-- OpenTelemetry Trace Waterfall Modal -->
+  <TraceWaterfallModal
+    isOpen={isTraceModalOpen}
+    initialTraceId={activeTraceId}
+    on:close={() => (isTraceModalOpen = false)}
+    on:jumpToLine={(e) => handleJumpLine({ detail: e.detail })}
   />
 
   <!-- Bottom Operational Status Bar -->
@@ -1383,6 +1497,57 @@
     opacity: 1;
     background: rgba(239, 68, 68, 0.25);
     color: #fca5a5;
+  }
+
+  .tab-action-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s ease;
+  }
+
+  .tab-merge-btn {
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    color: #60a5fa;
+  }
+  .tab-merge-btn:hover {
+    background: rgba(59, 130, 246, 0.22);
+  }
+
+  .tab-trace-btn {
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    color: #fbbf24;
+  }
+  .tab-trace-btn:hover {
+    background: rgba(245, 158, 11, 0.22);
+  }
+
+  .folder-merge-bar {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .btn-merge-all {
+    width: 100%;
+    background: hsla(217, 91%, 60%, 0.18);
+    border: 1px solid hsla(217, 91%, 60%, 0.4);
+    color: var(--accent-blue);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-merge-all:hover {
+    background: hsla(217, 91%, 60%, 0.28);
   }
 
   /* Sub-toolbar & Severity Filters */

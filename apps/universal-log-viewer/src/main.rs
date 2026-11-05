@@ -85,6 +85,10 @@ impl DesktopIpcHandler for LogViewerDesktopHandler {
                     "destPath": std::env::temp_dir().join("ulv_redact_selftest.log").to_string_lossy()
                 }),
             },
+            SelfTestCheck {
+                command: "correlate_traces",
+                payload: json!({ "traceId": "89231" }),
+            },
         ]
     }
 }

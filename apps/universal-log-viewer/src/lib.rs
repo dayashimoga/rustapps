@@ -15,6 +15,7 @@ pub mod search_engine;
 pub mod sparse_index;
 pub mod tail_mode;
 pub mod timeline;
+pub mod trace_merger;
 pub mod workspace;
 
 // Re-export core types
@@ -36,4 +37,8 @@ pub use search_engine::{LogQuery, LogSearchEngine, LogSearchMatch, LogSearchRepo
 pub use sparse_index::SparseLineIndex;
 pub use tail_mode::{TailEvent, TailFollower};
 pub use timeline::{TimelineBucket, TimelineHistogram, TimelineIndex};
+pub use trace_merger::{
+    correlate_trace_waterfall, merge_log_files_chronologically, MergedLogSummary,
+    TraceWaterfallReport, TraceWaterfallSpan,
+};
 pub use workspace::{BookmarkRecord, WorkspaceRecord, WorkspaceStore};

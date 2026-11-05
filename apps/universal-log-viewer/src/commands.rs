@@ -672,9 +672,12 @@ pub fn dispatch_ipc_command(
                 let raw_path = args
                     .get("path")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("default")
+                    .unwrap_or("")
                     .trim();
-                let target_path = if raw_path.is_empty() || raw_path == "default" {
+                if raw_path.is_empty() {
+                    return Err("No log file path specified".to_string());
+                }
+                let target_path = if raw_path == "default" || raw_path == "sample" {
                     let cache_dir =
                         platform_common::AppPaths::from_app_name("universal-log-viewer")
                             .map(|p| p.cache_dir)
@@ -1093,6 +1096,83 @@ pub fn dispatch_ipc_command(
                     "exported_lines": lines.len(),
                 }))
             }
+            "merge_log_files" => {
+                let file_paths: Vec<String> = args
+                    .get("filePaths")
+                    .or_else(|| args.get("file_paths"))
+                    .or_else(|| args.get("paths"))
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+                if file_paths.is_empty() {
+                    return Err("No log files provided for merger".to_string());
+                }
+                let max_lines = args
+                    .get("maxLines")
+                    .or_else(|| args.get("max_lines"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(50_000) as usize;
+
+                let cache_dir = platform_common::AppPaths::from_app_name("universal-log-viewer")
+                    .map(|p| p.cache_dir)
+                    .unwrap_or_else(|_| std::env::temp_dir());
+                let dest = cache_dir.join(format!(
+                    "merged_{}.log",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0)
+                ));
+
+                let summary = crate::trace_merger::merge_log_files_chronologically(
+                    &file_paths,
+                    &dest,
+                    max_lines,
+                )
+                .map_err(|e| e.to_string())?;
+
+                let info = svc.open_file(&dest).await.map_err(|e| e.to_string())?;
+
+                Ok(serde_json::json!({
+                    "summary": summary,
+                    "file_info": info
+                }))
+            }
+            "correlate_traces" => {
+                let trace_id = args
+                    .get("traceId")
+                    .or_else(|| args.get("trace_id"))
+                    .or_else(|| args.get("query"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+                if trace_id.is_empty() {
+                    return Err("Trace ID cannot be empty".to_string());
+                }
+                let records = svc.parse_records(50_000).await.map_err(|e| e.to_string())?;
+                let active_name = {
+                    let lock = svc.active_file.read().await;
+                    lock.as_ref()
+                        .map(|s| {
+                            s.path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("active.log")
+                                .to_string()
+                        })
+                        .unwrap_or_else(|| "active.log".to_string())
+                };
+
+                let report = crate::trace_merger::correlate_trace_waterfall(
+                    &records,
+                    trace_id,
+                    &active_name,
+                )
+                .ok_or_else(|| {
+                    format!("No log records found matching trace ID: {}", trace_id)
+                })?;
+
+                serde_json::to_value(report).map_err(|e| e.to_string())
+            }
             _ => Err(format!("Unknown Universal Log Viewer IPC command: {}", cmd)),
         }
     };
@@ -1127,7 +1207,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let log_path = temp.path().join("commands_test.log");
         let content =
-            b"2026-10-19T10:00:00Z [INFO] Init\n2026-10-19T10:00:01Z [WARN] Disk 85%\n2026-10-19T10:00:02Z [ERROR] Crash\n";
+            b"2026-10-19T10:00:00Z [INFO] Init trace_id=trace-101\n2026-10-19T10:00:01Z [WARN] Disk 85% trace_id=trace-101\n2026-10-19T10:00:02Z [ERROR] Crash\n";
         std::fs::write(&log_path, content).unwrap();
 
         let ws_store = Arc::new(WorkspaceStore::open_in_memory().unwrap());
@@ -1141,7 +1221,7 @@ mod tests {
         // Get lines slice (0..2)
         let slice = service.get_lines_slice(0, 2).await.unwrap();
         assert_eq!(slice.len(), 2);
-        assert_eq!(slice[0].text, "2026-10-19T10:00:00Z [INFO] Init");
+        assert_eq!(slice[0].text, "2026-10-19T10:00:00Z [INFO] Init trace_id=trace-101");
 
         // Get lines by indices [0, 2]
         let by_indices = service.get_lines_by_indices(&[0, 2]).await.unwrap();
@@ -1218,5 +1298,26 @@ mod tests {
             2
         );
         assert!(filter_export.exists());
+
+        // Dispatch IPC merge_log_files
+        let merge_val = dispatch_ipc_command(
+            "merge_log_files",
+            serde_json::json!({
+                "filePaths": [log_path.to_str().unwrap(), filter_export.to_str().unwrap()],
+                "maxLines": 500
+            }),
+        )
+        .unwrap();
+        assert!(merge_val.get("summary").is_some());
+        assert!(merge_val.get("file_info").is_some());
+
+        // Dispatch IPC correlate_traces
+        let trace_val = dispatch_ipc_command(
+            "correlate_traces",
+            serde_json::json!({ "traceId": "trace-101" }),
+        )
+        .unwrap();
+        assert_eq!(trace_val.get("trace_id").unwrap().as_str().unwrap(), "trace-101");
+        assert_eq!(trace_val.get("total_spans").unwrap().as_u64().unwrap(), 3);
     }
 }
