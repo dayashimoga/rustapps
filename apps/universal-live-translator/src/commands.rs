@@ -4,9 +4,9 @@
 //! Provides typed command interfaces invoked by the desktop Svelte/TypeScript UI.
 
 use crate::models::{
-    CameraTranslationResult, ConversationSession, ConversationTurn, GlossaryTerm, LanguageCode,
-    PhraseCategory, PhrasebookItem, SubtitleFormat, TranslationRequest, TranslationResponse,
-    TtsSynthesisRequest, TtsSynthesisResponse,
+    BatchDocumentItem, BatchTranslationResult, CameraTranslationResult, ConversationSession,
+    ConversationTurn, GlossaryTerm, LanguageCode, PhraseCategory, PhrasebookItem, SubtitleFormat,
+    TranslationRequest, TranslationResponse, TtsSynthesisRequest, TtsSynthesisResponse,
 };
 use crate::service::TranslatorService;
 use serde_json::{json, Value};
@@ -108,6 +108,7 @@ pub fn translate_subtitles_cmd(
     format_str: String,
     source_lang_str: Option<String>,
     target_lang_str: String,
+    domain_glossary: Option<String>,
 ) -> Result<String, String> {
     let service = get_service();
     let svc = service.lock().map_err(|e| e.to_string())?;
@@ -120,8 +121,14 @@ pub fn translate_subtitles_cmd(
     let source_lang = source_lang_str.and_then(|s| LanguageCode::parse(&s));
     let target_lang = LanguageCode::parse(&target_lang_str).unwrap_or(LanguageCode::Es);
 
-    svc.translate_subtitle_content(&content, format, source_lang, target_lang)
-        .map_err(|e| e.to_string())
+    svc.translate_subtitle_content(
+        &content,
+        format,
+        source_lang,
+        target_lang,
+        domain_glossary.as_deref(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Document translation command (.md or .txt)
@@ -130,6 +137,7 @@ pub fn translate_document_cmd(
     format: String,
     source_lang_str: Option<String>,
     target_lang_str: String,
+    domain_glossary: Option<String>,
 ) -> Result<String, String> {
     let service = get_service();
     let svc = service.lock().map_err(|e| e.to_string())?;
@@ -137,8 +145,35 @@ pub fn translate_document_cmd(
     let source_lang = source_lang_str.and_then(|s| LanguageCode::parse(&s));
     let target_lang = LanguageCode::parse(&target_lang_str).unwrap_or(LanguageCode::Es);
 
-    svc.translate_document_content(&content, &format, source_lang, target_lang)
-        .map_err(|e| e.to_string())
+    svc.translate_document_content(
+        &content,
+        &format,
+        source_lang,
+        target_lang,
+        domain_glossary.as_deref(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Batch translate multiple documents (.txt, .md, .srt, .vtt)
+pub fn batch_translate_documents_cmd(
+    documents: Vec<BatchDocumentItem>,
+    source_lang_str: Option<String>,
+    target_lang_str: String,
+    domain_glossary: Option<String>,
+) -> Result<Vec<BatchTranslationResult>, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+
+    let source_lang = source_lang_str.and_then(|s| LanguageCode::parse(&s));
+    let target_lang = LanguageCode::parse(&target_lang_str).unwrap_or(LanguageCode::Es);
+
+    Ok(svc.batch_translate_documents(
+        &documents,
+        source_lang,
+        target_lang,
+        domain_glossary.as_deref(),
+    ))
 }
 
 /// List phrasebook items with optional filters
@@ -516,8 +551,18 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("es")
                 .to_string();
-            let res =
-                translate_subtitles_cmd(content, format_str, source_lang_str, target_lang_str)?;
+            let domain_glossary = args
+                .get("domainGlossary")
+                .or_else(|| args.get("domain_glossary"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let res = translate_subtitles_cmd(
+                content,
+                format_str,
+                source_lang_str,
+                target_lang_str,
+                domain_glossary,
+            )?;
             Ok(json!(res))
         }
         "translate_document_cmd" => {
@@ -542,8 +587,53 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("es")
                 .to_string();
-            let res = translate_document_cmd(content, format, source_lang_str, target_lang_str)?;
+            let domain_glossary = args
+                .get("domainGlossary")
+                .or_else(|| args.get("domain_glossary"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let res = translate_document_cmd(
+                content,
+                format,
+                source_lang_str,
+                target_lang_str,
+                domain_glossary,
+            )?;
             Ok(json!(res))
+        }
+        "batch_translate_documents_cmd" => {
+            let documents_val = args
+                .get("documents")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let documents: Vec<BatchDocumentItem> = documents_val
+                .into_iter()
+                .filter_map(|d| serde_json::from_value::<BatchDocumentItem>(d).ok())
+                .collect();
+            let source_lang_str = args
+                .get("sourceLangStr")
+                .or_else(|| args.get("source_lang_str"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let target_lang_str = args
+                .get("targetLangStr")
+                .or_else(|| args.get("target_lang_str"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("es")
+                .to_string();
+            let domain_glossary = args
+                .get("domainGlossary")
+                .or_else(|| args.get("domain_glossary"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let results = batch_translate_documents_cmd(
+                documents,
+                source_lang_str,
+                target_lang_str,
+                domain_glossary,
+            )?;
+            serde_json::to_value(results).map_err(|e| e.to_string())
         }
         "translate_camera_image_cmd" => {
             let image_bytes: Vec<u8> = args
@@ -902,6 +992,41 @@ mod tests {
         .unwrap();
         let terms = get_glossary_terms_cmd("medical".to_string()).unwrap();
         assert!(terms.iter().any(|t| t.source_term == "arrhythmia"));
+
+        // Document translation with glossary override
+        let doc_res = translate_document_cmd(
+            "# Report\n\nPatient presented with arrhythmia.".to_string(),
+            "md".to_string(),
+            Some("en".to_string()),
+            "es".to_string(),
+            Some("medical".to_string()),
+        )
+        .unwrap();
+        assert!(doc_res.contains("arritmia cardíaca"));
+
+        // Batch document translation workflow
+        let batch_items = vec![
+            BatchDocumentItem {
+                filename: "notes.txt".to_string(),
+                content: "Hello world".to_string(),
+                format: Some("txt".to_string()),
+            },
+            BatchDocumentItem {
+                filename: "sub.srt".to_string(),
+                content: "1\n00:00:01,000 --> 00:00:03,000\nHello\n\n".to_string(),
+                format: Some("srt".to_string()),
+            },
+        ];
+        let batch_results = batch_translate_documents_cmd(
+            batch_items,
+            Some("en".to_string()),
+            "es".to_string(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(batch_results.len(), 2);
+        assert!(batch_results[0].success);
+        assert!(batch_results[1].success);
 
         let deleted =
             delete_glossary_term_cmd("medical".to_string(), "arrhythmia".to_string()).unwrap();

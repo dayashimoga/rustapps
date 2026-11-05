@@ -142,6 +142,23 @@ export interface CameraTranslationResult {
 
 export type SubtitleFormat = 'Srt' | 'Vtt';
 
+export interface BatchDocumentItem {
+  filename: string;
+  content: string;
+  format?: string;
+}
+
+export interface BatchTranslationResult {
+  filename: string;
+  translated_filename: string;
+  translated_content: string;
+  original_chars: number;
+  translated_chars: number;
+  elapsed_ms: number;
+  success: boolean;
+  error?: string | null;
+}
+
 // Standard 32 supported languages dictionary
 export const SUPPORTED_LANGUAGES: LanguageInfo[] = [
   { code: 'en', displayName: 'English', nativeName: 'English', script: 'Latin', isRtl: false },

@@ -8,9 +8,10 @@
 use crate::camera_translate::{CameraTranslateError, CameraTranslator};
 use crate::lid::{LanguageDetector, LidResult};
 use crate::models::{
-    CameraTranslationResult, ConversationSession, ConversationTurn, GlossaryTerm, LanguageCode,
-    PhraseCategory, PhrasebookItem, SubtitleFormat, TranscriptSegment, TranslationRequest,
-    TranslationResponse, TtsSynthesisRequest, TtsSynthesisResponse,
+    BatchDocumentItem, BatchTranslationResult, CameraTranslationResult, ConversationSession,
+    ConversationTurn, GlossaryTerm, LanguageCode, PhraseCategory, PhrasebookItem, SubtitleFormat,
+    TranscriptSegment, TranslationRequest, TranslationResponse, TtsSynthesisRequest,
+    TtsSynthesisResponse,
 };
 use crate::nmt::{OfflineTranslationEngine, TranslationError};
 use crate::phrasebook::{PhrasebookError, PhrasebookStore, TranslationHistoryRecord};
@@ -228,10 +229,11 @@ impl TranslatorService {
         format: SubtitleFormat,
         source_lang: Option<LanguageCode>,
         target_lang: LanguageCode,
+        domain_glossary: Option<&str>,
     ) -> Result<String, ServiceError> {
         Ok(self
             .subtitles
-            .translate_subtitle_file(content, format, source_lang, target_lang)?)
+            .translate_subtitle_file(content, format, source_lang, target_lang, domain_glossary)?)
     }
 
     /// Translate document text (.md, .txt) preserving structural elements
@@ -241,10 +243,23 @@ impl TranslatorService {
         format: &str,
         source_lang: Option<LanguageCode>,
         target_lang: LanguageCode,
+        domain_glossary: Option<&str>,
     ) -> Result<String, ServiceError> {
         Ok(self
             .subtitles
-            .translate_document(doc_text, format, source_lang, target_lang)?)
+            .translate_document(doc_text, format, source_lang, target_lang, domain_glossary)?)
+    }
+
+    /// Batch translate multiple documents (.txt, .md, .srt, .vtt)
+    pub fn batch_translate_documents(
+        &self,
+        documents: &[BatchDocumentItem],
+        source_lang: Option<LanguageCode>,
+        target_lang: LanguageCode,
+        domain_glossary: Option<&str>,
+    ) -> Vec<BatchTranslationResult> {
+        self.subtitles
+            .batch_translate_documents(documents, source_lang, target_lang, domain_glossary)
     }
 
     /// Generate timestamped subtitle file (.srt or .vtt) directly from 16kHz audio PCM

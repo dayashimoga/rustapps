@@ -531,6 +531,27 @@ pub enum SubtitleFormat {
     Vtt,
 }
 
+/// Single document item for batch translation (.txt, .md, .srt, .vtt)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchDocumentItem {
+    pub filename: String,
+    pub content: String,
+    pub format: Option<String>,
+}
+
+/// Output result for an item in batch translation
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BatchTranslationResult {
+    pub filename: String,
+    pub translated_filename: String,
+    pub translated_content: String,
+    pub original_chars: usize,
+    pub translated_chars: usize,
+    pub elapsed_ms: f64,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Phrasebook & Glossary
 // ---------------------------------------------------------------------------

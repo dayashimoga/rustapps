@@ -120,27 +120,21 @@ impl OfflineTranslationEngine {
         if let Some(ref domain) = request.domain_glossary {
             if let Ok(glossaries) = self.domain_glossaries.read() {
                 if let Some(terms) = glossaries.get(&domain.to_lowercase()) {
-                    for (idx, term) in terms.iter().enumerate() {
+                    // Sort terms by source_term length descending to prevent shorter sub-terms eclipsing longer phrases
+                    let mut sorted_terms = terms.clone();
+                    sorted_terms.sort_by_key(|b| std::cmp::Reverse(b.source_term.len()));
+
+                    for (idx, term) in sorted_terms.iter().enumerate() {
                         let placeholder = format!("__GLOSSARY_TOKEN_{}__", idx);
-                        if term.case_sensitive {
-                            if current_text.contains(&term.source_term) {
-                                current_text =
-                                    current_text.replace(&term.source_term, &placeholder);
-                                protected_tokens.insert(placeholder, term.target_term.clone());
-                            }
-                        } else {
-                            // Case-insensitive replacement
-                            let lower_text = current_text.to_lowercase();
-                            let lower_source = term.source_term.to_lowercase();
-                            if lower_text.contains(&lower_source) {
-                                // Simple replacement while matching
-                                current_text = replace_case_insensitive(
-                                    &current_text,
-                                    &lower_source,
-                                    &placeholder,
-                                );
-                                protected_tokens.insert(placeholder, term.target_term.clone());
-                            }
+                        let replaced = replace_with_word_boundary(
+                            &current_text,
+                            &term.source_term,
+                            &placeholder,
+                            term.case_sensitive,
+                        );
+                        if replaced != current_text {
+                            current_text = replaced;
+                            protected_tokens.insert(placeholder, term.target_term.clone());
                         }
                     }
                 }
@@ -1588,18 +1582,68 @@ fn capitalize_first_letter(s: &str) -> String {
     }
 }
 
-fn replace_case_insensitive(text: &str, pattern_lower: &str, replacement: &str) -> String {
-    let mut result = String::new();
-    let mut last_idx = 0;
-    let lower_text = text.to_lowercase();
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
 
-    while let Some(pos) = lower_text[last_idx..].find(pattern_lower) {
-        let abs_pos = last_idx + pos;
-        result.push_str(&text[last_idx..abs_pos]);
-        result.push_str(replacement);
-        last_idx = abs_pos + pattern_lower.len();
+fn replace_with_word_boundary(
+    text: &str,
+    target_needle: &str,
+    replacement: &str,
+    case_sensitive: bool,
+) -> String {
+    if text.is_empty() || target_needle.is_empty() {
+        return text.to_string();
     }
-    result.push_str(&text[last_idx..]);
+
+    let is_single_word = !target_needle.contains(' ')
+        && target_needle.chars().all(is_word_char);
+
+    let text_chars: Vec<char> = text.chars().collect();
+    let needle_chars: Vec<char> = if case_sensitive {
+        target_needle.chars().collect()
+    } else {
+        target_needle.to_lowercase().chars().collect()
+    };
+    let needle_len = needle_chars.len();
+
+    let mut result = String::with_capacity(text.len());
+    let mut i = 0;
+
+    while i < text_chars.len() {
+        if i + needle_len <= text_chars.len() {
+            let slice_matches = if case_sensitive {
+                text_chars[i..i + needle_len] == needle_chars[..]
+            } else {
+                let candidate_lower: Vec<char> = text_chars[i..i + needle_len]
+                    .iter()
+                    .flat_map(|c| c.to_lowercase())
+                    .collect();
+                candidate_lower == needle_chars
+            };
+
+            if slice_matches {
+                let is_boundary_ok = if is_single_word {
+                    let prev_ok = i == 0 || !is_word_char(text_chars[i - 1]);
+                    let next_ok = (i + needle_len) >= text_chars.len()
+                        || !is_word_char(text_chars[i + needle_len]);
+                    prev_ok && next_ok
+                } else {
+                    true
+                };
+
+                if is_boundary_ok {
+                    result.push_str(replacement);
+                    i += needle_len;
+                    continue;
+                }
+            }
+        }
+
+        result.push(text_chars[i]);
+        i += 1;
+    }
+
     result
 }
 

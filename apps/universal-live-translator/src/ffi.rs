@@ -283,7 +283,7 @@ pub unsafe extern "C" fn ult_translate_subtitles(
     let h = &*handle;
     match h
         .service
-        .translate_subtitle_content(content_str, fmt, src, tgt)
+        .translate_subtitle_content(content_str, fmt, src, tgt, None)
     {
         Ok(out) => {
             let res = serde_json::json!({ "translated_content": out });

@@ -90,6 +90,17 @@ impl DesktopIpcHandler for TranslatorDesktopHandler {
                     "targetLangStr": "es"
                 }),
             },
+            SelfTestCheck {
+                command: "batch_translate_documents_cmd",
+                payload: json!({
+                    "documents": [
+                        { "filename": "batch1.md", "content": "# Hello\nWelcome.", "format": "md" },
+                        { "filename": "batch2.txt", "content": "Thank you very much.", "format": "txt" }
+                    ],
+                    "sourceLangStr": "en",
+                    "targetLangStr": "es"
+                }),
+            },
         ]
     }
 }

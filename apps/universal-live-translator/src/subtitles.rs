@@ -9,7 +9,10 @@
 //!
 //! 100% offline, zero network egress.
 
-use crate::models::{LanguageCode, SubtitleCue, SubtitleFormat, TranslationRequest};
+use crate::models::{
+    BatchDocumentItem, BatchTranslationResult, LanguageCode, SubtitleCue, SubtitleFormat,
+    TranslationRequest,
+};
 use crate::nmt::{OfflineTranslationEngine, TranslationError};
 use crate::speech::{BatchSpeechRecognizer, SpeechError};
 use std::sync::Arc;
@@ -66,6 +69,7 @@ impl SubtitleTranslator {
         cues: &[SubtitleCue],
         source_lang: Option<LanguageCode>,
         target_lang: LanguageCode,
+        domain_glossary: Option<&str>,
     ) -> Result<Vec<SubtitleCue>, SubtitleError> {
         let mut translated = Vec::with_capacity(cues.len());
 
@@ -75,7 +79,7 @@ impl SubtitleTranslator {
                 target_lang,
                 text: cue.original_text.clone(),
                 preserve_formatting: true,
-                domain_glossary: None,
+                domain_glossary: domain_glossary.map(|s| s.to_string()),
             };
             let res = self.nmt.translate(&req)?;
 
@@ -98,9 +102,10 @@ impl SubtitleTranslator {
         format: SubtitleFormat,
         source_lang: Option<LanguageCode>,
         target_lang: LanguageCode,
+        domain_glossary: Option<&str>,
     ) -> Result<String, SubtitleError> {
         let cues = self.parse_subtitles(content, format)?;
-        let translated_cues = self.translate_cues(&cues, source_lang, target_lang)?;
+        let translated_cues = self.translate_cues(&cues, source_lang, target_lang, domain_glossary)?;
         Ok(self.serialize_subtitles(&translated_cues, format))
     }
 
@@ -111,9 +116,12 @@ impl SubtitleTranslator {
         format: &str,
         source_lang: Option<LanguageCode>,
         target_lang: LanguageCode,
+        domain_glossary: Option<&str>,
     ) -> Result<String, SubtitleError> {
         let is_markdown =
             format.eq_ignore_ascii_case("md") || format.eq_ignore_ascii_case("markdown");
+
+        let glossary_owned = domain_glossary.map(|s| s.to_string());
 
         if !is_markdown {
             // Standard plain text translation
@@ -122,7 +130,7 @@ impl SubtitleTranslator {
                 target_lang,
                 text: doc_text.to_string(),
                 preserve_formatting: true,
-                domain_glossary: None,
+                domain_glossary: glossary_owned,
             };
             let res = self.nmt.translate(&req)?;
             return Ok(res.translated_text);
@@ -160,7 +168,7 @@ impl SubtitleTranslator {
                     target_lang,
                     text: heading_text.to_string(),
                     preserve_formatting: true,
-                    domain_glossary: None,
+                    domain_glossary: glossary_owned.clone(),
                 };
                 let res = self.nmt.translate(&req)?;
                 output_lines.push(format!("{} {}", heading_prefix, res.translated_text));
@@ -174,7 +182,7 @@ impl SubtitleTranslator {
                     target_lang,
                     text: item_text.to_string(),
                     preserve_formatting: true,
-                    domain_glossary: None,
+                    domain_glossary: glossary_owned.clone(),
                 };
                 let res = self.nmt.translate(&req)?;
                 output_lines.push(format!("- {}", res.translated_text));
@@ -186,7 +194,7 @@ impl SubtitleTranslator {
                     target_lang,
                     text: item_text.to_string(),
                     preserve_formatting: true,
-                    domain_glossary: None,
+                    domain_glossary: glossary_owned.clone(),
                 };
                 let res = self.nmt.translate(&req)?;
                 output_lines.push(format!("* {}", res.translated_text));
@@ -200,7 +208,7 @@ impl SubtitleTranslator {
                     target_lang,
                     text: quote_text.to_string(),
                     preserve_formatting: true,
-                    domain_glossary: None,
+                    domain_glossary: glossary_owned.clone(),
                 };
                 let res = self.nmt.translate(&req)?;
                 output_lines.push(format!("> {}", res.translated_text));
@@ -213,13 +221,116 @@ impl SubtitleTranslator {
                 target_lang,
                 text: line.to_string(),
                 preserve_formatting: true,
-                domain_glossary: None,
+                domain_glossary: glossary_owned.clone(),
             };
             let res = self.nmt.translate(&req)?;
             output_lines.push(res.translated_text);
         }
 
         Ok(output_lines.join("\n"))
+    }
+
+    /// Batch translate multiple documents (.txt, .md, .srt, .vtt)
+    pub fn batch_translate_documents(
+        &self,
+        documents: &[BatchDocumentItem],
+        source_lang: Option<LanguageCode>,
+        target_lang: LanguageCode,
+        domain_glossary: Option<&str>,
+    ) -> Vec<BatchTranslationResult> {
+        documents
+            .iter()
+            .map(|item| {
+                let start = std::time::Instant::now();
+                let original_chars = item.content.chars().count();
+                let lower_name = item.filename.to_lowercase();
+
+                let detected_format = item
+                    .format
+                    .as_deref()
+                    .unwrap_or_else(|| {
+                        if lower_name.ends_with(".srt") {
+                            "srt"
+                        } else if lower_name.ends_with(".vtt") {
+                            "vtt"
+                        } else if lower_name.ends_with(".md") || lower_name.ends_with(".markdown") {
+                            "md"
+                        } else {
+                            "txt"
+                        }
+                    });
+
+                let extension = match detected_format {
+                    "srt" => ".srt",
+                    "vtt" => ".vtt",
+                    "md" | "markdown" => ".md",
+                    _ => ".txt",
+                };
+
+                let base_name = if let Some(stripped) = item.filename.strip_suffix(extension) {
+                    stripped
+                } else if let Some(idx) = item.filename.rfind('.') {
+                    &item.filename[..idx]
+                } else {
+                    &item.filename
+                };
+
+                let target_tag = target_lang.as_str();
+                let translated_filename = format!("{}.{}{}", base_name, target_tag, extension);
+
+                let translation_result: Result<String, SubtitleError> = match detected_format {
+                    "srt" => self.translate_subtitle_file(
+                        &item.content,
+                        SubtitleFormat::Srt,
+                        source_lang,
+                        target_lang,
+                        domain_glossary,
+                    ),
+                    "vtt" => self.translate_subtitle_file(
+                        &item.content,
+                        SubtitleFormat::Vtt,
+                        source_lang,
+                        target_lang,
+                        domain_glossary,
+                    ),
+                    other => self.translate_document(
+                        &item.content,
+                        other,
+                        source_lang,
+                        target_lang,
+                        domain_glossary,
+                    ),
+                };
+
+                let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+                match translation_result {
+                    Ok(translated_content) => {
+                        let translated_chars = translated_content.chars().count();
+                        BatchTranslationResult {
+                            filename: item.filename.clone(),
+                            translated_filename,
+                            translated_content,
+                            original_chars,
+                            translated_chars,
+                            elapsed_ms,
+                            success: true,
+                            error: None,
+                        }
+                    }
+                    Err(err) => BatchTranslationResult {
+                        filename: item.filename.clone(),
+                        translated_filename,
+                        translated_content: String::new(),
+                        original_chars,
+                        translated_chars: 0,
+                        elapsed_ms,
+                        success: false,
+                        error: Some(err.to_string()),
+                    },
+                }
+            })
+            .collect()
     }
 
     /// Automatically generate timestamped subtitle file (.srt or .vtt) from raw 16kHz audio PCM
@@ -516,6 +627,7 @@ mod tests {
                 SubtitleFormat::Srt,
                 Some(LanguageCode::En),
                 LanguageCode::Es,
+                None,
             )
             .unwrap();
 
@@ -532,7 +644,7 @@ mod tests {
         let translator = SubtitleTranslator::new(nmt, speech);
 
         let translated = translator
-            .translate_document(md_doc, "md", Some(LanguageCode::En), LanguageCode::Es)
+            .translate_document(md_doc, "md", Some(LanguageCode::En), LanguageCode::Es, None)
             .unwrap();
 
         // Heading was translated
@@ -542,5 +654,52 @@ mod tests {
         // List items were translated preserving dashes
         assert!(translated.contains("- Hola"));
         assert!(translated.contains("- Gracias"));
+    }
+
+    #[test]
+    fn test_batch_document_and_glossary_translation() {
+        use crate::models::GlossaryTerm;
+
+        let nmt = Arc::new(OfflineTranslationEngine::new());
+        nmt.register_glossary(
+            "medical",
+            vec![GlossaryTerm {
+                source_term: "myocardial infarction".to_string(),
+                target_term: "infarto agudo de miocardio".to_string(),
+                case_sensitive: false,
+            }],
+        );
+        let speech = Arc::new(BatchSpeechRecognizer::new());
+        let translator = SubtitleTranslator::new(nmt, speech);
+
+        let items = vec![
+            BatchDocumentItem {
+                filename: "clinical_report.md".to_string(),
+                content: "# Diagnosis\n\nPatient presented with myocardial infarction.".to_string(),
+                format: Some("md".to_string()),
+            },
+            BatchDocumentItem {
+                filename: "procedure.srt".to_string(),
+                content: "1\n00:00:01,000 --> 00:00:03,000\nHello\n\n2\n00:00:04,000 --> 00:00:07,000\nThank you\n\n".to_string(),
+                format: Some("srt".to_string()),
+            },
+        ];
+
+        let results = translator.batch_translate_documents(
+            &items,
+            Some(LanguageCode::En),
+            LanguageCode::Es,
+            Some("medical"),
+        );
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].success);
+        assert_eq!(results[0].translated_filename, "clinical_report.es.md");
+        assert!(results[0].translated_content.contains("infarto agudo de miocardio"));
+
+        assert!(results[1].success);
+        assert_eq!(results[1].translated_filename, "procedure.es.srt");
+        assert!(results[1].translated_content.contains("Hola"));
+        assert!(results[1].translated_content.contains("Gracias"));
     }
 }

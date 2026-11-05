@@ -5,10 +5,13 @@
     type LanguageCode,
     type CameraTranslationResult,
     type CameraOcrBox,
+    type BatchDocumentItem,
+    type BatchTranslationResult,
   } from '../types';
 
   let subMode: 'camera' | 'subtitles' = 'camera';
   let targetLang: LanguageCode = 'es';
+  let domainGlossary: string = '';
 
   // Camera OCR state
   let selectedFile: File | null = null;
@@ -22,7 +25,8 @@
   let naturalWidth = 640;
   let naturalHeight = 360;
 
-  // Subtitle state
+  // Subtitle & Document state
+  let docSubTab: 'single' | 'batch' = 'single';
   let subtitleContent: string = `1\n00:00:01,000 --> 00:00:04,000\nHello and welcome to the presentation.\n\n2\n00:00:04,500 --> 00:00:08,000\nToday we demonstrate 100% offline machine translation.`;
   let subtitleFormat: 'srt' | 'vtt' | 'md' | 'txt' = 'srt';
   let translatedSubtitles: string = '';
@@ -30,6 +34,11 @@
   let copySubSuccess: boolean = false;
   let isDocDragOver: boolean = false;
   let parsedCuesPreview: Array<{ index: number; time: string; original: string; translated: string }> = [];
+
+  // Batch Document Translation state
+  let batchFiles: BatchDocumentItem[] = [];
+  let batchResults: BatchTranslationResult[] = [];
+  let isBatchTranslating: boolean = false;
 
   function handleFileDrop(e: DragEvent) {
     e.preventDefault();
@@ -230,14 +239,76 @@
     e.preventDefault();
     isDocDragOver = false;
     if (e.dataTransfer && e.dataTransfer.files.length > 0) {
-      loadDocFile(e.dataTransfer.files[0]);
+      if (e.dataTransfer.files.length > 1 || docSubTab === 'batch') {
+        docSubTab = 'batch';
+        handleBatchFiles(e.dataTransfer.files);
+      } else {
+        loadDocFile(e.dataTransfer.files[0]);
+      }
     }
   }
 
   function handleDocFileInput(e: Event) {
     const input = e.target as HTMLInputElement;
     if (input.files && input.files.length > 0) {
-      loadDocFile(input.files[0]);
+      if (input.files.length > 1 || docSubTab === 'batch') {
+        docSubTab = 'batch';
+        handleBatchFiles(input.files);
+      } else {
+        loadDocFile(input.files[0]);
+      }
+    }
+  }
+
+  function handleBatchFiles(files: FileList | File[]) {
+    const list = Array.from(files);
+    for (const file of list) {
+      const name = file.name;
+      const lower = name.toLowerCase();
+      let format = 'txt';
+      if (lower.endsWith('.srt')) format = 'srt';
+      else if (lower.endsWith('.vtt')) format = 'vtt';
+      else if (lower.endsWith('.md') || lower.endsWith('.markdown')) format = 'md';
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        const content = (reader.result as string) || '';
+        batchFiles = [
+          ...batchFiles.filter((b) => b.filename !== name),
+          { filename: name, content, format },
+        ];
+      };
+      reader.readAsText(file);
+    }
+  }
+
+  function removeBatchFile(filename: string) {
+    batchFiles = batchFiles.filter((b) => b.filename !== filename);
+  }
+
+  function clearBatchFiles() {
+    batchFiles = [];
+    batchResults = [];
+  }
+
+  async function runBatchTranslation() {
+    if (batchFiles.length === 0) return;
+    isBatchTranslating = true;
+    try {
+      const results = await tauriInvoke<BatchTranslationResult[]>(
+        'batch_translate_documents_cmd',
+        {
+          documents: batchFiles,
+          sourceLangStr: null,
+          targetLangStr: targetLang,
+          domainGlossary: domainGlossary || null,
+        }
+      );
+      batchResults = results || [];
+    } catch (e) {
+      console.error('Batch translation failed:', e);
+    } finally {
+      isBatchTranslating = false;
     }
   }
 
@@ -272,6 +343,7 @@
           formatStr: subtitleFormat,
           sourceLangStr: null,
           targetLangStr: targetLang,
+          domainGlossary: domainGlossary || null,
         });
         translatedSubtitles = res;
         updateCuesPreview(subtitleContent, res);
@@ -281,6 +353,7 @@
           format: subtitleFormat,
           sourceLangStr: null,
           targetLangStr: targetLang,
+          domainGlossary: domainGlossary || null,
         });
         translatedSubtitles = res;
         parsedCuesPreview = [];
@@ -539,147 +612,264 @@
   <!-- Subtitle & Document View -->
   {#if subMode === 'subtitles'}
     <div class="subtitles-view">
-      <div class="subs-toolbar">
-        <div class="toolbar-left">
-          <span class="toolbar-label">Format:</span>
-          <div class="format-toggle">
-            <label class="radio-label" class:selected={subtitleFormat === 'srt'}>
-              <input type="radio" bind:group={subtitleFormat} value="srt" />
-              <span>.SRT</span>
-            </label>
-            <label class="radio-label" class:selected={subtitleFormat === 'vtt'}>
-              <input type="radio" bind:group={subtitleFormat} value="vtt" />
-              <span>.VTT</span>
-            </label>
-            <label class="radio-label" class:selected={subtitleFormat === 'md'}>
-              <input type="radio" bind:group={subtitleFormat} value="md" />
-              <span>.MD</span>
-            </label>
-            <label class="radio-label" class:selected={subtitleFormat === 'txt'}>
-              <input type="radio" bind:group={subtitleFormat} value="txt" />
-              <span>.TXT</span>
-            </label>
-          </div>
+      <!-- Subtitle Mode Tabs & Glossary Selector -->
+      <div class="doc-sub-nav">
+        <div class="tab-pill-group">
+          <button
+            type="button"
+            class="tab-pill"
+            class:active={docSubTab === 'single'}
+            on:click={() => (docSubTab = 'single')}
+          >
+            📄 Single Document
+          </button>
+          <button
+            type="button"
+            class="tab-pill"
+            class:active={docSubTab === 'batch'}
+            on:click={() => (docSubTab = 'batch')}
+          >
+            📚 Batch Translation {batchFiles.length > 0 ? `(${batchFiles.length})` : ''}
+          </button>
         </div>
 
-        <div class="toolbar-center">
-          <span class="toolbar-label">Templates:</span>
-          <div class="sample-btn-group">
-            <button type="button" class="sample-btn" on:click={() => loadSampleSubtitle('movie_srt')}>
-              🎬 Movie (SRT)
-            </button>
-            <button type="button" class="sample-btn" on:click={() => loadSampleSubtitle('web_vtt')}>
-              🌐 Web (VTT)
-            </button>
-            <button type="button" class="sample-btn" on:click={() => loadSampleSubtitle('tech_md')}>
-              📝 Spec (MD)
-            </button>
-          </div>
+        <div class="glossary-selector-wrap">
+          <span class="glossary-lbl">Terminology:</span>
+          <select bind:value={domainGlossary} class="domain-select-sub">
+            <option value="">General Domain</option>
+            <option value="medical">Medical / Clinical</option>
+            <option value="legal">Legal &amp; Compliance</option>
+            <option value="aviation">Aviation &amp; Defense</option>
+            <option value="software">Software Engineering</option>
+          </select>
         </div>
-
-        <button
-          type="button"
-          class="translate-sub-btn"
-          disabled={isTranslatingSubs || !subtitleContent.trim()}
-          on:click={translateSubtitles}
-        >
-          {#if isTranslatingSubs}
-            <span class="spinner-sm"></span> Translating...
-          {:else}
-            ⚡ Translate {subtitleFormat.toUpperCase()}
-          {/if}
-        </button>
       </div>
 
-      <div class="subs-panes">
-        <!-- Input Pane -->
-        <div
-          class="sub-pane"
-          role="region"
-          aria-label="Subtitle or document source drop zone"
-          class:drag-over={isDocDragOver}
-          on:dragover|preventDefault={() => (isDocDragOver = true)}
-          on:dragleave={() => (isDocDragOver = false)}
-          on:drop={handleDocFileDrop}
-        >
-          <div class="pane-tag-row">
-            <span class="pane-tag">
-              Input {subtitleFormat.toUpperCase()} Source
-              {#if subtitleContent.trim()}
-                <span class="stat-badge">
-                  {subtitleContent.split('\n').filter(Boolean).length} lines • {subtitleContent.length} chars
-                </span>
-              {/if}
-            </span>
-            <label class="file-load-btn">
-              📂 Load File
-              <input
-                type="file"
-                accept=".srt,.vtt,.md,.markdown,.txt"
-                on:change={handleDocFileInput}
-                style="display: none;"
-              />
-            </label>
-          </div>
-          <textarea
-            bind:value={subtitleContent}
-            placeholder={`Paste or drop .${subtitleFormat} content here...`}
-            class="subs-area"
-          ></textarea>
-        </div>
-
-        <!-- Output Pane -->
-        <div class="sub-pane">
-          <div class="pane-tag-row">
-            <span class="pane-tag">
-              Translated Output ({targetLang.toUpperCase()})
-              {#if translatedSubtitles.trim()}
-                <span class="stat-badge">
-                  {translatedSubtitles.split('\n').filter(Boolean).length} lines • {translatedSubtitles.length} chars
-                </span>
-              {/if}
-            </span>
-            <div class="pane-actions">
-              {#if translatedSubtitles}
-                <button type="button" class="action-btn copy-btn" on:click={copySubtitles}>
-                  {copySubSuccess ? '✓ Copied' : '📋 Copy'}
-                </button>
-                <button type="button" class="action-btn download-btn" on:click={downloadSubtitles}>
-                  ⬇ Download .{subtitleFormat}
-                </button>
-              {/if}
+      {#if docSubTab === 'single'}
+        <div class="subs-toolbar">
+          <div class="toolbar-left">
+            <span class="toolbar-label">Format:</span>
+            <div class="format-toggle">
+              <label class="radio-label" class:selected={subtitleFormat === 'srt'}>
+                <input type="radio" bind:group={subtitleFormat} value="srt" />
+                <span>.SRT</span>
+              </label>
+              <label class="radio-label" class:selected={subtitleFormat === 'vtt'}>
+                <input type="radio" bind:group={subtitleFormat} value="vtt" />
+                <span>.VTT</span>
+              </label>
+              <label class="radio-label" class:selected={subtitleFormat === 'md'}>
+                <input type="radio" bind:group={subtitleFormat} value="md" />
+                <span>.MD</span>
+              </label>
+              <label class="radio-label" class:selected={subtitleFormat === 'txt'}>
+                <input type="radio" bind:group={subtitleFormat} value="txt" />
+                <span>.TXT</span>
+              </label>
             </div>
           </div>
-          <textarea
-            bind:value={translatedSubtitles}
-            readonly
-            placeholder="Preserved structural tags, timestamps, or code blocks will appear here..."
-            class="subs-area output-sub-area"
-          ></textarea>
-        </div>
-      </div>
 
-      <!-- Cue Breakdown for Subtitles -->
-      {#if parsedCuesPreview.length > 0}
-        <div class="cues-preview-panel">
-          <div class="panel-header-row">
-            <h4 class="ocr-title">Timestamped Cues Breakdown ({parsedCuesPreview.length} Cues)</h4>
-            <span class="latency-pill">Milliseconds Preserved</span>
+          <div class="toolbar-center">
+            <span class="toolbar-label">Templates:</span>
+            <div class="sample-btn-group">
+              <button type="button" class="sample-btn" on:click={() => loadSampleSubtitle('movie_srt')}>
+                🎬 Movie (SRT)
+              </button>
+              <button type="button" class="sample-btn" on:click={() => loadSampleSubtitle('web_vtt')}>
+                🌐 Web (VTT)
+              </button>
+              <button type="button" class="sample-btn" on:click={() => loadSampleSubtitle('tech_md')}>
+                📝 Spec (MD)
+              </button>
+            </div>
           </div>
-          <div class="cues-list">
-            {#each parsedCuesPreview as cue}
-              <div class="cue-card">
-                <div class="cue-meta">
-                  <span class="cue-idx">#{cue.index}</span>
-                  <span class="cue-time">{cue.time}</span>
-                </div>
-                <div class="cue-texts">
-                  <p class="cue-orig">{cue.original}</p>
-                  <p class="cue-trans">{cue.translated}</p>
-                </div>
+
+          <button
+            type="button"
+            class="translate-sub-btn"
+            disabled={isTranslatingSubs || !subtitleContent.trim()}
+            on:click={translateSubtitles}
+          >
+            {#if isTranslatingSubs}
+              <span class="spinner-sm"></span> Translating...
+            {:else}
+              ⚡ Translate {subtitleFormat.toUpperCase()}
+            {/if}
+          </button>
+        </div>
+
+        <div class="subs-panes">
+          <!-- Input Pane -->
+          <div
+            class="sub-pane"
+            role="region"
+            aria-label="Subtitle or document source drop zone"
+            class:drag-over={isDocDragOver}
+            on:dragover|preventDefault={() => (isDocDragOver = true)}
+            on:dragleave={() => (isDocDragOver = false)}
+            on:drop={handleDocFileDrop}
+          >
+            <div class="pane-tag-row">
+              <span class="pane-tag">
+                Input {subtitleFormat.toUpperCase()} Source
+                {#if subtitleContent.trim()}
+                  <span class="stat-badge">
+                    {subtitleContent.split('\n').filter(Boolean).length} lines • {subtitleContent.length} chars
+                  </span>
+                {/if}
+              </span>
+              <label class="file-load-btn">
+                📂 Load File
+                <input
+                  type="file"
+                  accept=".srt,.vtt,.md,.markdown,.txt"
+                  on:change={handleDocFileInput}
+                  style="display: none;"
+                />
+              </label>
+            </div>
+            <textarea
+              bind:value={subtitleContent}
+              placeholder={`Paste or drop .${subtitleFormat} content here...`}
+              class="subs-area"
+            ></textarea>
+          </div>
+
+          <!-- Output Pane -->
+          <div class="sub-pane">
+            <div class="pane-tag-row">
+              <span class="pane-tag">
+                Translated Output ({targetLang.toUpperCase()})
+                {#if translatedSubtitles.trim()}
+                  <span class="stat-badge">
+                    {translatedSubtitles.split('\n').filter(Boolean).length} lines • {translatedSubtitles.length} chars
+                  </span>
+                {/if}
+              </span>
+              <div class="pane-actions">
+                {#if translatedSubtitles}
+                  <button type="button" class="action-btn copy-btn" on:click={copySubtitles}>
+                    {copySubSuccess ? '✓ Copied' : '📋 Copy'}
+                  </button>
+                  <button type="button" class="action-btn download-btn" on:click={downloadSubtitles}>
+                    ⬇ Download .{subtitleFormat}
+                  </button>
+                {/if}
               </div>
-            {/each}
+            </div>
+            <textarea
+              bind:value={translatedSubtitles}
+              readonly
+              placeholder="Preserved structural tags, timestamps, or code blocks will appear here..."
+              class="subs-area output-sub-area"
+            ></textarea>
           </div>
+        </div>
+
+        <!-- Cue Breakdown for Subtitles -->
+        {#if parsedCuesPreview.length > 0}
+          <div class="cues-preview-panel">
+            <div class="panel-header-row">
+              <h4 class="ocr-title">Timestamped Cues Breakdown ({parsedCuesPreview.length} Cues)</h4>
+              <span class="latency-pill">Milliseconds Preserved</span>
+            </div>
+            <div class="cues-list">
+              {#each parsedCuesPreview as cue}
+                <div class="cue-card">
+                  <div class="cue-meta">
+                    <span class="cue-idx">#{cue.index}</span>
+                    <span class="cue-time">{cue.time}</span>
+                  </div>
+                  <div class="cue-texts">
+                    <p class="cue-orig">{cue.original}</p>
+                    <p class="cue-trans">{cue.translated}</p>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      {:else}
+        <!-- Batch Document Translation View -->
+        <div class="batch-container">
+          <div
+            class="batch-drop-zone"
+            role="region"
+            aria-label="Batch document files drop zone"
+            class:drag-over={isDocDragOver}
+            on:dragover|preventDefault={() => (isDocDragOver = true)}
+            on:dragleave={() => (isDocDragOver = false)}
+            on:drop={handleDocFileDrop}
+          >
+            <div class="drop-prompt">
+              <p class="drop-main">📁 Drag &amp; Drop multiple <strong>.txt, .md, .srt, .vtt</strong> files</p>
+              <p class="drop-sub">Batch translate technical docs, subtitles, and specifications offline with glossaries</p>
+              <label class="batch-browse-btn">
+                Browse Files
+                <input
+                  type="file"
+                  multiple
+                  accept=".srt,.vtt,.md,.markdown,.txt"
+                  on:change={handleDocFileInput}
+                  style="display: none;"
+                />
+              </label>
+            </div>
+          </div>
+
+          {#if batchFiles.length > 0}
+            <div class="batch-actions-bar">
+              <span class="batch-count">
+                <strong>{batchFiles.length}</strong> file{batchFiles.length === 1 ? '' : 's'} queued
+                ({batchFiles.reduce((acc, f) => acc + f.content.length, 0)} characters)
+              </span>
+              <div class="batch-btns">
+                <button type="button" class="clear-batch-btn" on:click={clearBatchFiles}>
+                  Clear All
+                </button>
+                <button
+                  type="button"
+                  class="run-batch-btn"
+                  disabled={isBatchTranslating}
+                  on:click={runBatchTranslation}
+                >
+                  {#if isBatchTranslating}
+                    <span class="spinner-sm"></span> Batch Translating...
+                  {:else}
+                    ⚡ Translate All ({batchFiles.length} files)
+                  {/if}
+                </button>
+              </div>
+            </div>
+
+            <div class="batch-cards-list">
+              {#each batchFiles as f}
+                {@const res = batchResults.find((r) => r.filename === f.filename)}
+                <div class="batch-card" class:completed={res && res.success} class:error={res && !res.success}>
+                  <div class="batch-card-header">
+                    <span class="batch-file-badge">{f.format?.toUpperCase() || 'TXT'}</span>
+                    <span class="batch-filename">{f.filename}</span>
+                    <button type="button" class="remove-file-btn" on:click={() => removeBatchFile(f.filename)}>✕</button>
+                  </div>
+                  {#if res}
+                    <div class="batch-card-result">
+                      <div class="result-meta">
+                        <span class="result-name">➔ {res.translated_filename}</span>
+                        <span class="result-speed">{res.elapsed_ms.toFixed(1)} ms • {res.translated_chars} chars</span>
+                      </div>
+                      <div class="result-preview">
+                        <pre>{res.translated_content.slice(0, 300)}{res.translated_content.length > 300 ? '...' : ''}</pre>
+                      </div>
+                    </div>
+                  {:else}
+                    <div class="batch-pending-hint">
+                      {f.content.slice(0, 140)}{f.content.length > 140 ? '...' : ''}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
       {/if}
     </div>
@@ -1268,6 +1458,280 @@
     font-weight: 500;
     color: var(--text-main);
     margin: 0;
+  }
+
+  .doc-sub-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg-card);
+    padding: 0.5rem 0.8rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .tab-pill-group {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .tab-pill {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    padding: 0.35rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .tab-pill:hover {
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .tab-pill.active {
+    background: rgba(56, 189, 248, 0.15);
+    border-color: rgba(56, 189, 248, 0.4);
+    color: #38bdf8;
+  }
+
+  .glossary-selector-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .glossary-lbl {
+    font-size: 0.8rem;
+    color: var(--text-faint);
+  }
+
+  .domain-select-sub {
+    background: var(--bg-pane);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-main);
+    padding: 0.3rem 0.6rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+  }
+
+  .batch-container {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .batch-drop-zone {
+    border: 2px dashed rgba(255, 255, 255, 0.15);
+    border-radius: var(--radius-md);
+    padding: 2.5rem 1.5rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.02);
+    transition: all 0.2s ease;
+  }
+
+  .batch-drop-zone.drag-over {
+    border-color: #38bdf8;
+    background: rgba(56, 189, 248, 0.08);
+  }
+
+  .drop-prompt {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.5rem;
+  }
+
+  .drop-main {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-main);
+    margin: 0;
+  }
+
+  .drop-sub {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin: 0;
+  }
+
+  .batch-browse-btn {
+    margin-top: 0.5rem;
+    background: rgba(56, 189, 248, 0.2);
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    color: #38bdf8;
+    padding: 0.4rem 1rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .batch-browse-btn:hover {
+    background: rgba(56, 189, 248, 0.3);
+  }
+
+  .batch-actions-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg-card);
+    padding: 0.6rem 1rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .batch-count {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .batch-btns {
+    display: flex;
+    gap: 0.6rem;
+  }
+
+  .clear-batch-btn {
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    padding: 0.35rem 0.75rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .clear-batch-btn:hover {
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.3);
+  }
+
+  .run-batch-btn {
+    background: linear-gradient(135deg, #0284c7, #2563eb);
+    color: #fff;
+    border: none;
+    padding: 0.4rem 1rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .run-batch-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .batch-cards-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .batch-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 0.8rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .batch-card.completed {
+    border-color: rgba(34, 197, 94, 0.4);
+  }
+
+  .batch-card.error {
+    border-color: rgba(239, 68, 68, 0.4);
+  }
+
+  .batch-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  .batch-file-badge {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+  }
+
+  .batch-filename {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--text-main);
+    flex: 1;
+  }
+
+  .remove-file-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-faint);
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+
+  .remove-file-btn:hover {
+    color: #f87171;
+  }
+
+  .batch-card-result {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    padding-top: 0.5rem;
+  }
+
+  .result-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .result-name {
+    font-size: 0.8rem;
+    color: #4ade80;
+    font-weight: 600;
+  }
+
+  .result-speed {
+    font-size: 0.75rem;
+    color: var(--text-faint);
+  }
+
+  .result-preview pre {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    background: rgba(0, 0, 0, 0.2);
+    padding: 0.5rem;
+    border-radius: 4px;
+    white-space: pre-wrap;
+    max-height: 80px;
+    overflow-y: auto;
+  }
+
+  .batch-pending-hint {
+    font-size: 0.78rem;
+    color: var(--text-faint);
+    font-style: italic;
   }
 
   .spinner-sm {
