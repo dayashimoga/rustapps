@@ -759,7 +759,12 @@ fn normalize_extracted_text(text: &str) -> String {
                         single_char_buf.clear();
                         normalized_line.push(ch);
                     } else if !normalized_line.is_empty()
-                        && (ch == '.' || ch == ',' || ch == ':' || ch == ';' || ch == '!' || ch == '?')
+                        && (ch == '.'
+                            || ch == ','
+                            || ch == ':'
+                            || ch == ';'
+                            || ch == '!'
+                            || ch == '?')
                     {
                         normalized_line.push(ch);
                     } else {

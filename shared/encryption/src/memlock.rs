@@ -57,9 +57,7 @@ impl<const N: usize> LockedKey<N> {
         {
             // SAFETY: `self.data` points to a valid, aligned buffer of N bytes that is
             // initialized and alive for the lifetime of `self`.
-            let res = unsafe {
-                VirtualLock(self.data.as_ptr() as *const std::ffi::c_void, N)
-            };
+            let res = unsafe { VirtualLock(self.data.as_ptr() as *const std::ffi::c_void, N) };
             self.is_locked = res != 0;
         }
 
@@ -67,9 +65,7 @@ impl<const N: usize> LockedKey<N> {
         {
             // SAFETY: `self.data` points to a valid, aligned buffer of N bytes that is
             // initialized and alive for the lifetime of `self`.
-            let res = unsafe {
-                mlock(self.data.as_ptr() as *const std::ffi::c_void, N)
-            };
+            let res = unsafe { mlock(self.data.as_ptr() as *const std::ffi::c_void, N) };
             self.is_locked = res == 0;
         }
     }
@@ -137,7 +133,10 @@ impl LockedBytes {
         {
             // SAFETY: `self.data` points to a valid heap allocation of length `len` bytes.
             let res = unsafe {
-                VirtualLock(self.data.as_ptr() as *const std::ffi::c_void, self.data.len())
+                VirtualLock(
+                    self.data.as_ptr() as *const std::ffi::c_void,
+                    self.data.len(),
+                )
             };
             self.is_locked = res != 0;
         }
@@ -146,7 +145,10 @@ impl LockedBytes {
         {
             // SAFETY: `self.data` points to a valid heap allocation of length `len` bytes.
             let res = unsafe {
-                mlock(self.data.as_ptr() as *const std::ffi::c_void, self.data.len())
+                mlock(
+                    self.data.as_ptr() as *const std::ffi::c_void,
+                    self.data.len(),
+                )
             };
             self.is_locked = res == 0;
         }
@@ -160,7 +162,10 @@ impl Drop for LockedBytes {
             {
                 // SAFETY: `self.data` was previously locked for `self.data.len()` bytes.
                 unsafe {
-                    VirtualUnlock(self.data.as_ptr() as *const std::ffi::c_void, self.data.len());
+                    VirtualUnlock(
+                        self.data.as_ptr() as *const std::ffi::c_void,
+                        self.data.len(),
+                    );
                 }
             }
 
@@ -168,7 +173,10 @@ impl Drop for LockedBytes {
             {
                 // SAFETY: `self.data` was previously locked for `self.data.len()` bytes.
                 unsafe {
-                    munlock(self.data.as_ptr() as *const std::ffi::c_void, self.data.len());
+                    munlock(
+                        self.data.as_ptr() as *const std::ffi::c_void,
+                        self.data.len(),
+                    );
                 }
             }
         }

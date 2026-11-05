@@ -1279,8 +1279,7 @@ fn execute_self_test(
     }
 
     // 3. Negative Security Gate: Verify unauthenticated and bad-token calls to /__* return 403 Forbidden
-    let (status_unauth, _) =
-        loopback_http_request(port, "POST", "/__fs/drives", b"", None, &[])?;
+    let (status_unauth, _) = loopback_http_request(port, "POST", "/__fs/drives", b"", None, &[])?;
     if status_unauth != 403 {
         return Err(PlatformError::Unsupported(format!(
             "Loopback security gate check failed: unauthenticated /__fs/drives returned HTTP {} instead of expected 403 Forbidden",
@@ -1366,14 +1365,8 @@ fn execute_self_test(
     for check in checks {
         let path = format!("/__ipc/{}", check.command);
         let body = serde_json::to_vec(&check.payload).unwrap_or_default();
-        let (status, resp_bytes) = loopback_http_request(
-            port,
-            "POST",
-            &path,
-            &body,
-            Some(session_token),
-            &[],
-        )?;
+        let (status, resp_bytes) =
+            loopback_http_request(port, "POST", &path, &body, Some(session_token), &[])?;
         if status == 200 {
             if let Ok(val) = serde_json::from_slice::<Value>(&resp_bytes) {
                 if val.get("__ipc_ok").and_then(|v| v.as_bool()) == Some(true) {

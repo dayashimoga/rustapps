@@ -478,7 +478,10 @@ impl LogViewerService {
         top_n_per_field: usize,
     ) -> anyhow::Result<crate::parsers::FieldAggregationReport> {
         let records = self.parse_records(max_records).await?;
-        Ok(crate::parsers::compute_field_aggregations(&records, top_n_per_field))
+        Ok(crate::parsers::compute_field_aggregations(
+            &records,
+            top_n_per_field,
+        ))
     }
 
     /// Redact active log records and export to destination file (Business Tier)
@@ -1177,9 +1180,7 @@ pub fn dispatch_ipc_command(
                     trace_id,
                     &active_name,
                 )
-                .ok_or_else(|| {
-                    format!("No log records found matching trace ID: {}", trace_id)
-                })?;
+                .ok_or_else(|| format!("No log records found matching trace ID: {}", trace_id))?;
 
                 serde_json::to_value(report).map_err(|e| e.to_string())
             }
@@ -1248,7 +1249,10 @@ mod tests {
         // Get lines slice (0..2)
         let slice = service.get_lines_slice(0, 2).await.unwrap();
         assert_eq!(slice.len(), 2);
-        assert_eq!(slice[0].text, "2026-10-19T10:00:00Z [INFO] Init trace_id=trace-101");
+        assert_eq!(
+            slice[0].text,
+            "2026-10-19T10:00:00Z [INFO] Init trace_id=trace-101"
+        );
 
         // Get lines by indices [0, 2]
         let by_indices = service.get_lines_by_indices(&[0, 2]).await.unwrap();
@@ -1344,7 +1348,10 @@ mod tests {
             serde_json::json!({ "traceId": "trace-101" }),
         )
         .unwrap();
-        assert_eq!(trace_val.get("trace_id").unwrap().as_str().unwrap(), "trace-101");
+        assert_eq!(
+            trace_val.get("trace_id").unwrap().as_str().unwrap(),
+            "trace-101"
+        );
         assert_eq!(trace_val.get("total_spans").unwrap().as_u64().unwrap(), 3);
     }
 }

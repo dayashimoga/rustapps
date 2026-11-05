@@ -488,6 +488,43 @@ pub unsafe extern "C" fn ult_add_conversation_turn(
     }
 }
 
+/// Dispatch any desktop IPC command via unified JSON-RPC over C-ABI
+///
+/// # Safety
+/// `cmd` must be a valid non-null null-terminated C string.
+/// `args_json` can be null or a valid null-terminated C string containing JSON object.
+#[no_mangle]
+pub unsafe extern "C" fn ult_dispatch_command(
+    _handle: *mut UltHandle,
+    cmd: *const c_char,
+    args_json: *const c_char,
+) -> *mut c_char {
+    if cmd.is_null() {
+        return to_error_json("Null command pointer passed to ult_dispatch_command");
+    }
+
+    let cmd_str = match CStr::from_ptr(cmd).to_str() {
+        Ok(s) => s,
+        Err(_) => return to_error_json("Invalid UTF-8 in command string"),
+    };
+
+    let args: serde_json::Value = if args_json.is_null() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        match CStr::from_ptr(args_json).to_str() {
+            Ok(s) if !s.trim().is_empty() => {
+                serde_json::from_str(s).unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
+            }
+            _ => serde_json::Value::Object(serde_json::Map::new()),
+        }
+    };
+
+    match crate::commands::dispatch_ipc_command(cmd_str, args) {
+        Ok(res) => to_c_string(&res),
+        Err(e) => to_error_json(&e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,7 +576,27 @@ mod tests {
             assert!(conv_str.contains("Conversation"));
             ult_free_string(conv_ptr);
 
-            // 7. Free handle
+            // 7. Test unified JSON-RPC C-ABI command dispatch
+            let cmd_glossary = CString::new("list_glossary_domains_cmd").unwrap();
+            let rpc_glossary_ptr =
+                ult_dispatch_command(handle, cmd_glossary.as_ptr(), std::ptr::null());
+            assert!(!rpc_glossary_ptr.is_null());
+            let rpc_glossary_str = CStr::from_ptr(rpc_glossary_ptr).to_str().unwrap();
+            assert!(rpc_glossary_str.contains("medical"));
+            ult_free_string(rpc_glossary_ptr);
+
+            let cmd_trans = CString::new("translate_text_cmd").unwrap();
+            let args_trans =
+                CString::new(r#"{"text": "thank you", "sourceLang": "en", "targetLang": "es"}"#)
+                    .unwrap();
+            let rpc_trans_ptr =
+                ult_dispatch_command(handle, cmd_trans.as_ptr(), args_trans.as_ptr());
+            assert!(!rpc_trans_ptr.is_null());
+            let rpc_trans_str = CStr::from_ptr(rpc_trans_ptr).to_str().unwrap();
+            assert!(rpc_trans_str.contains("gracias"));
+            ult_free_string(rpc_trans_ptr);
+
+            // 8. Free handle
             ult_free_handle(handle);
         }
     }

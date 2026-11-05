@@ -562,6 +562,92 @@ pub unsafe extern "C" fn afe_scan_compliance(
     }
 }
 
+/// Compute fast BLAKE3 or SHA-256 cryptographic checksum of a file
+///
+/// # Safety
+/// `handle` and `path` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn afe_compute_file_hash(
+    _handle: *mut AfeHandle,
+    path: *const c_char,
+) -> *mut c_char {
+    if path.is_null() {
+        return to_error_json("Null pointer passed to afe_compute_file_hash");
+    }
+
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => return to_error_json("Invalid UTF-8 in file path"),
+    };
+
+    match crate::commands::compute_file_hash_cmd(path_str.to_string()) {
+        Ok(hash_info) => to_c_string(&hash_info),
+        Err(e) => to_error_json(&e),
+    }
+}
+
+/// Inspect archive file contents (.zip, .tar, .gz) without full extraction
+///
+/// # Safety
+/// `handle` and `path` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn afe_inspect_archive(
+    _handle: *mut AfeHandle,
+    path: *const c_char,
+    _max_entries: usize,
+) -> *mut c_char {
+    if path.is_null() {
+        return to_error_json("Null pointer passed to afe_inspect_archive");
+    }
+
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => return to_error_json("Invalid UTF-8 in archive path"),
+    };
+
+    match crate::commands::inspect_archive_cmd(path_str.to_string()) {
+        Ok(entries) => to_c_string(&entries),
+        Err(e) => to_error_json(&e),
+    }
+}
+
+/// Dispatch any desktop IPC command via unified JSON-RPC over C-ABI
+///
+/// # Safety
+/// `cmd` must be a valid non-null null-terminated C string.
+/// `args_json` can be null or a valid null-terminated C string containing a JSON object.
+#[no_mangle]
+pub unsafe extern "C" fn afe_dispatch_command(
+    _handle: *mut AfeHandle,
+    cmd: *const c_char,
+    args_json: *const c_char,
+) -> *mut c_char {
+    if cmd.is_null() {
+        return to_error_json("Null command pointer passed to afe_dispatch_command");
+    }
+
+    let cmd_str = match CStr::from_ptr(cmd).to_str() {
+        Ok(s) => s,
+        Err(_) => return to_error_json("Invalid UTF-8 in command string"),
+    };
+
+    let args: serde_json::Value = if args_json.is_null() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        match CStr::from_ptr(args_json).to_str() {
+            Ok(s) if !s.trim().is_empty() => {
+                serde_json::from_str(s).unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
+            }
+            _ => serde_json::Value::Object(serde_json::Map::new()),
+        }
+    };
+
+    match crate::commands::dispatch_ipc_command(cmd_str, args) {
+        Ok(res) => to_c_string(&res),
+        Err(e) => to_error_json(&e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,7 +726,27 @@ mod tests {
             assert!(comp_str.contains("scanned_files_count"));
             afe_free_string(comp_ptr);
 
-            // 9. Free handle
+            // 9. Hash computation
+            let hash_ptr = afe_compute_file_hash(handle, c_file.as_ptr());
+            assert!(!hash_ptr.is_null());
+            let hash_str = CStr::from_ptr(hash_ptr).to_str().unwrap();
+            assert_eq!(hash_str.trim_matches('"').len(), 64);
+            afe_free_string(hash_ptr);
+
+            // 10. Unified JSON-RPC C-ABI command dispatch
+            let cmd_name = CString::new("get_file_preview_cmd").unwrap();
+            let cmd_args = CString::new(format!(
+                r#"{{"path": "{}"}}"#,
+                sub_file.to_str().unwrap().replace('\\', "/")
+            ))
+            .unwrap();
+            let rpc_ptr = afe_dispatch_command(handle, cmd_name.as_ptr(), cmd_args.as_ptr());
+            assert!(!rpc_ptr.is_null());
+            let rpc_str = CStr::from_ptr(rpc_ptr).to_str().unwrap();
+            assert!(rpc_str.contains("zero-mock"));
+            afe_free_string(rpc_ptr);
+
+            // 11. Free handle
             afe_free_handle(handle);
         }
     }

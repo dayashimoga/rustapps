@@ -105,7 +105,8 @@ impl SubtitleTranslator {
         domain_glossary: Option<&str>,
     ) -> Result<String, SubtitleError> {
         let cues = self.parse_subtitles(content, format)?;
-        let translated_cues = self.translate_cues(&cues, source_lang, target_lang, domain_glossary)?;
+        let translated_cues =
+            self.translate_cues(&cues, source_lang, target_lang, domain_glossary)?;
         Ok(self.serialize_subtitles(&translated_cues, format))
     }
 
@@ -245,20 +246,17 @@ impl SubtitleTranslator {
                 let original_chars = item.content.chars().count();
                 let lower_name = item.filename.to_lowercase();
 
-                let detected_format = item
-                    .format
-                    .as_deref()
-                    .unwrap_or_else(|| {
-                        if lower_name.ends_with(".srt") {
-                            "srt"
-                        } else if lower_name.ends_with(".vtt") {
-                            "vtt"
-                        } else if lower_name.ends_with(".md") || lower_name.ends_with(".markdown") {
-                            "md"
-                        } else {
-                            "txt"
-                        }
-                    });
+                let detected_format = item.format.as_deref().unwrap_or_else(|| {
+                    if lower_name.ends_with(".srt") {
+                        "srt"
+                    } else if lower_name.ends_with(".vtt") {
+                        "vtt"
+                    } else if lower_name.ends_with(".md") || lower_name.ends_with(".markdown") {
+                        "md"
+                    } else {
+                        "txt"
+                    }
+                });
 
                 let extension = match detected_format {
                     "srt" => ".srt",
@@ -695,7 +693,9 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(results[0].success);
         assert_eq!(results[0].translated_filename, "clinical_report.es.md");
-        assert!(results[0].translated_content.contains("infarto agudo de miocardio"));
+        assert!(results[0]
+            .translated_content
+            .contains("infarto agudo de miocardio"));
 
         assert!(results[1].success);
         assert_eq!(results[1].translated_filename, "procedure.es.srt");

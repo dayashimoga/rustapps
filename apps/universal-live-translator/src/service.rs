@@ -231,9 +231,13 @@ impl TranslatorService {
         target_lang: LanguageCode,
         domain_glossary: Option<&str>,
     ) -> Result<String, ServiceError> {
-        Ok(self
-            .subtitles
-            .translate_subtitle_file(content, format, source_lang, target_lang, domain_glossary)?)
+        Ok(self.subtitles.translate_subtitle_file(
+            content,
+            format,
+            source_lang,
+            target_lang,
+            domain_glossary,
+        )?)
     }
 
     /// Translate document text (.md, .txt) preserving structural elements
@@ -245,9 +249,13 @@ impl TranslatorService {
         target_lang: LanguageCode,
         domain_glossary: Option<&str>,
     ) -> Result<String, ServiceError> {
-        Ok(self
-            .subtitles
-            .translate_document(doc_text, format, source_lang, target_lang, domain_glossary)?)
+        Ok(self.subtitles.translate_document(
+            doc_text,
+            format,
+            source_lang,
+            target_lang,
+            domain_glossary,
+        )?)
     }
 
     /// Batch translate multiple documents (.txt, .md, .srt, .vtt)
@@ -258,8 +266,12 @@ impl TranslatorService {
         target_lang: LanguageCode,
         domain_glossary: Option<&str>,
     ) -> Vec<BatchTranslationResult> {
-        self.subtitles
-            .batch_translate_documents(documents, source_lang, target_lang, domain_glossary)
+        self.subtitles.batch_translate_documents(
+            documents,
+            source_lang,
+            target_lang,
+            domain_glossary,
+        )
     }
 
     /// Generate timestamped subtitle file (.srt or .vtt) directly from 16kHz audio PCM

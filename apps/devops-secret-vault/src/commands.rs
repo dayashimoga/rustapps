@@ -789,10 +789,16 @@ pub async fn import_dotenv(
                 tags: Some(vec!["dotenv".to_string(), target_env.to_string()]),
                 username: None,
                 url: None,
-                notes: Some(format!("Updated via .env import for environment: {}", target_env)),
+                notes: Some(format!(
+                    "Updated via .env import for environment: {}",
+                    target_env
+                )),
                 payload: Some(payload),
             };
-            match service.update_secret(existing_id, update_input, "desktop-tauri").await {
+            match service
+                .update_secret(existing_id, update_input, "desktop-tauri")
+                .await
+            {
                 Ok(_) => updated_count += 1,
                 Err(e) => failed_keys.push(format!("{}: {}", key, e)),
             }
@@ -802,7 +808,10 @@ pub async fn import_dotenv(
                 tags: vec!["dotenv".to_string(), target_env.to_string()],
                 username: None,
                 url: None,
-                notes: Some(format!("Imported from .env for environment: {}", target_env)),
+                notes: Some(format!(
+                    "Imported from .env for environment: {}",
+                    target_env
+                )),
                 payload,
             };
             match service.create_secret(create_input, "desktop-tauri").await {
@@ -877,7 +886,10 @@ pub async fn import_k8s_secret(
             continue;
         }
 
-        if !line.starts_with(' ') && !line.starts_with('\t') && (in_data || in_string_data || in_metadata) {
+        if !line.starts_with(' ')
+            && !line.starts_with('\t')
+            && (in_data || in_string_data || in_metadata)
+        {
             in_data = false;
             in_string_data = false;
             in_metadata = false;
@@ -915,20 +927,31 @@ pub async fn import_k8s_secret(
             if let Some(existing_id) = existing_map.get(&title) {
                 let update_input = UpdateSecretInput {
                     title: Some(title.clone()),
-                    tags: Some(vec!["k8s".to_string(), secret_name.clone(), target_env.to_string()]),
+                    tags: Some(vec![
+                        "k8s".to_string(),
+                        secret_name.clone(),
+                        target_env.to_string(),
+                    ]),
                     username: None,
                     url: None,
                     notes: Some(format!("Updated via K8s Secret import ({})", secret_name)),
                     payload: Some(payload),
                 };
-                match service.update_secret(existing_id, update_input, "desktop-tauri").await {
+                match service
+                    .update_secret(existing_id, update_input, "desktop-tauri")
+                    .await
+                {
                     Ok(_) => updated_count += 1,
                     Err(e) => failed_keys.push(format!("{}: {}", key, e)),
                 }
             } else {
                 let create_input = CreateSecretInput {
                     title,
-                    tags: vec!["k8s".to_string(), secret_name.clone(), target_env.to_string()],
+                    tags: vec![
+                        "k8s".to_string(),
+                        secret_name.clone(),
+                        target_env.to_string(),
+                    ],
                     username: None,
                     url: None,
                     notes: Some(format!("Imported from K8s Secret ({})", secret_name)),
@@ -1015,11 +1038,17 @@ exit 0
 pub fn install_git_precommit_hook(repo_path: &str) -> Result<serde_json::Value, String> {
     let base = std::path::Path::new(repo_path);
     if !base.exists() {
-        return Err(format!("Repository directory does not exist: {}", repo_path));
+        return Err(format!(
+            "Repository directory does not exist: {}",
+            repo_path
+        ));
     }
     let git_dir = base.join(".git");
     if !git_dir.exists() {
-        return Err(format!("Not a git repository: missing .git directory in {}", repo_path));
+        return Err(format!(
+            "Not a git repository: missing .git directory in {}",
+            repo_path
+        ));
     }
     let hooks_dir = git_dir.join("hooks");
     if !hooks_dir.exists() {
@@ -1027,7 +1056,10 @@ pub fn install_git_precommit_hook(repo_path: &str) -> Result<serde_json::Value, 
     }
     let hook_file = hooks_dir.join("pre-commit");
     let script_data = get_git_precommit_hook_script(Some(repo_path));
-    let script_str = script_data.get("script").and_then(|v| v.as_str()).unwrap_or("");
+    let script_str = script_data
+        .get("script")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let script_lf = script_str.replace("\r\n", "\n");
     std::fs::write(&hook_file, script_lf.as_bytes()).map_err(|e| e.to_string())?;
@@ -1059,7 +1091,10 @@ mod tests {
         let db_path = dir.path().join("test_vault.db");
         let storage = crate::storage::VaultStorage::open(&db_path).unwrap();
         let service = VaultService::new(storage, None);
-        service.initialize("CorrectHorseBatteryStaple123!").await.unwrap();
+        service
+            .initialize("CorrectHorseBatteryStaple123!")
+            .await
+            .unwrap();
         (service, dir)
     }
 
@@ -1074,7 +1109,9 @@ DB_PORT="5432"
 DB_PASS='super_secret_password'
 "#;
 
-        let import_summary = import_dotenv(&service, dotenv_sample, "staging").await.unwrap();
+        let import_summary = import_dotenv(&service, dotenv_sample, "staging")
+            .await
+            .unwrap();
         assert_eq!(import_summary.imported_count, 3);
         assert_eq!(import_summary.failed_keys.len(), 0);
 
@@ -1108,12 +1145,17 @@ stringData:
   ENDPOINT: https://api.internal.local
 "#;
 
-        let import_summary = import_k8s_secret(&service, k8s_yaml, "production").await.unwrap();
+        let import_summary = import_k8s_secret(&service, k8s_yaml, "production")
+            .await
+            .unwrap();
         assert_eq!(import_summary.secret_name, "api-service");
         assert_eq!(import_summary.imported_count, 2);
 
         let secrets = service.list_secrets().await.unwrap();
-        let auth_sec = secrets.iter().find(|s| s.title == "api-service_AUTH_TOKEN").unwrap();
+        let auth_sec = secrets
+            .iter()
+            .find(|s| s.title == "api-service_AUTH_TOKEN")
+            .unwrap();
         let decrypted = service.get_secret(&auth_sec.id, "test").await.unwrap();
         if let SecretPayload::Password { password } = &decrypted.payload {
             assert_eq!(password, "secret_token_123");
@@ -1136,7 +1178,9 @@ stringData:
         let install_res = install_git_precommit_hook(repo_path.to_str().unwrap()).unwrap();
         assert_eq!(install_res.get("success").unwrap().as_bool(), Some(true));
 
-        let hook_content = std::fs::read_to_string(repo_path.join(".git").join("hooks").join("pre-commit")).unwrap();
+        let hook_content =
+            std::fs::read_to_string(repo_path.join(".git").join("hooks").join("pre-commit"))
+                .unwrap();
         assert!(hook_content.contains("Pre-Commit Check FAILED"));
     }
 }

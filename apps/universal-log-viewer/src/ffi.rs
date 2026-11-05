@@ -221,6 +221,43 @@ pub unsafe extern "C" fn ulv_cluster_errors(
     }
 }
 
+/// Dispatch any desktop IPC command via unified JSON-RPC over C-ABI
+///
+/// # Safety
+/// `cmd` must be a valid non-null null-terminated C string.
+/// `args_json` can be null or a valid null-terminated C string containing JSON object.
+#[no_mangle]
+pub unsafe extern "C" fn ulv_dispatch_command(
+    _handle: *mut LogViewerHandle,
+    cmd: *const c_char,
+    args_json: *const c_char,
+) -> *mut c_char {
+    if cmd.is_null() {
+        return to_error_json("Null command pointer passed to ulv_dispatch_command");
+    }
+
+    let cmd_str = match CStr::from_ptr(cmd).to_str() {
+        Ok(s) => s,
+        Err(_) => return to_error_json("Invalid UTF-8 in command string"),
+    };
+
+    let args: serde_json::Value = if args_json.is_null() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        match CStr::from_ptr(args_json).to_str() {
+            Ok(s) if !s.trim().is_empty() => {
+                serde_json::from_str(s).unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
+            }
+            _ => serde_json::Value::Object(serde_json::Map::new()),
+        }
+    };
+
+    match crate::commands::dispatch_ipc_command(cmd_str, args) {
+        Ok(res) => to_c_string(&res),
+        Err(e) => to_error_json(&e),
+    }
+}
+
 /// Free a C string previously allocated by `ulv_*` functions
 ///
 /// # Safety
@@ -291,7 +328,27 @@ mod tests {
             assert!(!err_clusters_ptr.is_null());
             ulv_free_string(err_clusters_ptr);
 
-            // 8. Free handle
+            // 8. Test unified JSON-RPC C-ABI command dispatch
+            let cmd_open = CString::new("open_file").unwrap();
+            let args_open = CString::new(format!(
+                r#"{{"path": "{}"}}"#,
+                log_path.to_str().unwrap().replace('\\', "/")
+            ))
+            .unwrap();
+            let rpc_open_ptr = ulv_dispatch_command(handle, cmd_open.as_ptr(), args_open.as_ptr());
+            assert!(!rpc_open_ptr.is_null());
+            ulv_free_string(rpc_open_ptr);
+
+            let cmd_lines = CString::new("get_lines_slice").unwrap();
+            let args_lines = CString::new(r#"{"offset": 0, "limit": 2}"#).unwrap();
+            let rpc_lines_ptr =
+                ulv_dispatch_command(handle, cmd_lines.as_ptr(), args_lines.as_ptr());
+            assert!(!rpc_lines_ptr.is_null());
+            let rpc_lines_str = CStr::from_ptr(rpc_lines_ptr).to_str().unwrap();
+            assert!(rpc_lines_str.contains("System booted"));
+            ulv_free_string(rpc_lines_ptr);
+
+            // 9. Free handle
             ulv_free_handle(handle);
         }
     }

@@ -7,10 +7,10 @@ use crate::crawler::FileCrawler;
 use crate::dedup::DuplicateDetector;
 use crate::doc_extract::DocumentExtractor;
 use crate::models::{
-    BatchRenameResult, BatchRenameRule, ContentSearchQuery, ContentSearchResult,
-    CopyFilesResult, DeduplicationSummary, DirectoryListing, ExtractedDocument, FileItem,
-    FolderStats, MoveFilesResult, OcrResult, RenamePreview, ScreenshotFingerprint,
-    ScreenshotSearchResult, SearchMode, SmartFolder, TreemapNode,
+    BatchRenameResult, BatchRenameRule, ContentSearchQuery, ContentSearchResult, CopyFilesResult,
+    DeduplicationSummary, DirectoryListing, ExtractedDocument, FileItem, FolderStats,
+    MoveFilesResult, OcrResult, RenamePreview, ScreenshotFingerprint, ScreenshotSearchResult,
+    SearchMode, SmartFolder, TreemapNode,
 };
 use crate::service::FileExplorerService;
 use crate::treemap::TreemapGenerator;
@@ -171,10 +171,16 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<(usize, u64)> {
 }
 
 /// Copy files or directories to a target folder (Dual-Pane Commander Mode)
-pub fn copy_files_cmd(sources: Vec<String>, destination_dir: String) -> Result<CopyFilesResult, String> {
+pub fn copy_files_cmd(
+    sources: Vec<String>,
+    destination_dir: String,
+) -> Result<CopyFilesResult, String> {
     let dest = Path::new(&destination_dir);
     if !dest.is_dir() {
-        return Err(format!("Destination is not a directory: {}", destination_dir));
+        return Err(format!(
+            "Destination is not a directory: {}",
+            destination_dir
+        ));
     }
     let mut copied_count = 0;
     let mut total_bytes = 0;
@@ -225,10 +231,16 @@ pub fn copy_files_cmd(sources: Vec<String>, destination_dir: String) -> Result<C
 }
 
 /// Move files or directories to a target folder (Dual-Pane Commander Mode)
-pub fn move_files_cmd(sources: Vec<String>, destination_dir: String) -> Result<MoveFilesResult, String> {
+pub fn move_files_cmd(
+    sources: Vec<String>,
+    destination_dir: String,
+) -> Result<MoveFilesResult, String> {
     let dest = Path::new(&destination_dir);
     if !dest.is_dir() {
-        return Err(format!("Destination is not a directory: {}", destination_dir));
+        return Err(format!(
+            "Destination is not a directory: {}",
+            destination_dir
+        ));
     }
     let mut moved_count = 0;
     let mut failed_paths = Vec::new();
@@ -261,7 +273,10 @@ pub fn move_files_cmd(sources: Vec<String>, destination_dir: String) -> Result<M
                                 moved_count += 1;
                             }
                             Err(e) => {
-                                failed_paths.push(format!("{}: copied but failed to delete original: {}", src_str, e));
+                                failed_paths.push(format!(
+                                    "{}: copied but failed to delete original: {}",
+                                    src_str, e
+                                ));
                             }
                         },
                         Err(e) => {
@@ -275,7 +290,10 @@ pub fn move_files_cmd(sources: Vec<String>, destination_dir: String) -> Result<M
                                 moved_count += 1;
                             }
                             Err(e) => {
-                                failed_paths.push(format!("{}: copied but failed to delete original: {}", src_str, e));
+                                failed_paths.push(format!(
+                                    "{}: copied but failed to delete original: {}",
+                                    src_str, e
+                                ));
                             }
                         },
                         Err(e) => {
@@ -328,8 +346,13 @@ fn get_builtin_smart_folders() -> Vec<SmartFolder> {
             description: "Word, Excel, PowerPoint, and Markdown files".to_string(),
             query: "docx doc odt xlsx pptx md txt".to_string(),
             extensions: vec![
-                "docx".to_string(), "doc".to_string(), "odt".to_string(),
-                "xlsx".to_string(), "pptx".to_string(), "md".to_string(), "txt".to_string(),
+                "docx".to_string(),
+                "doc".to_string(),
+                "odt".to_string(),
+                "xlsx".to_string(),
+                "pptx".to_string(),
+                "md".to_string(),
+                "txt".to_string(),
             ],
             min_size_bytes: None,
             max_size_bytes: None,
@@ -342,8 +365,13 @@ fn get_builtin_smart_folders() -> Vec<SmartFolder> {
             description: "Photos, screenshots, and vector graphics".to_string(),
             query: "png jpg jpeg webp bmp gif svg".to_string(),
             extensions: vec![
-                "png".to_string(), "jpg".to_string(), "jpeg".to_string(),
-                "webp".to_string(), "bmp".to_string(), "gif".to_string(), "svg".to_string(),
+                "png".to_string(),
+                "jpg".to_string(),
+                "jpeg".to_string(),
+                "webp".to_string(),
+                "bmp".to_string(),
+                "gif".to_string(),
+                "svg".to_string(),
             ],
             min_size_bytes: None,
             max_size_bytes: None,
@@ -356,8 +384,12 @@ fn get_builtin_smart_folders() -> Vec<SmartFolder> {
             description: "ZIP, TAR, GZ, 7Z, and RAR compressed packages".to_string(),
             query: "zip tar gz tgz 7z rar".to_string(),
             extensions: vec![
-                "zip".to_string(), "tar".to_string(), "gz".to_string(),
-                "tgz".to_string(), "7z".to_string(), "rar".to_string(),
+                "zip".to_string(),
+                "tar".to_string(),
+                "gz".to_string(),
+                "tgz".to_string(),
+                "7z".to_string(),
+                "rar".to_string(),
             ],
             min_size_bytes: None,
             max_size_bytes: None,
@@ -370,9 +402,17 @@ fn get_builtin_smart_folders() -> Vec<SmartFolder> {
             description: "Rust, TypeScript, Python, Go, C++, JSON, YAML source files".to_string(),
             query: "rs ts js py go c cpp java json toml yaml".to_string(),
             extensions: vec![
-                "rs".to_string(), "ts".to_string(), "js".to_string(), "py".to_string(),
-                "go".to_string(), "c".to_string(), "cpp".to_string(), "java".to_string(),
-                "json".to_string(), "toml".to_string(), "yaml".to_string(),
+                "rs".to_string(),
+                "ts".to_string(),
+                "js".to_string(),
+                "py".to_string(),
+                "go".to_string(),
+                "c".to_string(),
+                "cpp".to_string(),
+                "java".to_string(),
+                "json".to_string(),
+                "toml".to_string(),
+                "yaml".to_string(),
             ],
             min_size_bytes: None,
             max_size_bytes: None,
@@ -405,7 +445,9 @@ fn get_builtin_smart_folders() -> Vec<SmartFolder> {
 
 /// Retrieve all built-in and user-saved Smart Virtual Folders
 pub fn get_smart_folders_cmd() -> Result<Vec<SmartFolder>, String> {
-    let mut list = BUILTIN_SMART_FOLDERS.get_or_init(get_builtin_smart_folders).clone();
+    let mut list = BUILTIN_SMART_FOLDERS
+        .get_or_init(get_builtin_smart_folders)
+        .clone();
     let custom = CUSTOM_SMART_FOLDERS.get_or_init(|| Mutex::new(Vec::new()));
     let customs = custom.lock().map_err(|e| e.to_string())?;
     list.extend(customs.clone());
@@ -475,14 +517,37 @@ fn find_matching_files_in_dir(
         if meta.is_dir() {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if !name.starts_with('.') && name != "node_modules" && name != "target" {
-                find_matching_files_in_dir(&p, folder, depth + 1, max_depth, now_secs, results, seen, limit);
+                find_matching_files_in_dir(
+                    &p,
+                    folder,
+                    depth + 1,
+                    max_depth,
+                    now_secs,
+                    results,
+                    seen,
+                    limit,
+                );
             }
         } else {
             let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase());
             let ext_match = folder.extensions.is_empty()
-                || ext.as_ref().map(|e| folder.extensions.iter().any(|fe| fe.eq_ignore_ascii_case(e))).unwrap_or(false);
-            let min_match = folder.min_size_bytes.map(|min| meta.len() >= min).unwrap_or(true);
-            let max_match = folder.max_size_bytes.map(|max| meta.len() <= max).unwrap_or(true);
+                || ext
+                    .as_ref()
+                    .map(|e| {
+                        folder
+                            .extensions
+                            .iter()
+                            .any(|fe| fe.eq_ignore_ascii_case(e))
+                    })
+                    .unwrap_or(false);
+            let min_match = folder
+                .min_size_bytes
+                .map(|min| meta.len() >= min)
+                .unwrap_or(true);
+            let max_match = folder
+                .max_size_bytes
+                .map(|max| meta.len() <= max)
+                .unwrap_or(true);
 
             let mod_secs = meta
                 .modified()
@@ -539,7 +604,16 @@ pub fn query_smart_folder_cmd(
     if let Some(ctx_str) = path_context {
         let p = Path::new(&ctx_str);
         if p.is_dir() {
-            find_matching_files_in_dir(p, &folder, 0, 3, now_secs, &mut matches, &mut seen_paths, limit);
+            find_matching_files_in_dir(
+                p,
+                &folder,
+                0,
+                3,
+                now_secs,
+                &mut matches,
+                &mut seen_paths,
+                limit,
+            );
         }
     }
 
@@ -557,8 +631,14 @@ pub fn query_smart_folder_cmd(
                         .as_ref()
                         .map(|e| e.eq_ignore_ascii_case(ext))
                         .unwrap_or(false);
-                    let min_match = folder.min_size_bytes.map(|min| item.size_bytes >= min).unwrap_or(true);
-                    let max_match = folder.max_size_bytes.map(|max| item.size_bytes <= max).unwrap_or(true);
+                    let min_match = folder
+                        .min_size_bytes
+                        .map(|min| item.size_bytes >= min)
+                        .unwrap_or(true);
+                    let max_match = folder
+                        .max_size_bytes
+                        .map(|max| item.size_bytes <= max)
+                        .unwrap_or(true);
                     if ext_match && min_match && max_match && seen_paths.insert(item.path.clone()) {
                         matches.push(item);
                         if matches.len() >= limit {
@@ -578,14 +658,24 @@ pub fn query_smart_folder_cmd(
                     if item.is_dir {
                         continue;
                     }
-                    let min_match = folder.min_size_bytes.map(|min| item.size_bytes >= min).unwrap_or(true);
-                    let max_match = folder.max_size_bytes.map(|max| item.size_bytes <= max).unwrap_or(true);
+                    let min_match = folder
+                        .min_size_bytes
+                        .map(|min| item.size_bytes >= min)
+                        .unwrap_or(true);
+                    let max_match = folder
+                        .max_size_bytes
+                        .map(|max| item.size_bytes <= max)
+                        .unwrap_or(true);
                     let recent_match = if folder.id == "smart-recent" {
                         now_secs.saturating_sub(item.modified_timestamp_secs) <= 86400
                     } else {
                         true
                     };
-                    if min_match && max_match && recent_match && seen_paths.insert(item.path.clone()) {
+                    if min_match
+                        && max_match
+                        && recent_match
+                        && seen_paths.insert(item.path.clone())
+                    {
                         matches.push(item);
                         if matches.len() >= limit {
                             break;
@@ -1279,7 +1369,8 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
                 .get("folder")
                 .cloned()
                 .ok_or_else(|| "Missing folder argument".to_string())?;
-            let folder: SmartFolder = serde_json::from_value(folder_val).map_err(|e| e.to_string())?;
+            let folder: SmartFolder =
+                serde_json::from_value(folder_val).map_err(|e| e.to_string())?;
             let res = save_smart_folder_cmd(folder)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
@@ -1541,7 +1632,10 @@ mod tests {
             }),
         )
         .unwrap();
-        assert_eq!(ipc_copy_val.get("copied_count").unwrap().as_u64().unwrap(), 1);
+        assert_eq!(
+            ipc_copy_val.get("copied_count").unwrap().as_u64().unwrap(),
+            1
+        );
     }
 
     #[test]
@@ -1562,12 +1656,14 @@ mod tests {
         assert!(folders.iter().any(|f| f.id == "smart-code"));
 
         // 2. Query smart-pdf with path context
-        let pdf_matches = query_smart_folder_cmd("smart-pdf".to_string(), Some(dir_str.clone()), 20).unwrap();
+        let pdf_matches =
+            query_smart_folder_cmd("smart-pdf".to_string(), Some(dir_str.clone()), 20).unwrap();
         assert_eq!(pdf_matches.len(), 1);
         assert_eq!(pdf_matches[0].file_name, "manual.pdf");
 
         // 3. Query smart-code with path context
-        let code_matches = query_smart_folder_cmd("smart-code".to_string(), Some(dir_str), 20).unwrap();
+        let code_matches =
+            query_smart_folder_cmd("smart-code".to_string(), Some(dir_str), 20).unwrap();
         assert_eq!(code_matches.len(), 1);
         assert_eq!(code_matches[0].file_name, "main.rs");
 

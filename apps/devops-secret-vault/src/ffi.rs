@@ -571,6 +571,57 @@ pub unsafe extern "C" fn vault_unlock_with_shamir_shares(
     }
 }
 
+fn to_c_string<T: serde::Serialize>(val: &T) -> *mut c_char {
+    let json = serde_json::to_string(val).unwrap_or_else(|_| "{}".to_string());
+    CString::new(json)
+        .map(CString::into_raw)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+fn to_error_json(err_msg: &str) -> *mut c_char {
+    let err_json = format!("{{\"error\": \"{}\"}}", err_msg.replace('"', "\\\""));
+    CString::new(err_json)
+        .map(CString::into_raw)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// Dispatch any desktop IPC command via unified JSON-RPC over C-ABI
+///
+/// # Safety
+/// `cmd` must be a valid non-null null-terminated C string.
+/// `args_json` can be null or a valid null-terminated C string containing JSON object.
+#[no_mangle]
+pub unsafe extern "C" fn vault_dispatch_command(
+    _handle: *mut VaultHandle,
+    cmd: *const c_char,
+    args_json: *const c_char,
+) -> *mut c_char {
+    if cmd.is_null() {
+        return to_error_json("Null command pointer passed to vault_dispatch_command");
+    }
+
+    let cmd_str = match CStr::from_ptr(cmd).to_str() {
+        Ok(s) => s,
+        Err(_) => return to_error_json("Invalid UTF-8 in command string"),
+    };
+
+    let args: serde_json::Value = if args_json.is_null() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        match CStr::from_ptr(args_json).to_str() {
+            Ok(s) if !s.trim().is_empty() => {
+                serde_json::from_str(s).unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
+            }
+            _ => serde_json::Value::Object(serde_json::Map::new()),
+        }
+    };
+
+    match crate::commands::dispatch_ipc_command(cmd_str, args) {
+        Ok(res) => to_c_string(&res),
+        Err(e) => to_error_json(&e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,6 +738,24 @@ mod tests {
                 0
             );
             assert_eq!(vault_is_locked(handle), 0);
+
+            // Test unified JSON-RPC C-ABI command dispatch
+            let cmd_gen = CString::new("generate_secure_password").unwrap();
+            let args_gen =
+                CString::new(r#"{"length": 24, "symbols": true, "digits": true}"#).unwrap();
+            let rpc_pwd_ptr = vault_dispatch_command(handle, cmd_gen.as_ptr(), args_gen.as_ptr());
+            assert!(!rpc_pwd_ptr.is_null());
+            let rpc_pwd_str = CStr::from_ptr(rpc_pwd_ptr).to_str().unwrap();
+            assert!(rpc_pwd_str.contains("password"));
+            vault_free_string(rpc_pwd_ptr);
+
+            let cmd_status = CString::new("get_vault_status").unwrap();
+            let rpc_status_ptr =
+                vault_dispatch_command(handle, cmd_status.as_ptr(), std::ptr::null());
+            assert!(!rpc_status_ptr.is_null());
+            let rpc_status_str = CStr::from_ptr(rpc_status_ptr).to_str().unwrap();
+            assert!(rpc_status_str.contains("is_locked"));
+            vault_free_string(rpc_status_ptr);
 
             vault_free_handle(handle);
         }

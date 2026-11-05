@@ -84,7 +84,8 @@ mod tests {
 
     #[test]
     fn test_generate_password_length_and_entropy() {
-        let (pw, entropy, label) = generate_password_or_passphrase(32, true, true, true, true, false, 4);
+        let (pw, entropy, label) =
+            generate_password_or_passphrase(32, true, true, true, true, false, 4);
         assert_eq!(pw.len(), 32);
         assert!(entropy >= 100.0);
         assert_eq!(label, "Exceptional (Military Grade)");
@@ -92,7 +93,8 @@ mod tests {
 
     #[test]
     fn test_generate_diceware_passphrase() {
-        let (passphrase, entropy, label) = generate_password_or_passphrase(16, true, true, true, true, true, 5);
+        let (passphrase, entropy, label) =
+            generate_password_or_passphrase(16, true, true, true, true, true, 5);
         let parts: Vec<&str> = passphrase.split('-').collect();
         assert_eq!(parts.len(), 5);
         assert!(entropy > 25.0);

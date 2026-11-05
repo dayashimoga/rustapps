@@ -159,6 +159,8 @@ mod tests {
         let findings = scan_dir_for_leaks(dir.path());
         assert_eq!(findings.len(), 2);
         assert!(findings.iter().any(|f| f.leak_type == "Private Key"));
-        assert!(findings.iter().any(|f| f.leak_type == "Unencrypted Environment Secret"));
+        assert!(findings
+            .iter()
+            .any(|f| f.leak_type == "Unencrypted Environment Secret"));
     }
 }

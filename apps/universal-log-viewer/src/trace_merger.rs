@@ -117,7 +117,9 @@ pub fn merge_log_files_chronologically<P: AsRef<Path>, Q: AsRef<Path>>(
     }
 
     if all_timed_lines.is_empty() {
-        return Err(anyhow::anyhow!("No log entries found across the specified files"));
+        return Err(anyhow::anyhow!(
+            "No log entries found across the specified files"
+        ));
     }
 
     // Stable sort chronologically by timestamp
@@ -169,15 +171,33 @@ pub fn extract_trace_metadata(text: &str) -> (Option<String>, Option<String>, Op
     let mut service_name = None;
 
     // Fast check for JSON payload
-    if (text.starts_with('{') && text.ends_with('}')) || text.contains("\"trace_id\"") || text.contains("\"traceId\"") {
+    if (text.starts_with('{') && text.ends_with('}'))
+        || text.contains("\"trace_id\"")
+        || text.contains("\"traceId\"")
+    {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
-            if let Some(tid) = val.get("trace_id").or_else(|| val.get("traceId")).or_else(|| val.get("traceid")).and_then(|v| v.as_str()) {
+            if let Some(tid) = val
+                .get("trace_id")
+                .or_else(|| val.get("traceId"))
+                .or_else(|| val.get("traceid"))
+                .and_then(|v| v.as_str())
+            {
                 trace_id = Some(tid.to_string());
             }
-            if let Some(sid) = val.get("span_id").or_else(|| val.get("spanId")).or_else(|| val.get("spanid")).and_then(|v| v.as_str()) {
+            if let Some(sid) = val
+                .get("span_id")
+                .or_else(|| val.get("spanId"))
+                .or_else(|| val.get("spanid"))
+                .and_then(|v| v.as_str())
+            {
                 span_id = Some(sid.to_string());
             }
-            if let Some(svc) = val.get("service").or_else(|| val.get("service_name")).or_else(|| val.get("app")).and_then(|v| v.as_str()) {
+            if let Some(svc) = val
+                .get("service")
+                .or_else(|| val.get("service_name"))
+                .or_else(|| val.get("app"))
+                .and_then(|v| v.as_str())
+            {
                 service_name = Some(svc.to_string());
             }
         }
@@ -185,10 +205,28 @@ pub fn extract_trace_metadata(text: &str) -> (Option<String>, Option<String>, Op
 
     // Key-value / Logfmt regex fallback if not found
     if trace_id.is_none() {
-        for prefix in &["trace_id=", "traceId=", "trace_id: ", "traceId: ", "req_id=", "requestId=", "job_id="] {
+        for prefix in &[
+            "trace_id=",
+            "traceId=",
+            "trace_id: ",
+            "traceId: ",
+            "req_id=",
+            "requestId=",
+            "job_id=",
+        ] {
             if let Some(idx) = text.find(prefix) {
                 let slice = &text[idx + prefix.len()..];
-                let token = slice.split(|c: char| c.is_whitespace() || c == ',' || c == '"' || c == ';' || c == ']' || c == '}').next().unwrap_or("");
+                let token = slice
+                    .split(|c: char| {
+                        c.is_whitespace()
+                            || c == ','
+                            || c == '"'
+                            || c == ';'
+                            || c == ']'
+                            || c == '}'
+                    })
+                    .next()
+                    .unwrap_or("");
                 if !token.is_empty() {
                     trace_id = Some(token.trim().to_string());
                     break;
@@ -201,7 +239,17 @@ pub fn extract_trace_metadata(text: &str) -> (Option<String>, Option<String>, Op
         for prefix in &["span_id=", "spanId=", "span_id: ", "spanId: "] {
             if let Some(idx) = text.find(prefix) {
                 let slice = &text[idx + prefix.len()..];
-                let token = slice.split(|c: char| c.is_whitespace() || c == ',' || c == '"' || c == ';' || c == ']' || c == '}').next().unwrap_or("");
+                let token = slice
+                    .split(|c: char| {
+                        c.is_whitespace()
+                            || c == ','
+                            || c == '"'
+                            || c == ';'
+                            || c == ']'
+                            || c == '}'
+                    })
+                    .next()
+                    .unwrap_or("");
                 if !token.is_empty() {
                     span_id = Some(token.trim().to_string());
                     break;
@@ -214,7 +262,10 @@ pub fn extract_trace_metadata(text: &str) -> (Option<String>, Option<String>, Op
         for prefix in &["service=", "service_name=", "app="] {
             if let Some(idx) = text.find(prefix) {
                 let slice = &text[idx + prefix.len()..];
-                let token = slice.split(|c: char| c.is_whitespace() || c == ',' || c == '"' || c == ']').next().unwrap_or("");
+                let token = slice
+                    .split(|c: char| c.is_whitespace() || c == ',' || c == '"' || c == ']')
+                    .next()
+                    .unwrap_or("");
                 if !token.is_empty() {
                     service_name = Some(token.trim().to_string());
                     break;
@@ -286,8 +337,16 @@ pub fn correlate_trace_waterfall(
     // Sort spans chronologically
     matching_spans.sort_by_key(|(ts, _)| *ts);
 
-    let t0 = if min_epoch != i64::MAX { min_epoch } else { matching_spans[0].0 };
-    let tn = if max_epoch != i64::MIN { max_epoch } else { matching_spans.last().unwrap().0 };
+    let t0 = if min_epoch != i64::MAX {
+        min_epoch
+    } else {
+        matching_spans[0].0
+    };
+    let tn = if max_epoch != i64::MIN {
+        max_epoch
+    } else {
+        matching_spans.last().unwrap().0
+    };
     let total_duration_ms = (tn - t0).max(10) as u64;
 
     let root_service = matching_spans[0].1.service_name.clone();

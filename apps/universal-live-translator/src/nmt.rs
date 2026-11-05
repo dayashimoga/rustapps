@@ -1596,8 +1596,7 @@ fn replace_with_word_boundary(
         return text.to_string();
     }
 
-    let is_single_word = !target_needle.contains(' ')
-        && target_needle.chars().all(is_word_char);
+    let is_single_word = !target_needle.contains(' ') && target_needle.chars().all(is_word_char);
 
     let text_chars: Vec<char> = text.chars().collect();
     let needle_chars: Vec<char> = if case_sensitive {

@@ -553,18 +553,30 @@ pub fn compute_field_aggregations(
     for r in records {
         for (k, v) in &r.attributes {
             if !k.is_empty() && !v.is_empty() {
-                *field_tallies.entry(k.clone()).or_default().entry(v.clone()).or_insert(0) += 1;
+                *field_tallies
+                    .entry(k.clone())
+                    .or_default()
+                    .entry(v.clone())
+                    .or_insert(0) += 1;
             }
         }
 
         let sev_str = r.severity.as_str().to_string();
         if sev_str != "UNKNOWN" {
-            *field_tallies.entry("severity".to_string()).or_default().entry(sev_str).or_insert(0) += 1;
+            *field_tallies
+                .entry("severity".to_string())
+                .or_default()
+                .entry(sev_str)
+                .or_insert(0) += 1;
         }
 
         if let Some(ref src) = r.source {
             if !src.is_empty() {
-                *field_tallies.entry("service".to_string()).or_default().entry(src.clone()).or_insert(0) += 1;
+                *field_tallies
+                    .entry("service".to_string())
+                    .or_default()
+                    .entry(src.clone())
+                    .or_insert(0) += 1;
             }
         }
 
@@ -572,7 +584,12 @@ pub fn compute_field_aggregations(
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&r.message) {
                 if let Some(obj) = val.as_object() {
                     for (k, v) in obj {
-                        if k == "timestamp" || k == "time" || k == "raw" || k == "message" || k == "msg" {
+                        if k == "timestamp"
+                            || k == "time"
+                            || k == "raw"
+                            || k == "message"
+                            || k == "msg"
+                        {
                             continue;
                         }
                         let val_str = match v {
@@ -582,7 +599,11 @@ pub fn compute_field_aggregations(
                             _ => continue,
                         };
                         if !val_str.is_empty() && val_str.len() < 120 {
-                            *field_tallies.entry(k.clone()).or_default().entry(val_str).or_insert(0) += 1;
+                            *field_tallies
+                                .entry(k.clone())
+                                .or_default()
+                                .entry(val_str)
+                                .or_insert(0) += 1;
                         }
                     }
                 }
@@ -624,7 +645,11 @@ pub fn compute_field_aggregations(
         });
     }
 
-    breakdowns.sort_by(|a, b| b.total_occurrences.cmp(&a.total_occurrences).then_with(|| a.field_name.cmp(&b.field_name)));
+    breakdowns.sort_by(|a, b| {
+        b.total_occurrences
+            .cmp(&a.total_occurrences)
+            .then_with(|| a.field_name.cmp(&b.field_name))
+    });
 
     FieldAggregationReport {
         total_records_inspected: records.len(),
@@ -716,7 +741,8 @@ mod tests {
             source: Some("auth".to_string()),
             attributes: BTreeMap::new(),
         };
-        rec1.attributes.insert("cluster".to_string(), "prod-us-east".to_string());
+        rec1.attributes
+            .insert("cluster".to_string(), "prod-us-east".to_string());
 
         let mut rec2 = NormalizedLogRecord {
             line_number: 2,
@@ -728,17 +754,26 @@ mod tests {
             source: Some("auth".to_string()),
             attributes: BTreeMap::new(),
         };
-        rec2.attributes.insert("cluster".to_string(), "prod-us-east".to_string());
+        rec2.attributes
+            .insert("cluster".to_string(), "prod-us-east".to_string());
 
         let report = compute_field_aggregations(&[rec1, rec2], 5);
         assert_eq!(report.total_records_inspected, 2);
 
-        let cluster_field = report.fields.iter().find(|f| f.field_name == "cluster").unwrap();
+        let cluster_field = report
+            .fields
+            .iter()
+            .find(|f| f.field_name == "cluster")
+            .unwrap();
         assert_eq!(cluster_field.total_occurrences, 2);
         assert_eq!(cluster_field.top_values[0].value, "prod-us-east");
         assert_eq!(cluster_field.top_values[0].percentage, 100.0);
 
-        let sev_field = report.fields.iter().find(|f| f.field_name == "severity").unwrap();
+        let sev_field = report
+            .fields
+            .iter()
+            .find(|f| f.field_name == "severity")
+            .unwrap();
         assert_eq!(sev_field.total_occurrences, 2);
         assert_eq!(sev_field.distinct_values_count, 2);
     }

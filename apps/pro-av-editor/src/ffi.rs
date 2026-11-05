@@ -469,6 +469,43 @@ pub unsafe extern "C" fn ave_get_export_presets(handle: *mut AveHandle) -> *mut 
     to_c_string(&ExportPreset::all_standard_presets())
 }
 
+/// Dispatch any desktop IPC command via unified JSON-RPC over C-ABI
+///
+/// # Safety
+/// `cmd` must be a valid non-null null-terminated C string.
+/// `args_json` can be null or a valid null-terminated C string containing JSON object.
+#[no_mangle]
+pub unsafe extern "C" fn ave_dispatch_command(
+    _handle: *mut AveHandle,
+    cmd: *const c_char,
+    args_json: *const c_char,
+) -> *mut c_char {
+    if cmd.is_null() {
+        return to_error_json("Null command pointer passed to ave_dispatch_command");
+    }
+
+    let cmd_str = match CStr::from_ptr(cmd).to_str() {
+        Ok(s) => s,
+        Err(_) => return to_error_json("Invalid UTF-8 in command string"),
+    };
+
+    let args: serde_json::Value = if args_json.is_null() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        match CStr::from_ptr(args_json).to_str() {
+            Ok(s) if !s.trim().is_empty() => {
+                serde_json::from_str(s).unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
+            }
+            _ => serde_json::Value::Object(serde_json::Map::new()),
+        }
+    };
+
+    match crate::commands::dispatch_ipc_command(cmd_str, args) {
+        Ok(res) => to_c_string(&res),
+        Err(e) => to_error_json(&e),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -503,6 +540,24 @@ mod tests {
             let edl_str = CStr::from_ptr(edl_ptr).to_str().unwrap();
             assert!(edl_str.contains("edl_content"));
             ave_free_string(edl_ptr);
+
+            // 4. Test unified JSON-RPC C-ABI command dispatch
+            let cmd_state = CString::new("get_project_state_cmd").unwrap();
+            let rpc_state_ptr = ave_dispatch_command(handle, cmd_state.as_ptr(), std::ptr::null());
+            assert!(!rpc_state_ptr.is_null());
+            let rpc_state_str = CStr::from_ptr(rpc_state_ptr).to_str().unwrap();
+            assert!(rpc_state_str.contains("project_id"));
+            ave_free_string(rpc_state_ptr);
+
+            let cmd_scopes = CString::new("get_video_scopes_cmd").unwrap();
+            let args_scopes =
+                CString::new(r#"{"timestampMs": 500, "width": 80, "height": 45}"#).unwrap();
+            let rpc_scopes_ptr =
+                ave_dispatch_command(handle, cmd_scopes.as_ptr(), args_scopes.as_ptr());
+            assert!(!rpc_scopes_ptr.is_null());
+            let rpc_scopes_str = CStr::from_ptr(rpc_scopes_ptr).to_str().unwrap();
+            assert!(rpc_scopes_str.contains("histogram_r"));
+            ave_free_string(rpc_scopes_ptr);
 
             ave_free_handle(handle);
         }
