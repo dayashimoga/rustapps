@@ -1487,7 +1487,19 @@ mod integration_tests {
             .unwrap();
         assert!(html_export.contains("<!DOCTYPE html>"));
 
-        // 11. shared-licensing: 100% offline Ed25519 signature verification across entire suite
+        // 11. signal-telemetry-oscilloscope: 100% offline FFT, zero-crossing DSP, and protocol decoding
+        let scope_service =
+            signal_telemetry_oscilloscope::OscilloscopeService::open_in_memory().unwrap();
+        let scope_session = scope_service.seed_demo_capture().unwrap();
+        assert!(!scope_session.ch1_samples.is_empty());
+        assert!(!scope_session.ch2_samples.is_empty());
+        assert!(scope_session.stats_ch1.vpp > 0.0);
+        assert!(scope_session.spectrum.dominant_freq_hz > 800.0);
+        let scope_stats = scope_service.get_stats().unwrap();
+        assert_eq!(scope_stats.total_captures, 1);
+        assert!(scope_stats.total_samples_analyzed > 0);
+
+        // 12. shared-licensing: 100% offline Ed25519 signature verification across entire suite
         let verified = verifier.verify(&cert, shared_licensing::AppId::AiFileExplorer, 1700000001);
         assert!(
             verified.is_ok(),

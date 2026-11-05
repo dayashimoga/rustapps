@@ -25,6 +25,7 @@ members = [
     "apps/parquet-analytics-workbench",
     "apps/dfir-triage-kit",
     "apps/screen-recorder-studio",
+    "apps/signal-telemetry-oscilloscope",
     "tests",
     "benchmarks",
 ]

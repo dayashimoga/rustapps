@@ -42,6 +42,7 @@ pub enum AppId {
     ParquetAnalyticsWorkbench,
     DfirTriageKit,
     ScreenRecorderStudio,
+    SignalTelemetryOscilloscope,
     AllAppsSuite,
 }
 

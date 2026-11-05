@@ -1138,6 +1138,58 @@ fn benchmark_screen_recorder_studio(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_signal_telemetry_oscilloscope(c: &mut Criterion) {
+    use signal_telemetry_oscilloscope::{SignalDspEngine, WaveformType};
+
+    let mut group = c.benchmark_group("oscilloscope");
+
+    // 1. Radix-2 Cooley-Tukey FFT Spectrum Analysis over 1024 points (<1ms SLA)
+    let samples = SignalDspEngine::generate_synthetic_waveform(
+        WaveformType::Sine,
+        1024,
+        48_000.0,
+        1_000.0,
+        3.3,
+    );
+
+    group.bench_function("scope_fft_radix2_1024_points", |b| {
+        b.iter(|| {
+            let spectrum = SignalDspEngine::compute_fft_spectrum(black_box(&samples), 48_000.0);
+            black_box(spectrum.dominant_freq_hz);
+        });
+    });
+
+    // 2. Waveform Statistics & Zero-Crossing Frequency Measurement
+    group.bench_function("scope_compute_statistics_1000_samples", |b| {
+        b.iter(|| {
+            let stats = SignalDspEngine::compute_statistics(black_box(&samples), 48_000.0);
+            black_box(stats.vpp);
+        });
+    });
+
+    // 3. UART 8N1 Serial Protocol Bus Decoding
+    let digital_stream = SignalDspEngine::generate_synthetic_waveform(
+        WaveformType::UartStream,
+        10_000,
+        50_000.0,
+        1_000.0,
+        3.3,
+    );
+    let digital_bytes: Vec<u8> = digital_stream
+        .iter()
+        .map(|&v| if v > 1.0 { 1 } else { 0 })
+        .collect();
+
+    group.bench_function("scope_decode_uart_stream_10k_samples", |b| {
+        b.iter(|| {
+            let packets = SignalDspEngine::decode_uart(black_box(&digital_bytes), 50_000.0, 9600);
+            black_box(packets.len());
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -1159,6 +1211,7 @@ criterion_group!(
     benchmark_api_protocol_studio,
     benchmark_parquet_analytics_workbench,
     benchmark_dfir_triage_kit,
-    benchmark_screen_recorder_studio
+    benchmark_screen_recorder_studio,
+    benchmark_signal_telemetry_oscilloscope
 );
 criterion_main!(benches);

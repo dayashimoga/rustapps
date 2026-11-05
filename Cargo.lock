@@ -216,6 +216,7 @@ dependencies = [
  "shared-search",
  "shared-storage",
  "shared-telemetry",
+ "signal-telemetry-oscilloscope",
  "tempfile",
  "tokio",
  "universal-live-translator",
@@ -927,6 +928,7 @@ dependencies = [
  "shared-storage",
  "shared-telemetry",
  "shared-updater",
+ "signal-telemetry-oscilloscope",
  "tempfile",
  "tokio",
  "universal-live-translator",
@@ -1890,6 +1892,22 @@ checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
  "errno",
  "libc",
+]
+
+[[package]]
+name = "signal-telemetry-oscilloscope"
+version = "0.1.0"
+dependencies = [
+ "platform-common",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "shared-licensing",
+ "shared-storage",
+ "shared-telemetry",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]

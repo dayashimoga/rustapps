@@ -1,0 +1,39 @@
+:root {
+  --bg-primary: #0a0e14;
+  --bg-secondary: #121820;
+  --bg-panel: #161f2c;
+  --border-color: #243347;
+  --ch1-color: #00ff66;
+  --ch2-color: #00d4ff;
+  --dig-color: #ffaa00;
+  --text-main: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #58a6ff;
+  --danger: #f85149;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-main);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+  user-select: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input, select {
+  font-family: inherit;
+}
+

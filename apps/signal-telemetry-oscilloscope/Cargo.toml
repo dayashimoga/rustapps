@@ -1,0 +1,27 @@
+[package]
+name = "signal-telemetry-oscilloscope"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Offline Scientific Signal & Telemetry Oscilloscope — 100% Offline Digital Signal Processing, FFT & Protocol Decoding"
+
+[dependencies]
+# Workspace crates
+platform-common.workspace = true
+shared-storage.workspace = true
+shared-telemetry.workspace = true
+shared-licensing = { path = "../../shared/licensing" }
+
+# Storage & Serialization
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Utilities
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
