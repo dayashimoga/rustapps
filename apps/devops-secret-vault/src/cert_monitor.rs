@@ -45,7 +45,7 @@ pub struct CertInspectionReport {
 // Base64 Decoder (RFC 4648)
 // ---------------------------------------------------------------------------
 
-fn decode_base64(input: &str) -> Result<Vec<u8>, VaultError> {
+pub(crate) fn decode_base64(input: &str) -> Result<Vec<u8>, VaultError> {
     let clean: String = input
         .chars()
         .filter(|c| !c.is_whitespace() && *c != '=')

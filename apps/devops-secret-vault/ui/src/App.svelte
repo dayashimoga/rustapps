@@ -11,6 +11,7 @@
   import ShamirModal from './components/ShamirModal.svelte';
   import LeakScannerModal from './components/LeakScannerModal.svelte';
   import PasswordGeneratorModal from './components/PasswordGeneratorModal.svelte';
+  import DotenvModal from './components/DotenvModal.svelte';
   import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
   import type {
     BackupExportSummary,
@@ -46,6 +47,7 @@
   let isShamirModalOpen = false;
   let isLeakScannerOpen = false;
   let isGeneratorOpen = false;
+  let isDotenvModalOpen = false;
   let isCommandPaletteOpen = false;
   let shamirModalMode: 'split' | 'unlock' = 'split';
   let biometricAvailable = false;
@@ -118,12 +120,12 @@
     },
     {
       id: 'act-export-env',
-      title: 'Export .env / KubeConfig',
-      subtitle: 'Format active secrets for local dev environments',
+      title: '.env & Kubernetes Secret Sync',
+      subtitle: 'Import or export environment variables & Kubernetes Secret YAML',
       category: 'DevOps',
       icon: '📦',
       shortcut: 'Ctrl+E',
-      run: handleExportDotenv,
+      run: () => { isDotenvModalOpen = true; },
     },
     {
       id: 'act-clear-clipboard',
@@ -236,6 +238,11 @@
         isGeneratorOpen = false;
         return;
       }
+      if (isDotenvModalOpen) {
+        e.preventDefault();
+        isDotenvModalOpen = false;
+        return;
+      }
       if (searchQuery) {
         e.preventDefault();
         searchQuery = '';
@@ -265,6 +272,9 @@
     } else if (isCtrl && e.key.toLowerCase() === 'b') {
       e.preventDefault();
       isBackupModalOpen = true;
+    } else if (isCtrl && e.key.toLowerCase() === 'e') {
+      e.preventDefault();
+      isDotenvModalOpen = true;
     } else if (isCtrl && e.shiftKey && e.key.toLowerCase() === 'l') {
       e.preventDefault();
       isLeakScannerOpen = true;
@@ -733,7 +743,7 @@
     on:openShamirModal={() => { shamirModalMode = 'split'; isShamirModalOpen = true; }}
     on:openLeakScanner={() => { isLeakScannerOpen = true; }}
     on:openGenerator={() => { isGeneratorOpen = true; }}
-    on:openDotenv={handleExportDotenv}
+    on:openDotenv={() => { isDotenvModalOpen = true; }}
     on:toggleBiometricEnrollment={handleToggleBiometricEnrollment}
     on:lockVault={handleLock}
     on:clearClipboard={handleClearClipboard}
@@ -849,6 +859,16 @@
       clipboardSeconds = 30;
       showToast('Copied generated password to clipboard (auto-wiping in 30s).');
       isGeneratorOpen = false;
+    }}
+  />
+
+  <!-- DevOps .env & Kubernetes Secrets Sync Modal -->
+  <DotenvModal
+    isOpen={isDotenvModalOpen}
+    on:close={() => { isDotenvModalOpen = false; }}
+    on:imported={() => {
+      loadSecrets();
+      showToast('Secrets successfully synced into encrypted vault!');
     }}
   />
 

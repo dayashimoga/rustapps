@@ -4,9 +4,11 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::generator::generate_password_or_passphrase;
+use crate::leak_scanner::scan_dir_for_leaks;
 use crate::models::{
     calculate_entropy, CreateSecretInput, DecryptedSecret, PasswordStrength, SecretAuditEntry,
-    SecretMetadata, SecretSearchResult, UpdateSecretInput,
+    SecretMetadata, SecretPayload, SecretSearchResult, UpdateSecretInput,
 };
 use crate::service::VaultService;
 
@@ -673,210 +675,335 @@ pub fn dispatch_ipc_command(
                     "exported_count": env_lines.len(),
                 }))
             }
+            "import_dotenv" => {
+                let content = args
+                    .get("content")
+                    .or_else(|| args.get("dotenv_content"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let target_env = args
+                    .get("environment")
+                    .or_else(|| args.get("target_env"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("production");
+                let res = import_dotenv(&svc, content, target_env).await?;
+                serde_json::to_value(res).map_err(|e| e.to_string())
+            }
+            "import_k8s_secret" => {
+                let yaml_content = args
+                    .get("yaml_content")
+                    .or_else(|| args.get("content"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let target_env = args
+                    .get("environment")
+                    .or_else(|| args.get("target_env"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("production");
+                let res = import_k8s_secret(&svc, yaml_content, target_env).await?;
+                serde_json::to_value(res).map_err(|e| e.to_string())
+            }
             _ => Err(format!("Unknown DevOps Secret Vault IPC command: {}", cmd)),
         }
     })
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-pub struct LeakFinding {
-    pub file_path: String,
-    pub line_number: usize,
-    pub leak_type: String,
-    pub severity: String,
-    pub snippet: String,
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DotenvImportSummary {
+    pub imported_count: usize,
+    pub updated_count: usize,
+    pub failed_keys: Vec<String>,
 }
 
-pub fn scan_dir_for_leaks(root: &std::path::Path) -> Vec<LeakFinding> {
-    let mut findings = Vec::new();
-    if !root.exists() {
-        return findings;
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct K8sImportSummary {
+    pub secret_name: String,
+    pub imported_count: usize,
+    pub updated_count: usize,
+    pub failed_keys: Vec<String>,
+}
+
+/// Import secrets from `.env` formatted content
+pub async fn import_dotenv(
+    service: &VaultService,
+    content: &str,
+    target_env: &str,
+) -> Result<DotenvImportSummary, String> {
+    let existing_secrets = service.list_secrets().await.map_err(|e| e.to_string())?;
+    let mut existing_map = std::collections::HashMap::new();
+    for s in existing_secrets {
+        existing_map.insert(s.title.clone(), s.id.clone());
     }
 
-    fn recurse_scan(dir: &std::path::Path, findings: &mut Vec<LeakFinding>, depth: usize) {
-        if depth > 8 || findings.len() >= 100 {
-            return;
+    let mut imported_count = 0;
+    let mut updated_count = 0;
+    let mut failed_keys = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
         }
-        let read_dir = match std::fs::read_dir(dir) {
-            Ok(rd) => rd,
-            Err(_) => return,
+
+        let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+        if parts.len() != 2 {
+            continue;
+        }
+
+        let key = parts[0].trim();
+        if key.is_empty() {
+            continue;
+        }
+
+        let mut val = parts[1].trim();
+        if ((val.starts_with('"') && val.ends_with('"'))
+            || (val.starts_with('\'') && val.ends_with('\'')))
+            && val.len() >= 2
+        {
+            val = &val[1..val.len() - 1];
+        }
+
+        let payload = SecretPayload::Password {
+            password: val.to_string(),
         };
 
-        for entry in read_dir.flatten() {
-            if findings.len() >= 100 {
-                return;
+        if let Some(existing_id) = existing_map.get(key) {
+            let update_input = UpdateSecretInput {
+                title: Some(key.to_string()),
+                tags: Some(vec!["dotenv".to_string(), target_env.to_string()]),
+                username: None,
+                url: None,
+                notes: Some(format!("Updated via .env import for environment: {}", target_env)),
+                payload: Some(payload),
+            };
+            match service.update_secret(existing_id, update_input, "desktop-tauri").await {
+                Ok(_) => updated_count += 1,
+                Err(e) => failed_keys.push(format!("{}: {}", key, e)),
             }
-            let path = entry.path();
-            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if name.starts_with(".git")
-                || name == "node_modules"
-                || name == "target"
-                || name == "vendor"
-                || name == "dist"
-            {
+        } else {
+            let create_input = CreateSecretInput {
+                title: key.to_string(),
+                tags: vec!["dotenv".to_string(), target_env.to_string()],
+                username: None,
+                url: None,
+                notes: Some(format!("Imported from .env for environment: {}", target_env)),
+                payload,
+            };
+            match service.create_secret(create_input, "desktop-tauri").await {
+                Ok(_) => imported_count += 1,
+                Err(e) => failed_keys.push(format!("{}: {}", key, e)),
+            }
+        }
+    }
+
+    Ok(DotenvImportSummary {
+        imported_count,
+        updated_count,
+        failed_keys,
+    })
+}
+
+/// Import secrets from Kubernetes Secret YAML
+pub async fn import_k8s_secret(
+    service: &VaultService,
+    yaml_content: &str,
+    target_env: &str,
+) -> Result<K8sImportSummary, String> {
+    let existing_secrets = service.list_secrets().await.map_err(|e| e.to_string())?;
+    let mut existing_map = std::collections::HashMap::new();
+    for s in existing_secrets {
+        existing_map.insert(s.title.clone(), s.id.clone());
+    }
+
+    let mut secret_name = "k8s-secret".to_string();
+    let mut in_data = false;
+    let mut in_string_data = false;
+    let mut in_metadata = false;
+
+    let mut imported_count = 0;
+    let mut updated_count = 0;
+    let mut failed_keys = Vec::new();
+
+    for line in yaml_content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if trimmed == "metadata:" {
+            in_metadata = true;
+            in_data = false;
+            in_string_data = false;
+            continue;
+        }
+
+        if in_metadata && trimmed.starts_with("name:") {
+            if let Some(n) = trimmed.strip_prefix("name:") {
+                let clean_name = n.trim().trim_matches('"').trim_matches('\'');
+                if !clean_name.is_empty() {
+                    secret_name = clean_name.to_string();
+                }
+            }
+            continue;
+        }
+
+        if trimmed == "data:" {
+            in_data = true;
+            in_string_data = false;
+            in_metadata = false;
+            continue;
+        }
+
+        if trimmed == "stringData:" {
+            in_string_data = true;
+            in_data = false;
+            in_metadata = false;
+            continue;
+        }
+
+        if !line.starts_with(' ') && !line.starts_with('\t') && (in_data || in_string_data || in_metadata) {
+            in_data = false;
+            in_string_data = false;
+            in_metadata = false;
+        }
+
+        if in_data || in_string_data {
+            let parts: Vec<&str> = trimmed.splitn(2, ':').collect();
+            if parts.len() != 2 {
+                continue;
+            }
+            let key = parts[0].trim();
+            let raw_val = parts[1].trim().trim_matches('"').trim_matches('\'');
+
+            if key.is_empty() {
                 continue;
             }
 
-            if path.is_dir() {
-                recurse_scan(&path, findings, depth + 1);
-            } else if path.is_file() {
-                if let Ok(meta) = entry.metadata() {
-                    if meta.len() > 1_500_000 {
+            let val_string = if in_data {
+                match crate::cert_monitor::decode_base64(raw_val) {
+                    Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                    Err(e) => {
+                        failed_keys.push(format!("{}: Base64 decode error ({})", key, e));
                         continue;
                     }
                 }
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    for (idx, line) in content.lines().enumerate() {
-                        let line_num = idx + 1;
-                        if line.contains("BEGIN RSA PRIVATE KEY")
-                            || line.contains("BEGIN OPENSSH PRIVATE KEY")
-                            || line.contains("BEGIN EC PRIVATE KEY")
-                            || line.contains("BEGIN PRIVATE KEY")
-                        {
-                            findings.push(LeakFinding {
-                                file_path: path.to_string_lossy().to_string(),
-                                line_number: line_num,
-                                leak_type: "Private Key".to_string(),
-                                severity: "CRITICAL".to_string(),
-                                snippet: "-----BEGIN PRIVATE KEY----- [REDACTED]".to_string(),
-                            });
-                        } else if let Some(pos) = line.find("AKIA") {
-                            if line[pos..].len() >= 20 {
-                                let potential = &line[pos..pos + 20];
-                                if potential.chars().all(|c| c.is_ascii_alphanumeric()) {
-                                    findings.push(LeakFinding {
-                                        file_path: path.to_string_lossy().to_string(),
-                                        line_number: line_num,
-                                        leak_type: "AWS Access Key".to_string(),
-                                        severity: "HIGH".to_string(),
-                                        snippet: format!("{}****", &potential[..8]),
-                                    });
-                                }
-                            }
-                        } else if let Some(pos) = line.find("ghp_") {
-                            if line[pos..].len() >= 36 {
-                                findings.push(LeakFinding {
-                                    file_path: path.to_string_lossy().to_string(),
-                                    line_number: line_num,
-                                    leak_type: "GitHub PAT".to_string(),
-                                    severity: "HIGH".to_string(),
-                                    snippet: "ghp_************************".to_string(),
-                                });
-                            }
-                        } else if line.contains("postgres://")
-                            || line.contains("mysql://")
-                            || line.contains("mongodb://")
-                        {
-                            if line.contains('@') && line.contains(':') {
-                                findings.push(LeakFinding {
-                                    file_path: path.to_string_lossy().to_string(),
-                                    line_number: line_num,
-                                    leak_type: "Database Connection String".to_string(),
-                                    severity: "CRITICAL".to_string(),
-                                    snippet: line.chars().take(30).collect::<String>()
-                                        + " [REDACTED]",
-                                });
-                            }
-                        } else if (name == ".env"
-                            || path.extension().and_then(|s| s.to_str()).unwrap_or("") == "env")
-                            && (line.contains("SECRET")
-                                || line.contains("PASSWORD")
-                                || line.contains("KEY")
-                                || line.contains("TOKEN"))
-                            && line.contains('=')
-                        {
-                            let parts: Vec<&str> = line.splitn(2, '=').collect();
-                            if parts.len() == 2 && !parts[1].trim().is_empty() {
-                                findings.push(LeakFinding {
-                                    file_path: path.to_string_lossy().to_string(),
-                                    line_number: line_num,
-                                    leak_type: "Unencrypted Environment Secret".to_string(),
-                                    severity: "MEDIUM".to_string(),
-                                    snippet: format!("{}=********", parts[0].trim()),
-                                });
-                            }
-                        }
-                        if findings.len() >= 100 {
-                            break;
-                        }
-                    }
+            } else {
+                raw_val.to_string()
+            };
+
+            let title = format!("{}_{}", secret_name, key);
+            let payload = SecretPayload::Password {
+                password: val_string,
+            };
+
+            if let Some(existing_id) = existing_map.get(&title) {
+                let update_input = UpdateSecretInput {
+                    title: Some(title.clone()),
+                    tags: Some(vec!["k8s".to_string(), secret_name.clone(), target_env.to_string()]),
+                    username: None,
+                    url: None,
+                    notes: Some(format!("Updated via K8s Secret import ({})", secret_name)),
+                    payload: Some(payload),
+                };
+                match service.update_secret(existing_id, update_input, "desktop-tauri").await {
+                    Ok(_) => updated_count += 1,
+                    Err(e) => failed_keys.push(format!("{}: {}", key, e)),
+                }
+            } else {
+                let create_input = CreateSecretInput {
+                    title,
+                    tags: vec!["k8s".to_string(), secret_name.clone(), target_env.to_string()],
+                    username: None,
+                    url: None,
+                    notes: Some(format!("Imported from K8s Secret ({})", secret_name)),
+                    payload,
+                };
+                match service.create_secret(create_input, "desktop-tauri").await {
+                    Ok(_) => imported_count += 1,
+                    Err(e) => failed_keys.push(format!("{}: {}", key, e)),
                 }
             }
         }
     }
 
-    recurse_scan(root, &mut findings, 0);
-    findings
+    Ok(K8sImportSummary {
+        secret_name,
+        imported_count,
+        updated_count,
+        failed_keys,
+    })
 }
 
-pub fn generate_password_or_passphrase(
-    length: usize,
-    use_upper: bool,
-    use_lower: bool,
-    use_nums: bool,
-    use_syms: bool,
-    is_passphrase: bool,
-    word_count: usize,
-) -> (String, f64, String) {
-    use rand::Rng;
-    let mut rng = rand::rngs::OsRng;
-    if is_passphrase {
-        let words = [
-            "correct", "horse", "battery", "staple", "cipher", "matrix", "falcon", "orbital",
-            "quantum", "beacon", "crypto", "shield", "kernel", "aurora", "glacier", "phoenix",
-            "shadow", "timber", "vertex", "zenith", "hazard", "nebula", "titan", "vector",
-            "cascade", "dynamo", "echo", "fusion", "granite", "hyper", "iron", "jupiter",
-            "krypton", "lunar", "magnet", "nitrogen", "oxygen", "plasma", "quasar", "radar",
-            "siren", "torus",
-        ];
-        let count = word_count.clamp(3, 8);
-        let mut chosen = Vec::with_capacity(count);
-        for _ in 0..count {
-            let idx = rng.gen_range(0..words.len());
-            chosen.push(words[idx]);
-        }
-        let pass = chosen.join("-");
-        let entropy = (count as f64) * (words.len() as f64).log2();
-        (
-            pass,
-            entropy,
-            "Very Strong (Diceware Passphrase)".to_string(),
-        )
-    } else {
-        let len = length.clamp(8, 128);
-        let mut charset: Vec<u8> = Vec::new();
-        if use_lower {
-            charset.extend(b"abcdefghijklmnopqrstuvwxyz");
-        }
-        if use_upper {
-            charset.extend(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ");
-        }
-        if use_nums {
-            charset.extend(b"0123456789");
-        }
-        if use_syms {
-            charset.extend(b"!@#$%^&*()-_=+[]{}|;:,.<>?");
-        }
-        if charset.is_empty() {
-            charset
-                .extend(b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*");
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
 
-        let mut pass = String::with_capacity(len);
-        for _ in 0..len {
-            let idx = rng.gen_range(0..charset.len());
-            pass.push(charset[idx] as char);
-        }
-        let entropy = (len as f64) * (charset.len() as f64).log2();
-        let label = if entropy >= 100.0 {
-            "Exceptional (Military Grade)"
-        } else if entropy >= 70.0 {
-            "Very Strong"
-        } else if entropy >= 50.0 {
-            "Strong"
+    async fn create_test_service() -> (VaultService, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_vault.db");
+        let storage = crate::storage::VaultStorage::open(&db_path).unwrap();
+        let service = VaultService::new(storage, None);
+        service.initialize("CorrectHorseBatteryStaple123!").await.unwrap();
+        (service, dir)
+    }
+
+    #[tokio::test]
+    async fn test_dotenv_import_export_roundtrip() {
+        let (service, _dir) = create_test_service().await;
+
+        let dotenv_sample = r#"
+# Database Configuration
+DB_HOST=127.0.0.1
+DB_PORT="5432"
+DB_PASS='super_secret_password'
+"#;
+
+        let import_summary = import_dotenv(&service, dotenv_sample, "staging").await.unwrap();
+        assert_eq!(import_summary.imported_count, 3);
+        assert_eq!(import_summary.failed_keys.len(), 0);
+
+        // Verify secrets in list
+        let secrets = service.list_secrets().await.unwrap();
+        assert_eq!(secrets.len(), 3);
+
+        let pass_sec = secrets.iter().find(|s| s.title == "DB_PASS").unwrap();
+        let decrypted = service.get_secret(&pass_sec.id, "test").await.unwrap();
+        if let SecretPayload::Password { password } = &decrypted.payload {
+            assert_eq!(password, "super_secret_password");
         } else {
-            "Moderate"
-        };
-        (pass, entropy, label.to_string())
+            panic!("Expected password payload");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_k8s_secret_import() {
+        let (service, _dir) = create_test_service().await;
+
+        // "secret_token_123" in base64 is "c2VjcmV0X3Rva2VuXzEyMw=="
+        let k8s_yaml = r#"
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-service
+type: Opaque
+data:
+  AUTH_TOKEN: c2VjcmV0X3Rva2VuXzEyMw==
+stringData:
+  ENDPOINT: https://api.internal.local
+"#;
+
+        let import_summary = import_k8s_secret(&service, k8s_yaml, "production").await.unwrap();
+        assert_eq!(import_summary.secret_name, "api-service");
+        assert_eq!(import_summary.imported_count, 2);
+
+        let secrets = service.list_secrets().await.unwrap();
+        let auth_sec = secrets.iter().find(|s| s.title == "api-service_AUTH_TOKEN").unwrap();
+        let decrypted = service.get_secret(&auth_sec.id, "test").await.unwrap();
+        if let SecretPayload::Password { password } = &decrypted.payload {
+            assert_eq!(password, "secret_token_123");
+        } else {
+            panic!("Expected password payload");
+        }
     }
 }

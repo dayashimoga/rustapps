@@ -19,6 +19,8 @@ pub mod commands;
 pub mod crypto;
 pub mod error;
 pub mod ffi;
+pub mod generator;
+pub mod leak_scanner;
 pub mod models;
 pub mod risk_scoring;
 pub mod search;

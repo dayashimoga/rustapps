@@ -97,6 +97,20 @@ impl DesktopIpcHandler for VaultDesktopHandler {
                 command: "list_secrets",
                 payload: json!({}),
             },
+            SelfTestCheck {
+                command: "import_dotenv",
+                payload: json!({
+                    "content": "TEST_DB_PORT=5432\nTEST_SECRET=supersecuretoken\n",
+                    "environment": "production"
+                }),
+            },
+            SelfTestCheck {
+                command: "import_k8s_secret",
+                payload: json!({
+                    "yaml_content": "apiVersion: v1\nkind: Secret\nmetadata:\n  name: app-k8s\ntype: Opaque\nstringData:\n  KEY: value\n",
+                    "environment": "production"
+                }),
+            },
         ]
     }
 }
