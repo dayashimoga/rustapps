@@ -6,6 +6,7 @@
     type BlendMode,
     type Clip,
     type MediaSource,
+    type ProxyGenerationResult,
     type TimelineProject,
   } from '../types';
   import { isDesktopApp } from '../lib/ipc';
@@ -25,6 +26,7 @@
   let customFilePath = '';
   let isImporting = false;
   let fileInputRef: HTMLInputElement;
+  let proxyGenerating: Record<string, boolean> = {};
 
   function triggerBrowseMedia() {
     if (isDesktopApp()) {
@@ -174,6 +176,33 @@
       dispatch('toast', `Added "${source.file_path.split(/[\\/]/).pop()}" to timeline.`);
     } catch (e: any) {
       dispatch('toast', `Failed to add clip: ${e?.message || e}`);
+    }
+  }
+
+  async function handleGenerateProxy(src: MediaSource) {
+    proxyGenerating[src.id] = true;
+    proxyGenerating = { ...proxyGenerating };
+    try {
+      const res = await tauriInvoke<ProxyGenerationResult>('generate_proxy_cmd', {
+        sourceId: src.id,
+        width: 640,
+        height: 360,
+      });
+      if (res && res.proxy_path) {
+        src.proxy_file_path = res.proxy_path;
+        if (project && project.media_pool) {
+          const match = project.media_pool.find((m) => m.id === src.id);
+          if (match) match.proxy_file_path = res.proxy_path;
+        }
+        dispatch('refreshProject');
+        dispatch('toast', `⚡ Proxy generated for ${src.file_path.split(/[\\/]/).pop()} (640×360 BMP)`);
+      }
+    } catch (e: any) {
+      console.error('Proxy generation failed:', e);
+      dispatch('toast', `Proxy error: ${e?.message || e}`);
+    } finally {
+      proxyGenerating[src.id] = false;
+      proxyGenerating = { ...proxyGenerating };
     }
   }
 
@@ -482,14 +511,29 @@
                   <span class="media-path-trunc" title={src.file_path}>{src.file_path}</span>
                 </div>
               </div>
-              <button
-                type="button"
-                class="btn-insert-clip"
-                on:click={() => handleAddSourceToTimeline(src)}
-                title="Insert onto timeline"
-              >
-                ➕ Add to Timeline
-              </button>
+              <div class="card-actions">
+                {#if src.proxy_file_path}
+                  <span class="proxy-badge" title={`Cached proxy: ${src.proxy_file_path}`}>⚡ PROXY READY</span>
+                {:else}
+                  <button
+                    type="button"
+                    class="btn-proxy"
+                    disabled={proxyGenerating[src.id]}
+                    on:click={() => handleGenerateProxy(src)}
+                    title="Generate 640x360 raster proxy for 60 FPS timeline scrubbing"
+                  >
+                    {proxyGenerating[src.id] ? '⏳ Proxy...' : '⚡ Proxy'}
+                  </button>
+                {/if}
+                <button
+                  type="button"
+                  class="btn-insert-clip"
+                  on:click={() => handleAddSourceToTimeline(src)}
+                  title="Insert onto timeline"
+                >
+                  ➕ Add
+                </button>
+              </div>
             </div>
           {/each}
         {/if}
@@ -871,6 +915,45 @@
     text-overflow: ellipsis;
     max-width: 180px;
     opacity: 0.75;
+  }
+
+  .card-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-shrink: 0;
+  }
+
+  .btn-proxy {
+    background: rgba(245, 158, 11, 0.14);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    color: #f59e0b;
+    padding: 0.3rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .btn-proxy:hover:not(:disabled) {
+    background: rgba(245, 158, 11, 0.25);
+  }
+
+  .btn-proxy:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .proxy-badge {
+    background: rgba(16, 185, 129, 0.16);
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    color: #10b981;
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 3px;
+    letter-spacing: 0.03em;
   }
 
   .btn-insert-clip {

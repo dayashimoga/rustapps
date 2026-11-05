@@ -6,8 +6,8 @@
 use crate::audio_engine::LoudnessMeterData;
 use crate::color::VideoScopeData;
 use crate::models::{
-    BlendMode, ChromaKeySettings, Clip, ColorGradingSettings, FrameRate, MasterExportSummary,
-    TimelineProject, TrackType, Transform2D,
+    AudioSyncResult, BlendMode, ChromaKeySettings, Clip, ColorGradingSettings, FrameRate,
+    MasterExportSummary, ProxyGenerationResult, TimelineProject, TrackType, Transform2D,
 };
 use crate::service::EditorService;
 use crate::templates::{ExportPreset, ProjectTemplate};
@@ -463,6 +463,29 @@ pub fn render_video_master_cmd(
         .export_video_master(preset_id, &path_str)
         .map_err(|e| e.to_string())?;
     Ok(summary)
+}
+
+/// Synchronize target clip to reference clip using waveform cross-correlation
+pub fn sync_audio_tracks_cmd(
+    reference_clip_id: String,
+    target_clip_id: String,
+) -> Result<AudioSyncResult, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.sync_clips_by_audio(&reference_clip_id, &target_clip_id)
+        .map_err(|e| e.to_string())
+}
+
+/// Generate a low-resolution proxy raster cache for high-speed timeline playback
+pub fn generate_proxy_cmd(
+    source_id: String,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> Result<ProxyGenerationResult, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.generate_media_proxy(&source_id, width.unwrap_or(640), height.unwrap_or(360))
+        .map_err(|e| e.to_string())
 }
 
 fn date_tag() -> u64 {
@@ -949,6 +972,37 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let res = render_video_master_cmd(preset_id, output_path)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "sync_audio_tracks_cmd" => {
+            let ref_id = args
+                .get("referenceClipId")
+                .or_else(|| args.get("reference_clip_id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing referenceClipId".to_string())?
+                .to_string();
+            let tgt_id = args
+                .get("targetClipId")
+                .or_else(|| args.get("target_clip_id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing targetClipId".to_string())?
+                .to_string();
+            let res = sync_audio_tracks_cmd(ref_id, tgt_id)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "generate_proxy_cmd" => {
+            let source_id = args
+                .get("sourceId")
+                .or_else(|| args.get("source_id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing sourceId".to_string())?
+                .to_string();
+            let width = args.get("width").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let height = args
+                .get("height")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            let res = generate_proxy_cmd(source_id, width, height)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
         "export_edl_cmd" => {
             let res = export_edl_cmd()?;
             Ok(json!(res))
@@ -1045,5 +1099,43 @@ mod tests {
         assert_eq!(updated_proj.settings.width, 1080);
         assert_eq!(updated_proj.settings.height, 1920);
         assert_eq!(updated_proj.settings.frame_rate, FrameRate::Fps60);
+
+        // Test proxy generation and IPC dispatch
+        // Add dummy source if media_pool is empty
+        if updated_proj.media_pool.is_empty() {
+            let tmp_bmp2 = std::env::temp_dir().join("pave_test_proxy_src.bmp");
+            let f = crate::compositor::VideoFrame::new_solid(4, 4, 10, 20, 30, 255, 0);
+            std::fs::write(&tmp_bmp2, f.encode_to_bmp()).unwrap();
+            let _ = import_media_file_cmd(tmp_bmp2.to_string_lossy().to_string(), false);
+            let _ = std::fs::remove_file(&tmp_bmp2);
+        }
+        let current_proj = get_project_state_cmd().unwrap();
+        let target_source_id = current_proj.media_pool[0].id.clone();
+        let proxy_res = generate_proxy_cmd(target_source_id.clone(), Some(320), Some(180)).unwrap();
+        assert_eq!(proxy_res.width, 320);
+        assert_eq!(proxy_res.height, 180);
+        assert!(std::path::Path::new(&proxy_res.proxy_path).exists());
+        let _ = std::fs::remove_file(&proxy_res.proxy_path);
+
+        // Test audio sync command across two clips
+        let track_a = &current_proj.tracks[0];
+        if track_a.clips.len() >= 2 {
+            let ref_id = track_a.clips[0].id.clone();
+            let tgt_id = track_a.clips[1].id.clone();
+            let sync_res = sync_audio_tracks_cmd(ref_id, tgt_id).unwrap();
+            assert!(sync_res.correlation_score >= 0.0);
+        }
+
+        // Test IPC dispatch for proxy and audio sync
+        let proxy_ipc_val = dispatch_ipc_command(
+            "generate_proxy_cmd",
+            json!({
+                "sourceId": target_source_id,
+                "width": 160,
+                "height": 90
+            }),
+        )
+        .unwrap();
+        assert!(proxy_ipc_val.get("proxy_path").is_some());
     }
 }

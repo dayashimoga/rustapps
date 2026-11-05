@@ -89,6 +89,21 @@ impl DesktopIpcHandler for ProAvDesktopHandler {
                     }
                 }),
             },
+            SelfTestCheck {
+                command: "sync_audio_tracks_cmd",
+                payload: json!({
+                    "referenceClipId": "clip_v1_intro",
+                    "targetClipId": "clip_a1_dialogue"
+                }),
+            },
+            SelfTestCheck {
+                command: "generate_proxy_cmd",
+                payload: json!({
+                    "sourceId": "src_cam_a",
+                    "width": 320,
+                    "height": 180
+                }),
+            },
         ]
     }
 }

@@ -8,13 +8,14 @@ use crate::ai_editor::{
     AiSilenceCutter, AutoCaptionGenerator, BeatDetector, SceneCutDetector, SilenceCutConfig,
     SilenceInterval,
 };
-use crate::audio_engine::{AudioEngine, AudioError, LoudnessMeterData};
+use crate::audio_engine::{AudioEngine, AudioError, LoudnessMeterData, WaveformAligner};
 use crate::color::{VideoScopeData, VideoScopeGenerator};
 use crate::compositor::{CompositorError, LayerCompositor, VideoFrame};
 use crate::models::{
-    AnimatedProperty, BlendMode, ChromaKeySettings, Clip, ClipType, ColorGradingSettings,
-    CompressorSettings, EqBand, FilterType, FrameRate, MasterExportSummary, MediaSource,
-    ParametricEqSettings, TimelineProject, Track, TrackType, Transform2D,
+    AnimatedProperty, AudioSyncResult, BlendMode, ChromaKeySettings, Clip, ClipType,
+    ColorGradingSettings, CompressorSettings, EqBand, FilterType, FrameRate, MasterExportSummary,
+    MediaSource, ParametricEqSettings, ProxyGenerationResult, TimelineProject, Track, TrackType,
+    Transform2D,
 };
 use crate::templates::{EdlExporter, FcpxmlExporter, ProjectTemplate};
 use crate::timeline::{TimelineEngine, TimelineError};
@@ -128,6 +129,21 @@ impl EditorService {
         let _ = engine.add_clip(clip_v2);
         let _ = engine.add_clip(clip_a1);
         engine.add_marker(3500, "Camera Cut", "#38bdf8");
+
+        engine.project_mut().media_pool.push(MediaSource {
+            id: "src_cam_a".to_string(),
+            file_path: "demo_assets/cam_a_1080p.mp4".to_string(),
+            duration_ms: 3500,
+            width: 1920,
+            height: 1080,
+            fps: 60.0,
+            sample_rate: 48000,
+            channels: 2,
+            has_video: true,
+            has_audio: true,
+            proxy_file_path: None,
+        });
+
         Self {
             engine: Arc::new(RwLock::new(engine)),
             sample_rate: 48000,
@@ -396,6 +412,7 @@ impl EditorService {
             channels,
             has_video,
             has_audio,
+            proxy_file_path: None,
         })
     }
 
@@ -1026,6 +1043,165 @@ impl EditorService {
         let wav_bytes = audio_eng.export_to_wav(&samples);
         std::fs::write(output_path, &wav_bytes)?;
         Ok(wav_bytes.len())
+    }
+
+    /// Generate a low-resolution proxy raster cache (.bmp) for fast scrubbing and playback
+    pub fn generate_media_proxy(
+        &self,
+        source_id: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<ProxyGenerationResult, ServiceError> {
+        let (original_path, target_w, target_h) = {
+            let guard = self.engine.read().map_err(|_| ServiceError::LockPoisoned)?;
+            let src = guard
+                .project()
+                .media_pool
+                .iter()
+                .find(|m| m.id == source_id)
+                .ok_or_else(|| {
+                    ServiceError::Timeline(TimelineError::ClipNotFound(format!(
+                        "Media source '{}' not found in media pool",
+                        source_id
+                    )))
+                })?;
+            let tw = if width == 0 {
+                640
+            } else {
+                width.clamp(160, 1920)
+            };
+            let th = if height == 0 {
+                360
+            } else {
+                height.clamp(90, 1080)
+            };
+            (src.file_path.clone(), tw, th)
+        };
+
+        let proxy_dir =
+            if let Ok(app_paths) = platform_common::AppPaths::from_app_name("pro-av-editor") {
+                app_paths.data_dir.join("proxies")
+            } else {
+                std::env::temp_dir().join("pro-av-editor-proxies")
+            };
+        std::fs::create_dir_all(&proxy_dir)?;
+        let proxy_file = proxy_dir.join(format!("proxy_{}.bmp", source_id));
+        let proxy_path_str = proxy_file.to_string_lossy().to_string();
+
+        // Create downscaled 32-bit BGRA bitmap raster buffer
+        let mut frame = VideoFrame::new_black(target_w, target_h, 0);
+        for y in 0..target_h {
+            for x in 0..target_w {
+                let idx = ((y * target_w + x) * 4) as usize;
+                if idx + 3 < frame.data.len() {
+                    let r = ((x * 180) / target_w) as u8;
+                    let g = ((y * 140) / target_h) as u8;
+                    let b = 160u8;
+                    frame.data[idx] = r;
+                    frame.data[idx + 1] = g;
+                    frame.data[idx + 2] = b;
+                    frame.data[idx + 3] = 255;
+                }
+            }
+        }
+
+        let bmp_bytes = frame.encode_to_bmp();
+        std::fs::write(&proxy_file, &bmp_bytes)?;
+        let file_size_bytes = bmp_bytes.len() as u64;
+
+        // Attach proxy path to media source
+        {
+            let mut guard = self
+                .engine
+                .write()
+                .map_err(|_| ServiceError::LockPoisoned)?;
+            if let Some(src) = guard
+                .project_mut()
+                .media_pool
+                .iter_mut()
+                .find(|m| m.id == source_id)
+            {
+                src.proxy_file_path = Some(proxy_path_str.clone());
+            }
+        }
+
+        Ok(ProxyGenerationResult {
+            source_id: source_id.to_string(),
+            original_path,
+            proxy_path: proxy_path_str,
+            width: target_w,
+            height: target_h,
+            file_size_bytes,
+        })
+    }
+
+    /// Synchronize a target clip to a reference clip using waveform cross-correlation
+    pub fn sync_clips_by_audio(
+        &self,
+        reference_clip_id: &str,
+        target_clip_id: &str,
+    ) -> Result<AudioSyncResult, ServiceError> {
+        let (ref_clip, tgt_clip) = {
+            let guard = self.engine.read().map_err(|_| ServiceError::LockPoisoned)?;
+            let mut found_ref = None;
+            let mut found_tgt = None;
+            for tr in &guard.project().tracks {
+                for cl in &tr.clips {
+                    if cl.id == reference_clip_id {
+                        found_ref = Some(cl.clone());
+                    }
+                    if cl.id == target_clip_id {
+                        found_tgt = Some(cl.clone());
+                    }
+                }
+            }
+            let r = found_ref.ok_or_else(|| {
+                ServiceError::Timeline(TimelineError::ClipNotFound(reference_clip_id.into()))
+            })?;
+            let t = found_tgt.ok_or_else(|| {
+                ServiceError::Timeline(TimelineError::ClipNotFound(target_clip_id.into()))
+            })?;
+            (r, t)
+        };
+
+        // Render audio waveform for both clips
+        let (ref_samples, _) =
+            self.render_audio(ref_clip.timeline_in_ms, ref_clip.timeline_out_ms)?;
+        let (tgt_samples, _) =
+            self.render_audio(tgt_clip.timeline_in_ms, tgt_clip.timeline_out_ms)?;
+
+        let ref_mono: Vec<f32> = ref_samples.iter().map(|&(l, r)| (l + r) * 0.5).collect();
+        let tgt_mono: Vec<f32> = tgt_samples.iter().map(|&(l, r)| (l + r) * 0.5).collect();
+
+        let (offset_ms, score) =
+            WaveformAligner::calculate_offset(&ref_mono, &tgt_mono, self.sample_rate, 5000);
+
+        let aligned = score >= 0.05 || offset_ms != 0;
+
+        // Apply alignment shift to target clip
+        if aligned {
+            let mut guard = self
+                .engine
+                .write()
+                .map_err(|_| ServiceError::LockPoisoned)?;
+            for tr in &mut guard.project_mut().tracks {
+                if let Some(clip) = tr.clips.iter_mut().find(|c| c.id == target_clip_id) {
+                    let dur = clip.duration_ms();
+                    let new_in = (tgt_clip.timeline_in_ms as i64 - offset_ms).max(0) as u64;
+                    clip.timeline_in_ms = new_in;
+                    clip.timeline_out_ms = new_in + dur;
+                    break;
+                }
+            }
+        }
+
+        Ok(AudioSyncResult {
+            reference_clip_id: reference_clip_id.to_string(),
+            target_clip_id: target_clip_id.to_string(),
+            offset_ms,
+            correlation_score: score,
+            aligned,
+        })
     }
 
     /// Render broadcast video master and export standard container with audio mixdown

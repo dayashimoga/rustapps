@@ -554,6 +554,29 @@ pub struct MediaSource {
     pub channels: u32,
     pub has_video: bool,
     pub has_audio: bool,
+    #[serde(default)]
+    pub proxy_file_path: Option<String>,
+}
+
+/// Media proxy generation result metadata
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProxyGenerationResult {
+    pub source_id: String,
+    pub original_path: String,
+    pub proxy_path: String,
+    pub width: u32,
+    pub height: u32,
+    pub file_size_bytes: u64,
+}
+
+/// Audio waveform cross-correlation alignment result
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioSyncResult {
+    pub reference_clip_id: String,
+    pub target_clip_id: String,
+    pub offset_ms: i64,
+    pub correlation_score: f32,
+    pub aligned: bool,
 }
 
 /// Timeline clip element

@@ -160,6 +160,24 @@ export interface MediaSource {
   channels: number;
   has_video: boolean;
   has_audio: boolean;
+  proxy_file_path?: string;
+}
+
+export interface ProxyGenerationResult {
+  source_id: string;
+  original_path: string;
+  proxy_path: string;
+  width: number;
+  height: number;
+  file_size_bytes: number;
+}
+
+export interface AudioSyncResult {
+  reference_clip_id: string;
+  target_clip_id: string;
+  offset_ms: number;
+  correlation_score: number;
+  aligned: boolean;
 }
 
 export interface ProjectSettings {

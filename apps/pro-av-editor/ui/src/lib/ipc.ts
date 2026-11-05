@@ -59,7 +59,14 @@ let isDialogPromptActive = false;
  * Returns true if running inside the Antigravity desktop host or Tauri runtime.
  */
 export function isDesktopApp(): boolean {
-  return typeof window !== 'undefined' && Boolean(window.__TAURI__?.invoke || window.__TAURI__?.core?.invoke);
+  return (
+    typeof window !== 'undefined' &&
+    Boolean(
+      window.__TAURI__?.invoke ||
+      window.__TAURI__?.core?.invoke ||
+      (window.location && window.location.protocol.startsWith('http'))
+    )
+  );
 }
 
 /**

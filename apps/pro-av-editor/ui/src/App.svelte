@@ -293,6 +293,7 @@
     }>
   ) {
     const { name, templateId, width, height, fps, includeDemoClips } = e.detail;
+    showNewProjectModal = false;
     try {
       project = await tauriInvoke<TimelineProject>('create_project_cmd', {
         name,
@@ -437,9 +438,10 @@
           filter: '*.avedproj',
           filters: [{ name: 'Studio Project File', extensions: ['avedproj'] }],
         });
-        if (picked) {
-          targetPath = picked;
+        if (!picked) {
+          return;
         }
+        targetPath = picked;
       }
       const savedPath = await tauriInvoke<string>('save_project_cmd', {
         path: targetPath,
@@ -557,7 +559,7 @@
       <div class="side-panel-wrapper">
         {#if activePanel === 'edit'}
           <MediaPoolPanel
-            {project}
+            bind:project={project}
             {selectedClipId}
             {playheadMs}
             on:importMedia={handleImportMedia}
@@ -566,7 +568,7 @@
           />
         {:else if activePanel === 'color'}
           <ColorGradingPanel
-            {project}
+            bind:project={project}
             {playheadMs}
             {selectedClipId}
             on:gradeUpdated={handleGradeUpdated}
@@ -574,7 +576,7 @@
           />
         {:else if activePanel === 'audio'}
           <AudioMixerPanel
-            {project}
+            bind:project={project}
             on:toast={(e) => showToast(e.detail)}
           />
         {/if}
@@ -584,7 +586,7 @@
     <!-- Bottom Stage (Multi-Track Timeline) -->
     <div class="bottom-stage">
       <MultiTrackTimeline
-        {project}
+        bind:project={project}
         {playheadMs}
         {durationMs}
         {selectedClipId}

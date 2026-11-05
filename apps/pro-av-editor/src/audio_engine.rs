@@ -602,6 +602,102 @@ impl AudioEngine {
 }
 
 // ---------------------------------------------------------------------------
+// Waveform Cross-Correlation Aligner (Multi-Track 1-Click Audio Sync)
+// ---------------------------------------------------------------------------
+
+/// Waveform cross-correlation alignment engine for syncing scratch camera audio with external field recorders
+pub struct WaveformAligner;
+
+impl WaveformAligner {
+    /// Calculate millisecond lag between target and reference audio signals.
+    ///
+    /// Computes downsampled normalized envelope cross-correlation within [-max_search_ms..max_search_ms].
+    /// Returns `(offset_ms, correlation_score)`.
+    /// Positive `offset_ms` means target has the matching acoustic event `offset_ms` later than reference.
+    pub fn calculate_offset(
+        reference: &[f32],
+        target: &[f32],
+        sample_rate: u32,
+        max_search_ms: u64,
+    ) -> (i64, f32) {
+        if reference.is_empty() || target.is_empty() || sample_rate == 0 {
+            return (0, 0.0);
+        }
+
+        // Downsample to ~1 kHz envelope (1 sample per ms)
+        let decimation = (sample_rate / 1000).max(1) as usize;
+        let env_ref = Self::extract_envelope(reference, decimation);
+        let env_tgt = Self::extract_envelope(target, decimation);
+
+        if env_ref.len() < 10 || env_tgt.len() < 10 {
+            return (0, 0.0);
+        }
+
+        let ref_mean: f32 = env_ref.iter().sum::<f32>() / env_ref.len() as f32;
+        let tgt_mean: f32 = env_tgt.iter().sum::<f32>() / env_tgt.len() as f32;
+
+        let ref_norm_sq: f32 = env_ref.iter().map(|&x| (x - ref_mean).powi(2)).sum();
+        let tgt_norm_sq: f32 = env_tgt.iter().map(|&x| (x - tgt_mean).powi(2)).sum();
+
+        let norm_denom = (ref_norm_sq * tgt_norm_sq).sqrt();
+        if norm_denom < 1e-6 {
+            return (0, 0.0);
+        }
+
+        let max_lag = (max_search_ms as usize).min(env_ref.len().max(env_tgt.len()));
+        let max_lag_i = max_lag as i64;
+        let mut best_lag: i64 = 0;
+        let mut best_corr = -1.0f32;
+
+        for lag in -max_lag_i..=max_lag_i {
+            let (ref_start, tgt_start, overlap_len) = if lag >= 0 {
+                let u = lag as usize;
+                if u >= env_tgt.len() {
+                    continue;
+                }
+                let len = env_ref.len().min(env_tgt.len() - u);
+                (0, u, len)
+            } else {
+                let u = (-lag) as usize;
+                if u >= env_ref.len() {
+                    continue;
+                }
+                let len = (env_ref.len() - u).min(env_tgt.len());
+                (u, 0, len)
+            };
+
+            if overlap_len < 10 {
+                continue;
+            }
+
+            let mut cross_sum = 0.0f32;
+            for i in 0..overlap_len {
+                let r = env_ref[ref_start + i] - ref_mean;
+                let t = env_tgt[tgt_start + i] - tgt_mean;
+                cross_sum += r * t;
+            }
+
+            let corr = cross_sum / norm_denom;
+            if corr > best_corr {
+                best_corr = corr;
+                best_lag = lag;
+            }
+        }
+
+        (best_lag, best_corr.clamp(0.0, 1.0))
+    }
+
+    fn extract_envelope(samples: &[f32], decimation: usize) -> Vec<f32> {
+        let mut envelope = Vec::with_capacity(samples.len() / decimation + 1);
+        for chunk in samples.chunks(decimation) {
+            let peak = chunk.iter().fold(0.0f32, |acc, &s| acc.max(s.abs()));
+            envelope.push(peak);
+        }
+        envelope
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -707,5 +803,38 @@ mod tests {
         assert_eq!(&wav[0..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");
         assert_eq!(wav.len(), 44 + mixed.len() * 4);
+    }
+
+    #[test]
+    fn test_waveform_cross_correlation_audio_sync() {
+        let sample_rate = 48000;
+        let dur_ms = 4000;
+        let total_samples = (sample_rate as usize * dur_ms) / 1000;
+
+        let mut ref_samples = vec![0.0f32; total_samples];
+        let mut tgt_samples = vec![0.0f32; total_samples];
+
+        // Transient pulse / clap at 1000ms in reference
+        let ref_pulse_sample = (sample_rate as usize * 1000) / 1000;
+        for i in 0..480 {
+            ref_samples[ref_pulse_sample + i] = ((i as f32) / 48.0).sin();
+        }
+
+        // Exact same pulse delayed by 500ms in target (at 1500ms)
+        let tgt_pulse_sample = (sample_rate as usize * 1500) / 1000;
+        for i in 0..480 {
+            tgt_samples[tgt_pulse_sample + i] = ((i as f32) / 48.0).sin();
+        }
+
+        let (offset_ms, score) =
+            WaveformAligner::calculate_offset(&ref_samples, &tgt_samples, sample_rate, 2000);
+
+        // Expected lag is 500ms (target pulse is at 1500ms, ref pulse is at 1000ms)
+        assert_eq!(offset_ms, 500, "Calculated offset {} != 500", offset_ms);
+        assert!(
+            score > 0.8,
+            "Correlation score {} should exceed 0.8 for matched pulse",
+            score
+        );
     }
 }

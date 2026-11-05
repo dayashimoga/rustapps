@@ -3,6 +3,7 @@
   import {
     formatTimecode,
     tauriInvoke,
+    type AudioSyncResult,
     type Clip,
     type TimelineProject,
     type Track,
@@ -216,6 +217,45 @@
     }
   }
 
+  async function autoSyncAudioTracks() {
+    if (!project) return;
+    const allClips: Clip[] = [];
+    for (const tr of project.tracks) {
+      for (const cl of tr.clips) {
+        allClips.push(cl);
+      }
+    }
+    if (allClips.length < 2) {
+      showNotice('Need at least 2 clips on timeline to auto-sync audio.');
+      return;
+    }
+
+    let refClip = selectedClipId ? allClips.find((c) => c.id === selectedClipId) : allClips[0];
+    if (!refClip) refClip = allClips[0];
+    const tgtClip = allClips.find((c) => c.id !== refClip?.id);
+    if (!tgtClip) {
+      showNotice('Need a second clip on timeline to sync.');
+      return;
+    }
+
+    try {
+      showNotice('Analyzing audio waveforms...');
+      const res = await tauriInvoke<AudioSyncResult>('sync_audio_tracks_cmd', {
+        referenceClipId: refClip.id,
+        targetClipId: tgtClip.id,
+      });
+      if (res && res.aligned) {
+        showNotice(`Synced "${tgtClip.name}" with "${refClip.name}" (${res.offset_ms >= 0 ? '+' : ''}${res.offset_ms}ms)`);
+        dispatch('refreshProject');
+      } else {
+        showNotice(`Audio sync: Low correlation (${((res?.correlation_score || 0) * 100).toFixed(0)}%).`);
+      }
+    } catch (e) {
+      console.error('Audio sync failed:', e);
+      showNotice(`Audio sync error: ${e}`);
+    }
+  }
+
   async function addNewTrack(trackType: 'Video' | 'Audio') {
     try {
       const existing = project?.tracks.filter((t) => t.track_type === trackType).length || 0;
@@ -370,6 +410,14 @@
         title="Delete Clip (Del)"
       >
         🗑 Delete
+      </button>
+      <button
+        class="action-btn"
+        disabled={!hasAnyClips}
+        on:click={autoSyncAudioTracks}
+        title="1-Click Auto-Sync Audio Waveforms across Tracks"
+      >
+        🎵 Auto-Sync Audio
       </button>
       <button
         class="action-btn"
