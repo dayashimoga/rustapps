@@ -1,8 +1,11 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 //! Shared Cryptographic Engine
 //!
 //! Implements AES-256-GCM authenticated payload encryption, Argon2id key
 //! derivation, memory zeroization via `zeroize`, and Ed25519 digital signatures.
+
+pub mod memlock;
+pub use memlock::{LockedBytes, LockedKey};
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};

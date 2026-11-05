@@ -110,6 +110,8 @@ export async function invokeIpc<T = unknown>(
   throw new Error(`No IPC transport available for command "${cmd}"`);
 }
 
+export const invokeTauri = invokeIpc;
+
 /**
  * Opens a native OS file or directory picker with concurrency protection.
  */

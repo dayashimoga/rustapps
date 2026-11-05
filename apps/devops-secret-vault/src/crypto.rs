@@ -18,6 +18,13 @@ pub const VAULT_VERIFIER_TOKEN: &[u8] = b"VAULT_VERIFIER_TOKEN_V1";
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct VaultMasterKey(pub [u8; 32]);
 
+impl VaultMasterKey {
+    /// Locks the master key bytes in RAM using OS memory page locking (VirtualLock / mlock)
+    pub fn lock_in_memory(&self) -> shared_encryption::LockedKey<32> {
+        shared_encryption::LockedKey::new(self.0)
+    }
+}
+
 impl std::fmt::Debug for VaultMasterKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "VaultMasterKey([REDACTED])")
@@ -191,5 +198,12 @@ mod tests {
         let encrypted = encrypt_metadata_fields(&master_key, &original_fields).unwrap();
         let decrypted = decrypt_metadata_fields(&master_key, &encrypted).unwrap();
         assert_eq!(original_fields, decrypted);
+    }
+
+    #[test]
+    fn test_master_key_memory_locking() {
+        let master_key = VaultMasterKey([0x99u8; 32]);
+        let locked = master_key.lock_in_memory();
+        assert_eq!(locked.as_bytes(), &master_key.0);
     }
 }

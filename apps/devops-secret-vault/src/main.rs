@@ -111,6 +111,10 @@ impl DesktopIpcHandler for VaultDesktopHandler {
                     "environment": "production"
                 }),
             },
+            SelfTestCheck {
+                command: "get_git_precommit_hook_script",
+                payload: json!({ "repoPath": "." }),
+            },
         ]
     }
 }

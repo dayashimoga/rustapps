@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { openNativeDialog } from '../lib/ipc';
+  import { openNativeDialog, invokeTauri } from '../lib/ipc';
 
   export let isOpen = false;
   export let onScanDirectory: (dirPath: string) => Promise<any[]>;
@@ -23,6 +23,12 @@
   let scanError = '';
   let scannedAt = '';
 
+  let showHookPanel = false;
+  let hookScript = '';
+  let hookDefaultTarget = '';
+  let hookStatus = '';
+  let hookIsInstalling = false;
+
   $: filteredFindings = findings.filter((f) => {
     if (filterSeverity === 'ALL') return true;
     return f.severity.toUpperCase() === filterSeverity.toUpperCase();
@@ -37,9 +43,52 @@
       });
       if (typeof picked === 'string' && picked.trim()) {
         scanPath = picked.trim();
+        if (showHookPanel) {
+          await loadHookScript();
+        }
       }
     } catch (e) {
       console.warn('Dialog error:', e);
+    }
+  }
+
+  async function loadHookScript() {
+    try {
+      const res: any = await invokeTauri('get_git_precommit_hook_script', { repoPath: scanPath });
+      hookScript = res.script || '';
+      hookDefaultTarget = res.default_target || '.git/hooks/pre-commit';
+    } catch (e: any) {
+      console.warn('Failed to get hook script:', e);
+    }
+  }
+
+  async function toggleHookPanel() {
+    showHookPanel = !showHookPanel;
+    if (showHookPanel && !hookScript) {
+      await loadHookScript();
+    }
+  }
+
+  async function installHook() {
+    hookIsInstalling = true;
+    hookStatus = '';
+    try {
+      const res: any = await invokeTauri('install_git_precommit_hook', { repoPath: scanPath });
+      hookStatus = `✅ ${res.message || 'Installed successfully!'}`;
+    } catch (e: any) {
+      hookStatus = `❌ Error: ${e?.message || String(e)}`;
+    } finally {
+      hookIsInstalling = false;
+    }
+  }
+
+  async function copyHookScript() {
+    try {
+      await navigator.clipboard.writeText(hookScript);
+      hookStatus = '📋 Copied pre-commit hook script to clipboard!';
+      setTimeout(() => { if (hookStatus.startsWith('📋')) hookStatus = ''; }, 3000);
+    } catch (e) {
+      hookStatus = 'Failed to copy script to clipboard';
     }
   }
 
@@ -99,10 +148,36 @@
           <button class="btn btn-secondary btn-browse" on:click={browseFolder} title="Browse Directory">
             📁 Browse
           </button>
+          <button class="btn btn-secondary btn-hook" on:click={toggleHookPanel} title="Git Pre-Commit Hook Generator">
+            🪝 {showHookPanel ? 'Hide Hook' : 'Git Hook'}
+          </button>
           <button class="btn btn-primary btn-scan" on:click={handleStartScan} disabled={isScanning}>
             {isScanning ? 'Scanning Directory...' : '🔍 Scan for Leaks'}
           </button>
         </div>
+
+        {#if showHookPanel}
+          <div class="hook-panel">
+            <div class="hook-header">
+              <div class="hook-info">
+                <strong class="hook-title">🪝 Git Pre-Commit Hook</strong>
+                <span class="hook-target">Target: <code>{hookDefaultTarget}</code></span>
+              </div>
+              <div class="hook-actions">
+                <button class="btn btn-sm btn-secondary" on:click={copyHookScript}>📋 Copy Script</button>
+                <button class="btn btn-sm btn-primary" on:click={installHook} disabled={hookIsInstalling}>
+                  {hookIsInstalling ? 'Installing...' : '⚡ 1-Click Install'}
+                </button>
+              </div>
+            </div>
+            {#if hookStatus}
+              <div class="hook-status-banner {hookStatus.startsWith('✅') ? 'status-success' : hookStatus.startsWith('📋') ? 'status-info' : 'status-error'}">
+                {hookStatus}
+              </div>
+            {/if}
+            <pre class="hook-code"><code>{hookScript}</code></pre>
+          </div>
+        {/if}
 
         {#if findings.length > 0}
           <div class="filter-row">
@@ -283,6 +358,83 @@
     font-weight: 600;
     font-size: 13px;
     white-space: nowrap;
+  }
+
+  .btn-hook {
+    white-space: nowrap;
+    padding: 8px 12px;
+  }
+
+  .hook-panel {
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .hook-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .hook-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+  }
+
+  .hook-target code {
+    background: rgba(255, 255, 255, 0.08);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+  }
+
+  .hook-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .hook-status-banner {
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+  }
+
+  .status-success {
+    background: rgba(34, 197, 94, 0.15);
+    color: #4ade80;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+  }
+
+  .status-info {
+    background: rgba(59, 130, 246, 0.15);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+  }
+
+  .status-error {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+
+  .hook-code {
+    max-height: 140px;
+    overflow-y: auto;
+    background: #0d1117;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: #8b949e;
+    margin: 0;
   }
 
   .filter-row {
