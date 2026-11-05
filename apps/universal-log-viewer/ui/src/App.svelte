@@ -10,6 +10,7 @@
   import StatusBar from './components/StatusBar.svelte';
   import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
   import TraceWaterfallModal from './components/TraceWaterfallModal.svelte';
+  import LicenseModal, { type LicenseStatusReport } from './components/LicenseModal.svelte';
   import type {
     LogLineRecord,
     OpenedFileInfo,
@@ -758,6 +759,8 @@
   }
 
   let isCommandPaletteOpen = false;
+  let isLicenseModalOpen = false;
+  let currentTier = 'Free';
 
   $: commandActions = [
     {
@@ -851,6 +854,15 @@
       run: mergeOpenTabs,
     },
     {
+      id: 'license-modal',
+      title: 'Offline License & Tiers',
+      subtitle: 'Inspect tier entitlements or activate offline Ed25519 certificate',
+      category: 'System',
+      icon: '🔑',
+      shortcut: 'Ctrl+L',
+      run: () => { isLicenseModalOpen = true; },
+    },
+    {
       id: 'filter-all',
       title: 'Severity: Show ALL Records',
       subtitle: 'Clear severity level filter',
@@ -898,7 +910,18 @@
       return;
     }
 
+    if (isCtrl && e.key.toLowerCase() === 'l') {
+      e.preventDefault();
+      isLicenseModalOpen = !isLicenseModalOpen;
+      return;
+    }
+
     if (e.key === 'Escape') {
+      if (isLicenseModalOpen) {
+        e.preventDefault();
+        isLicenseModalOpen = false;
+        return;
+      }
       if (isCommandPaletteOpen) {
         e.preventDefault();
         isCommandPaletteOpen = false;
@@ -1006,6 +1029,10 @@
   onMount(() => {
     window.addEventListener('keydown', handleKeyDown);
 
+    invokeIpc<LicenseStatusReport>('get_license_status').then((lic) => {
+      if (lic) currentTier = lic.tier;
+    }).catch(() => {});
+
     try {
       const saved = localStorage.getItem('ulv_recent_logs');
       if (saved) {
@@ -1046,6 +1073,8 @@
     {systemMetrics}
     {showTimeline}
     {showAiInsights}
+    tier={currentTier}
+    on:openLicenseModal={() => (isLicenseModalOpen = true)}
     bookmarksCount={bookmarks.length}
     on:openFile={handleOpenFilePrompt}
     on:openFolder={handleOpenFolderPrompt}
@@ -1373,6 +1402,14 @@
     isOpen={isCommandPaletteOpen}
     actions={commandActions}
     on:close={() => (isCommandPaletteOpen = false)}
+  />
+
+  <!-- Offline License & Tier Management Modal -->
+  <LicenseModal
+    isOpen={isLicenseModalOpen}
+    appName="Universal Log Viewer"
+    on:close={() => (isLicenseModalOpen = false)}
+    on:statusChange={(e) => { currentTier = e.detail.tier; }}
   />
 </div>
 

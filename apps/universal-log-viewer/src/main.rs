@@ -93,6 +93,10 @@ impl DesktopIpcHandler for LogViewerDesktopHandler {
                 command: "aggregate_fields",
                 payload: json!({ "maxRecords": 5000, "topN": 5 }),
             },
+            SelfTestCheck {
+                command: "get_license_status_cmd",
+                payload: json!({}),
+            },
         ]
     }
 }

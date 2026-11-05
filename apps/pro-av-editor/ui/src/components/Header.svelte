@@ -6,6 +6,7 @@
   export let activePanel: 'edit' | 'color' | 'audio' = 'edit';
   export let canUndo: boolean = false;
   export let canRedo: boolean = false;
+  export let tier: string = 'Free';
 
   const dispatch = createEventDispatcher<{
     newProject: void;
@@ -18,6 +19,7 @@
     openExport: void;
     switchPanel: 'edit' | 'color' | 'audio';
     refreshProject: void;
+    openLicenseModal: void;
   }>();
 
   let showSettingsModal = false;
@@ -65,6 +67,9 @@
       <div class="project-meta">
         <span class="offline-pill">100% OFFLINE</span>
         <span class="sla-badge">60 FPS SLA</span>
+        <button type="button" class="tier-badge-btn" on:click={() => dispatch('openLicenseModal')} title="Manage Offline License">
+          <span class="tier-badge tier-{tier.toLowerCase()}">[{tier.toUpperCase()}]</span>
+        </button>
         {#if project}
           <button
             type="button"
@@ -622,6 +627,45 @@
 
   .btn-apply:hover {
     background: #1d4ed8;
+  }
+
+  .tier-badge-btn {
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    margin-left: 4px;
+  }
+  .tier-badge {
+    cursor: pointer;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    text-transform: uppercase;
+    transition: transform 0.15s ease, opacity 0.15s ease;
+  }
+  .tier-badge:hover {
+    transform: scale(1.05);
+    opacity: 0.9;
+  }
+  .tier-badge.tier-free {
+    background: rgba(148, 163, 184, 0.2);
+    color: #cbd5e1;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+  }
+  .tier-badge.tier-premium {
+    background: rgba(59, 130, 246, 0.25);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.45);
+  }
+  .tier-badge.tier-business {
+    background: rgba(168, 85, 247, 0.25);
+    color: #e9d5ff;
+    border: 1px solid rgba(168, 85, 247, 0.45);
   }
 </style>
 

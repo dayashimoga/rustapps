@@ -13,6 +13,7 @@
   import PasswordGeneratorModal from './components/PasswordGeneratorModal.svelte';
   import DotenvModal from './components/DotenvModal.svelte';
   import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
+  import LicenseModal, { type LicenseStatusReport } from './components/LicenseModal.svelte';
   import type {
     BackupExportSummary,
     BackupImportSummary,
@@ -49,6 +50,8 @@
   let isGeneratorOpen = false;
   let isDotenvModalOpen = false;
   let isCommandPaletteOpen = false;
+  let isLicenseModalOpen = false;
+  let currentTier = 'Free';
   let shamirModalMode: 'split' | 'unlock' = 'split';
   let biometricAvailable = false;
   let clipboardSeconds: number | null = null;
@@ -128,6 +131,15 @@
       run: () => { isDotenvModalOpen = true; },
     },
     {
+      id: 'license-modal',
+      title: 'Offline License & Tiers',
+      subtitle: 'Inspect tier entitlements or activate offline Ed25519 certificate',
+      category: 'System',
+      icon: '🔑',
+      shortcut: 'Ctrl+L',
+      run: () => { isLicenseModalOpen = true; },
+    },
+    {
       id: 'act-clear-clipboard',
       title: 'Clear Clipboard Memory',
       subtitle: 'Immediately wipe active clipboard buffer',
@@ -201,7 +213,18 @@
       return;
     }
 
+    if (isCtrl && e.key.toLowerCase() === 'l') {
+      e.preventDefault();
+      isLicenseModalOpen = !isLicenseModalOpen;
+      return;
+    }
+
     if (e.key === 'Escape') {
+      if (isLicenseModalOpen) {
+        e.preventDefault();
+        isLicenseModalOpen = false;
+        return;
+      }
       if (isCommandPaletteOpen) {
         e.preventDefault();
         isCommandPaletteOpen = false;
@@ -314,6 +337,10 @@
 
   async function checkStatus() {
     try {
+      try {
+        const lic = await invokeIpc<LicenseStatusReport>('get_license_status');
+        if (lic) currentTier = lic.tier;
+      } catch (_) {}
       const res: any = await invokeTauri('get_vault_status');
       isInitialized = Boolean(res.is_initialized);
       isLocked = res.is_locked ?? true;
@@ -735,6 +762,8 @@
     {clipboardSeconds}
     {isLocked}
     biometricEnrolled={biometricAvailable}
+    tier={currentTier}
+    on:openLicenseModal={() => { isLicenseModalOpen = true; }}
     on:search={handleSearch}
     on:filterChange={e => { filterType = e.detail; }}
     on:openNewSecretModal={() => { editingSecret = null; isNewSecretModalOpen = true; }}
@@ -887,6 +916,14 @@
     isOpen={isCommandPaletteOpen}
     actions={commandActions}
     on:close={() => { isCommandPaletteOpen = false; }}
+  />
+
+  <!-- Offline License & Tier Management Modal -->
+  <LicenseModal
+    isOpen={isLicenseModalOpen}
+    appName="DevOps Secret Vault"
+    on:close={() => { isLicenseModalOpen = false; }}
+    on:statusChange={(e) => { currentTier = e.detail.tier; }}
   />
 </div>
 

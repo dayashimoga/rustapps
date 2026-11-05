@@ -19,10 +19,31 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
+use shared_licensing::{AppId, LicenseStatusReport, LicensingManager};
 
 static SERVICE: OnceLock<Arc<Mutex<FileExplorerService>>> = OnceLock::new();
 static BUILTIN_SMART_FOLDERS: OnceLock<Vec<SmartFolder>> = OnceLock::new();
 static CUSTOM_SMART_FOLDERS: OnceLock<Mutex<Vec<SmartFolder>>> = OnceLock::new();
+static LICENSING: OnceLock<LicensingManager> = OnceLock::new();
+
+pub fn get_licensing_manager() -> &'static LicensingManager {
+    LICENSING.get_or_init(|| {
+        let data_dir = platform_common::AppPaths::from_app_name("ai-file-explorer")
+            .map(|p| p.data_dir)
+            .unwrap_or_else(|_| std::path::PathBuf::from("data"));
+        LicensingManager::new(AppId::AiFileExplorer, &data_dir)
+    })
+}
+
+pub fn get_license_status_cmd() -> Result<LicenseStatusReport, String> {
+    Ok(get_licensing_manager().status_report())
+}
+
+pub fn activate_license_cmd(license_json: &str) -> Result<LicenseStatusReport, String> {
+    get_licensing_manager()
+        .activate(license_json)
+        .map_err(|e| e.to_string())
+}
 
 pub fn get_service() -> Arc<Mutex<FileExplorerService>> {
     SERVICE
@@ -1399,6 +1420,19 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let res = query_smart_folder_cmd(id, path_context, limit)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "get_license_status_cmd" | "get_license_status" => {
+            let status = get_license_status_cmd()?;
+            serde_json::to_value(status).map_err(|e| e.to_string())
+        }
+        "activate_license_cmd" | "activate_license" => {
+            let license_json = args
+                .get("license_json")
+                .or_else(|| args.get("licenseJson"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing license_json parameter".to_string())?;
+            let status = activate_license_cmd(license_json)?;
+            serde_json::to_value(status).map_err(|e| e.to_string())
+        }
         _ => Err(format!("Unknown AI File Explorer IPC command: {}", cmd)),
     }
 }
@@ -1687,5 +1721,39 @@ mod tests {
 
         let deleted = delete_smart_folder_cmd(saved.id.clone()).unwrap();
         assert!(deleted);
+    }
+
+    #[test]
+    fn test_licensing_ipc_commands() {
+        let status_val = dispatch_ipc_command("get_license_status", json!({})).unwrap();
+        assert!(status_val["tier"] == "Free" || status_val["tier"] == "Premium" || status_val["tier"] == "Business");
+
+        // Mint a valid license
+        let auth = shared_licensing::LicenseAuthority::official();
+        let cert = auth.sign_license(shared_licensing::LicenseParameters {
+            license_id: "AFE-PRO-100".to_string(),
+            licensee_name: "Explorer User".to_string(),
+            licensee_email: "explorer@test.com".to_string(),
+            tier: shared_licensing::LicenseTier::Premium,
+            app_id: shared_licensing::AppId::AiFileExplorer,
+            issued_timestamp_secs: 1700000000,
+            expiry_timestamp_secs: None,
+            max_seats: 1,
+            features: vec!["unlimited_ocr".to_string()],
+        });
+        let cert_json = serde_json::to_string(&cert).unwrap();
+
+        // Activate valid license
+        let act_val = dispatch_ipc_command("activate_license", json!({ "license_json": cert_json })).unwrap();
+        assert_eq!(act_val["tier"], "Premium");
+        assert_eq!(act_val["is_active"], true);
+        assert_eq!(act_val["licensee_name"], "Explorer User");
+
+        // Forged license rejection
+        let mut forged_cert = cert.clone();
+        forged_cert.licensee_name = "Hacker".to_string();
+        let forged_json = serde_json::to_string(&forged_cert).unwrap();
+        let err = dispatch_ipc_command("activate_license", json!({ "license_json": forged_json })).unwrap_err();
+        assert!(err.contains("signature") || err.contains("InvalidSignature"));
     }
 }

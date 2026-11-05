@@ -1,10 +1,13 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { invokeIpc } from './lib/ipc';
   import Header from './components/Header.svelte';
   import TextTranslatorView from './components/TextTranslatorView.svelte';
   import VoiceConversationView from './components/VoiceConversationView.svelte';
   import CameraDocumentView from './components/CameraDocumentView.svelte';
   import PhrasebookDrawer from './components/PhrasebookDrawer.svelte';
   import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
+  import LicenseModal, { type LicenseStatusReport } from './components/LicenseModal.svelte';
   import type { LanguageCode } from './types';
 
   let activeTab: 'text' | 'voice' | 'camera' | 'phrasebook' = 'text';
@@ -12,6 +15,14 @@
   let preloadSourceLang: 'auto' | LanguageCode = 'auto';
   let preloadTargetLang: LanguageCode = 'es';
   let isCommandPaletteOpen = false;
+  let isLicenseModalOpen = false;
+  let currentTier = 'Free';
+
+  onMount(() => {
+    invokeIpc<LicenseStatusReport>('get_license_status').then((lic) => {
+      if (lic) currentTier = lic.tier;
+    }).catch(() => {});
+  });
 
   $: commandActions = [
     {
@@ -137,6 +148,15 @@
         }
       },
     },
+    {
+      id: 'license-modal',
+      title: 'Offline License & Tiers',
+      subtitle: 'Inspect tier entitlements or activate offline Ed25519 certificate',
+      category: 'System',
+      icon: '🔑',
+      shortcut: 'Ctrl+L',
+      run: () => { isLicenseModalOpen = true; },
+    },
   ];
 
   function handleTabChange(e: CustomEvent<'text' | 'voice' | 'camera' | 'phrasebook'>) {
@@ -159,7 +179,18 @@
       return;
     }
 
+    if (isCtrl && e.key.toLowerCase() === 'l') {
+      e.preventDefault();
+      isLicenseModalOpen = !isLicenseModalOpen;
+      return;
+    }
+
     if (e.key === 'Escape') {
+      if (isLicenseModalOpen) {
+        e.preventDefault();
+        isLicenseModalOpen = false;
+        return;
+      }
       if (isCommandPaletteOpen) {
         e.preventDefault();
         isCommandPaletteOpen = false;
@@ -204,7 +235,12 @@
 <svelte:window on:keydown={handleGlobalKeyDown} />
 
 <div class="app-layout">
-  <Header {activeTab} on:changeTab={handleTabChange} />
+  <Header
+    {activeTab}
+    tier={currentTier}
+    on:changeTab={handleTabChange}
+    on:openLicenseModal={() => (isLicenseModalOpen = true)}
+  />
 
   <main class="main-content">
     {#if activeTab === 'text'}
@@ -227,6 +263,14 @@
     isOpen={isCommandPaletteOpen}
     actions={commandActions}
     on:close={() => (isCommandPaletteOpen = false)}
+  />
+
+  <!-- Offline License & Tier Management Modal -->
+  <LicenseModal
+    isOpen={isLicenseModalOpen}
+    appName="Universal Live Translator"
+    on:close={() => (isLicenseModalOpen = false)}
+    on:statusChange={(e) => { currentTier = e.detail.tier; }}
   />
 </div>
 

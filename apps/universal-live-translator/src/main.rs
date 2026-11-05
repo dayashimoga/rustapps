@@ -101,6 +101,10 @@ impl DesktopIpcHandler for TranslatorDesktopHandler {
                     "targetLangStr": "es"
                 }),
             },
+            SelfTestCheck {
+                command: "get_license_status_cmd",
+                payload: json!({}),
+            },
         ]
     }
 }

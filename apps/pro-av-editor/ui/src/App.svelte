@@ -9,6 +9,7 @@
   import AiToolsModal from './components/AiToolsModal.svelte';
   import NewProjectModal from './components/NewProjectModal.svelte';
   import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
+  import LicenseModal, { type LicenseStatusReport } from './components/LicenseModal.svelte';
   import {
     tauriInvoke,
     type Clip,
@@ -24,6 +25,8 @@
   let showAiModal: boolean = false;
   let showNewProjectModal: boolean = false;
   let isCommandPaletteOpen: boolean = false;
+  let isLicenseModalOpen: boolean = false;
+  let currentTier: string = 'Free';
   let activeAiModalTab: 'silence' | 'beats' | 'scenecut' | 'captions' | 'export' = 'silence';
   let canUndo: boolean = true;
   let canRedo: boolean = true;
@@ -169,6 +172,15 @@
       shortcut: 'Space',
       run: () => { monitorRef?.togglePlay(); },
     },
+    {
+      id: 'license-modal',
+      title: 'Offline License & Tiers',
+      subtitle: 'Inspect tier entitlements or activate offline Ed25519 certificate',
+      category: 'System',
+      icon: '🔑',
+      shortcut: 'Ctrl+L',
+      run: () => { isLicenseModalOpen = true; },
+    },
   ];
 
   function handleGlobalKeyDown(e: KeyboardEvent) {
@@ -180,7 +192,18 @@
       return;
     }
 
+    if (isCtrl && e.key.toLowerCase() === 'l') {
+      e.preventDefault();
+      isLicenseModalOpen = !isLicenseModalOpen;
+      return;
+    }
+
     if (e.key === 'Escape') {
+      if (isLicenseModalOpen) {
+        e.preventDefault();
+        isLicenseModalOpen = false;
+        return;
+      }
       if (isCommandPaletteOpen) {
         e.preventDefault();
         isCommandPaletteOpen = false;
@@ -253,6 +276,10 @@
   }
 
   onMount(async () => {
+    try {
+      const lic = await tauriInvoke<LicenseStatusReport>('get_license_status');
+      if (lic) currentTier = lic.tier;
+    } catch (_) {}
     await refreshProject();
   });
 
@@ -526,6 +553,8 @@
     {activePanel}
     {canUndo}
     {canRedo}
+    tier={currentTier}
+    on:openLicenseModal={() => (isLicenseModalOpen = true)}
     on:newProject={handleNewProject}
     on:openProject={handleOpenProject}
     on:importMedia={handleImportMedia}
@@ -636,6 +665,14 @@
     isOpen={isCommandPaletteOpen}
     actions={commandActions}
     on:close={() => (isCommandPaletteOpen = false)}
+  />
+
+  <!-- Offline License & Tier Management Modal -->
+  <LicenseModal
+    isOpen={isLicenseModalOpen}
+    appName="Pro Audio & Video Editor"
+    on:close={() => (isLicenseModalOpen = false)}
+    on:statusChange={(e) => { currentTier = e.detail.tier; }}
   />
 </div>
 

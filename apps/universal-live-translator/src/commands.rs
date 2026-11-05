@@ -12,8 +12,29 @@ use crate::service::TranslatorService;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use shared_licensing::{AppId, LicenseStatusReport, LicensingManager};
 
 static SERVICE: OnceLock<Arc<Mutex<TranslatorService>>> = OnceLock::new();
+static LICENSING: OnceLock<LicensingManager> = OnceLock::new();
+
+pub fn get_licensing_manager() -> &'static LicensingManager {
+    LICENSING.get_or_init(|| {
+        let data_dir = platform_common::AppPaths::from_app_name("universal-live-translator")
+            .map(|p| p.data_dir)
+            .unwrap_or_else(|_| std::path::PathBuf::from("data"));
+        LicensingManager::new(AppId::UniversalLiveTranslator, &data_dir)
+    })
+}
+
+pub fn get_license_status_cmd() -> Result<LicenseStatusReport, String> {
+    Ok(get_licensing_manager().status_report())
+}
+
+pub fn activate_license_cmd(license_json: &str) -> Result<LicenseStatusReport, String> {
+    get_licensing_manager()
+        .activate(license_json)
+        .map_err(|e| e.to_string())
+}
 
 pub fn get_service() -> Arc<Mutex<TranslatorService>> {
     SERVICE
@@ -934,6 +955,19 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
                 "timestamp": turn.timestamp_secs
             }))
         }
+        "get_license_status_cmd" | "get_license_status" => {
+            let status = get_license_status_cmd()?;
+            serde_json::to_value(status).map_err(|e| e.to_string())
+        }
+        "activate_license_cmd" | "activate_license" => {
+            let license_json = args
+                .get("license_json")
+                .or_else(|| args.get("licenseJson"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing license_json parameter".to_string())?;
+            let status = activate_license_cmd(license_json)?;
+            serde_json::to_value(status).map_err(|e| e.to_string())
+        }
         _ => Err(format!("Unknown Translator IPC command: {}", cmd)),
     }
 }
@@ -1031,5 +1065,36 @@ mod tests {
         let deleted =
             delete_glossary_term_cmd("medical".to_string(), "arrhythmia".to_string()).unwrap();
         assert!(deleted);
+    }
+
+    #[test]
+    fn test_licensing_ipc_commands() {
+        let status_val = dispatch_ipc_command("get_license_status", json!({})).unwrap();
+        assert!(status_val["tier"] == "Free" || status_val["tier"] == "Premium" || status_val["tier"] == "Business");
+
+        let auth = shared_licensing::LicenseAuthority::official();
+        let cert = auth.sign_license(shared_licensing::LicenseParameters {
+            license_id: "ULT-PRO-100".to_string(),
+            licensee_name: "Global Interpreter".to_string(),
+            licensee_email: "translator@test.com".to_string(),
+            tier: shared_licensing::LicenseTier::Premium,
+            app_id: shared_licensing::AppId::UniversalLiveTranslator,
+            issued_timestamp_secs: 1700000000,
+            expiry_timestamp_secs: None,
+            max_seats: 1,
+            features: vec!["custom_glossary".to_string()],
+        });
+        let cert_json = serde_json::to_string(&cert).unwrap();
+
+        let act_val = dispatch_ipc_command("activate_license", json!({ "license_json": cert_json })).unwrap();
+        assert_eq!(act_val["tier"], "Premium");
+        assert_eq!(act_val["is_active"], true);
+        assert_eq!(act_val["licensee_name"], "Global Interpreter");
+
+        let mut forged_cert = cert.clone();
+        forged_cert.licensee_name = "Fake".to_string();
+        let forged_json = serde_json::to_string(&forged_cert).unwrap();
+        let err = dispatch_ipc_command("activate_license", json!({ "license_json": forged_json })).unwrap_err();
+        assert!(err.contains("signature") || err.contains("InvalidSignature"));
     }
 }

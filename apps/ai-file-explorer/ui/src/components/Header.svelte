@@ -6,6 +6,8 @@
   export let activeTab: ActiveTab;
   export let showStatsDrawer: boolean;
   export let isDualPaneMode: boolean = false;
+  export let tier: string = 'Free';
+  export let onOpenLicenseModal: () => void = () => {};
   export let onToggleDualPane: () => void = () => {};
   export let onNavigate: (path: string) => void;
   export let onSearch: (query: string) => void;
@@ -40,6 +42,9 @@
     <div class="brand-info">
       <h1>AI File Explorer</h1>
       <span class="badge badge-cyan">100% Offline</span>
+      <button class="tier-badge-btn" on:click={onOpenLicenseModal} title="Manage Offline License">
+        <span class="badge tier-badge tier-{tier.toLowerCase()}">[{tier.toUpperCase()}]</span>
+      </button>
     </div>
   </div>
 
@@ -352,5 +357,43 @@
     color: var(--accent-cyan);
     font-weight: 700;
     box-shadow: 0 0 10px rgba(6, 182, 212, 0.2);
+  }
+
+  .tier-badge-btn {
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+  }
+  .tier-badge {
+    cursor: pointer;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    text-transform: uppercase;
+    transition: transform 0.15s ease, opacity 0.15s ease;
+  }
+  .tier-badge:hover {
+    transform: scale(1.05);
+    opacity: 0.9;
+  }
+  .tier-badge.tier-free {
+    background: rgba(148, 163, 184, 0.2);
+    color: #cbd5e1;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+  }
+  .tier-badge.tier-premium {
+    background: rgba(59, 130, 246, 0.25);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.45);
+  }
+  .tier-badge.tier-business {
+    background: rgba(168, 85, 247, 0.25);
+    color: #e9d5ff;
+    border: 1px solid rgba(168, 85, 247, 0.45);
   }
 </style>

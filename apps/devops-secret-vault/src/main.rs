@@ -115,6 +115,10 @@ impl DesktopIpcHandler for VaultDesktopHandler {
                 command: "get_git_precommit_hook_script",
                 payload: json!({ "repoPath": "." }),
             },
+            SelfTestCheck {
+                command: "get_license_status_cmd",
+                payload: json!({}),
+            },
         ]
     }
 }

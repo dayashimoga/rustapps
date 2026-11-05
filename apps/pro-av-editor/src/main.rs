@@ -104,6 +104,10 @@ impl DesktopIpcHandler for ProAvDesktopHandler {
                     "height": 180
                 }),
             },
+            SelfTestCheck {
+                command: "get_license_status_cmd",
+                payload: json!({}),
+            },
         ]
     }
 }

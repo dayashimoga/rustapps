@@ -118,6 +118,19 @@ pub struct VerifiedLicense {
     pub features: Vec<String>,
 }
 
+/// Official 32-byte Ed25519 root verifying key embedded in production binaries
+/// Allows verification 100% offline without remote servers or egress.
+pub const OFFICIAL_VERIFYING_KEY_BYTES: [u8; 32] = [
+    133, 157, 43, 71, 72, 245, 83, 122, 36, 95, 122, 228, 109, 101, 15, 108, 3, 133, 102, 9, 42,
+    219, 151, 76, 247, 226, 93, 226, 123, 144, 45, 46,
+];
+
+/// Official 32-byte Ed25519 signing seed used by release tooling and testing
+pub const OFFICIAL_SIGNING_SEED: [u8; 32] = [
+    0x72, 0x6e, 0x74, 0x67, 0x72, 0x61, 0x76, 0x69, 0x74, 0x79, 0x5f, 0x6f, 0x66, 0x66, 0x6c, 0x69,
+    0x6e, 0x65, 0x5f, 0x6c, 0x69, 0x63, 0x65, 0x6e, 0x73, 0x65, 0x5f, 0x73, 0x65, 0x65, 0x64, 0x31,
+];
+
 /// In-process Ed25519 license verifier
 #[derive(Debug, Clone)]
 pub struct LicenseVerifier {
@@ -125,6 +138,11 @@ pub struct LicenseVerifier {
 }
 
 impl LicenseVerifier {
+    /// Create an official verifier with the embedded root public key
+    pub fn official() -> Self {
+        Self::new(&OFFICIAL_VERIFYING_KEY_BYTES).expect("Official verifying key must be valid")
+    }
+
     /// Initialize with a 32-byte Ed25519 verifying public key
     pub fn new(public_key_bytes: &[u8; 32]) -> Result<Self, LicensingError> {
         let verifying_key = VerifyingKey::from_bytes(public_key_bytes)
@@ -206,6 +224,11 @@ pub struct LicenseAuthority {
 }
 
 impl LicenseAuthority {
+    /// Initialize with the official monorepo private seed
+    pub fn official() -> Self {
+        Self::from_seed(&OFFICIAL_SIGNING_SEED)
+    }
+
     /// Initialize with a 32-byte Ed25519 private seed
     pub fn from_seed(seed: &[u8; 32]) -> Self {
         let signing_key = SigningKey::from_bytes(seed);
@@ -310,6 +333,111 @@ impl TierGate {
             }
         }
         false
+    }
+
+    /// Generate a status report for UI badges and diagnostics
+    pub fn status_report(&self) -> LicenseStatusReport {
+        if let Some(ref lic) = self.active_license {
+            LicenseStatusReport {
+                tier: match lic.tier {
+                    LicenseTier::Free => "Free".to_string(),
+                    LicenseTier::Premium => "Premium".to_string(),
+                    LicenseTier::Business => "Business".to_string(),
+                },
+                licensee_name: lic.licensee_name.clone(),
+                is_perpetual: lic.is_perpetual,
+                is_active: true,
+                features: lic.features.clone(),
+            }
+        } else {
+            LicenseStatusReport {
+                tier: "Free".to_string(),
+                licensee_name: "Community Edition".to_string(),
+                is_perpetual: true,
+                is_active: false,
+                features: vec![],
+            }
+        }
+    }
+}
+
+/// Complete status report for IPC commands and frontend UI
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LicenseStatusReport {
+    pub tier: String,
+    pub licensee_name: String,
+    pub is_perpetual: bool,
+    pub is_active: bool,
+    pub features: Vec<String>,
+}
+
+/// Verify offline license JSON certificate for a specific app
+pub fn verify_license_json(
+    json_str: &str,
+    app_id: AppId,
+) -> Result<VerifiedLicense, LicensingError> {
+    let cert: LicenseCertificate = serde_json::from_str(json_str)
+        .map_err(|e| LicensingError::ParseError(format!("Failed to parse JSON: {}", e)))?;
+    let verifier = LicenseVerifier::official();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    verifier.verify(&cert, app_id, now)
+}
+
+/// Thread-safe license manager for applications
+#[derive(Debug, Clone)]
+pub struct LicensingManager {
+    app_id: AppId,
+    license_file_path: std::path::PathBuf,
+    gate: std::sync::Arc<std::sync::RwLock<TierGate>>,
+}
+
+impl LicensingManager {
+    /// Initialize manager for target app and license storage path
+    pub fn new(app_id: AppId, storage_dir: &std::path::Path) -> Self {
+        let license_file_path = storage_dir.join("license.offlic");
+        let initial_license = if license_file_path.exists() {
+            match std::fs::read_to_string(&license_file_path) {
+                Ok(content) => verify_license_json(&content, app_id).ok(),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        Self {
+            app_id,
+            license_file_path,
+            gate: std::sync::Arc::new(std::sync::RwLock::new(TierGate::new(initial_license))),
+        }
+    }
+
+    /// Current operational tier gate
+    pub fn gate(&self) -> TierGate {
+        self.gate.read().unwrap().clone()
+    }
+
+    /// Current license status report
+    pub fn status_report(&self) -> LicenseStatusReport {
+        self.gate.read().unwrap().status_report()
+    }
+
+    /// Activate a signed offline license JSON certificate
+    pub fn activate(&self, license_json: &str) -> Result<LicenseStatusReport, LicensingError> {
+        let verified = verify_license_json(license_json, self.app_id)?;
+
+        // Save to offline persistent storage
+        if let Some(parent) = self.license_file_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&self.license_file_path, license_json);
+
+        // Update in-memory gate
+        let mut g = self.gate.write().unwrap();
+        *g = TierGate::new(Some(verified));
+        Ok(g.status_report())
     }
 }
 
@@ -440,5 +568,125 @@ mod tests {
         let biz_gate = TierGate::new(Some(business_license));
         assert!(biz_gate.require_tier(LicenseTier::Business).is_ok());
         assert!(biz_gate.has_feature("any_feature"));
+    }
+
+    #[test]
+    fn test_official_keypair() {
+        let auth = LicenseAuthority::from_seed(&OFFICIAL_SIGNING_SEED);
+        let pk = auth.public_key_bytes();
+        println!("OFFICIAL_VERIFYING_KEY_BYTES = {:?}", pk);
+        let verifier = LicenseVerifier::new(&pk).unwrap();
+        let cert = auth.sign_license(LicenseParameters {
+            license_id: "OFFICIAL-1".to_string(),
+            licensee_name: "Official User".to_string(),
+            licensee_email: "user@example.com".to_string(),
+            tier: LicenseTier::Business,
+            app_id: AppId::AllAppsSuite,
+            issued_timestamp_secs: 1700000000,
+            expiry_timestamp_secs: None,
+            max_seats: 10,
+            features: vec!["all".to_string()],
+        });
+        assert!(verifier.verify(&cert, AppId::AiFileExplorer, 1750000000).is_ok());
+    }
+
+    #[test]
+    fn test_tamper_resistance_signature_rejection() {
+        let auth = LicenseAuthority::official();
+        let mut cert = auth.sign_license(LicenseParameters {
+            license_id: "TAMPER-TEST-01".to_string(),
+            licensee_name: "Genuine Buyer".to_string(),
+            licensee_email: "buyer@example.com".to_string(),
+            tier: LicenseTier::Premium,
+            app_id: AppId::DevopsSecretVault,
+            issued_timestamp_secs: 1700000000,
+            expiry_timestamp_secs: None,
+            max_seats: 1,
+            features: vec!["cloud_secrets".to_string()],
+        });
+
+        // 1. Verify genuine license succeeds
+        let verifier = LicenseVerifier::official();
+        assert!(verifier.verify(&cert, AppId::DevopsSecretVault, 1750000000).is_ok());
+
+        // 2. Tampering with tier from Premium to Business must fail
+        cert.tier = LicenseTier::Business;
+        let err = verifier.verify(&cert, AppId::DevopsSecretVault, 1750000000).unwrap_err();
+        assert!(matches!(err, LicensingError::InvalidSignature(_)));
+
+        // 3. Tampering with licensee name must fail
+        cert.tier = LicenseTier::Premium;
+        cert.licensee_name = "Attacker".to_string();
+        let err = verifier.verify(&cert, AppId::DevopsSecretVault, 1750000000).unwrap_err();
+        assert!(matches!(err, LicensingError::InvalidSignature(_)));
+
+        // 4. Corrupting signature hex must fail
+        cert.licensee_name = "Genuine Buyer".to_string();
+        cert.signature_hex = "00".repeat(64);
+        let err = verifier.verify(&cert, AppId::DevopsSecretVault, 1750000000).unwrap_err();
+        assert!(matches!(err, LicensingError::InvalidSignature(_)));
+    }
+
+    #[test]
+    fn test_verify_license_json_helper() {
+        let auth = LicenseAuthority::official();
+        let cert = auth.sign_license(LicenseParameters {
+            license_id: "JSON-01".to_string(),
+            licensee_name: "Alice Developer".to_string(),
+            licensee_email: "alice@code.com".to_string(),
+            tier: LicenseTier::Business,
+            app_id: AppId::AllAppsSuite,
+            issued_timestamp_secs: 1700000000,
+            expiry_timestamp_secs: None,
+            max_seats: 5,
+            features: vec!["offline_ai".to_string()],
+        });
+
+        let json = serde_json::to_string(&cert).unwrap();
+        let verified = verify_license_json(&json, AppId::ProAvEditor).expect("JSON verification must succeed");
+        assert_eq!(verified.tier, LicenseTier::Business);
+        assert_eq!(verified.licensee_name, "Alice Developer");
+
+        let gate = TierGate::new(Some(verified));
+        let report = gate.status_report();
+        assert_eq!(report.tier, "Business");
+        assert!(report.is_active);
+    }
+
+    #[test]
+    fn test_licensing_manager_workflow() {
+        let temp = tempfile::tempdir().unwrap();
+        let mgr = LicensingManager::new(AppId::AiFileExplorer, temp.path());
+
+        // Default should be Free tier
+        let initial_status = mgr.status_report();
+        assert_eq!(initial_status.tier, "Free");
+        assert!(!initial_status.is_active);
+
+        // Mint and activate a valid license
+        let auth = LicenseAuthority::official();
+        let cert = auth.sign_license(LicenseParameters {
+            license_id: "ACT-01".to_string(),
+            licensee_name: "Pro Engineer".to_string(),
+            licensee_email: "pro@offline.org".to_string(),
+            tier: LicenseTier::Premium,
+            app_id: AppId::AiFileExplorer,
+            issued_timestamp_secs: 1700000000,
+            expiry_timestamp_secs: None,
+            max_seats: 1,
+            features: vec!["deep_ocr".to_string()],
+        });
+        let cert_json = serde_json::to_string(&cert).unwrap();
+
+        let updated_status = mgr.activate(&cert_json).expect("Activation should succeed");
+        assert_eq!(updated_status.tier, "Premium");
+        assert!(updated_status.is_active);
+        assert_eq!(updated_status.licensee_name, "Pro Engineer");
+
+        // Reload manager from same directory - license should persist
+        let reloaded_mgr = LicensingManager::new(AppId::AiFileExplorer, temp.path());
+        let persisted_status = reloaded_mgr.status_report();
+        assert_eq!(persisted_status.tier, "Premium");
+        assert!(persisted_status.is_active);
     }
 }

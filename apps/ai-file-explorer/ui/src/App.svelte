@@ -13,6 +13,7 @@
   import DocumentModal from './components/DocumentModal.svelte';
   import ComplianceScanner from './components/ComplianceScanner.svelte';
   import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
+  import LicenseModal, { type LicenseStatusReport } from './components/LicenseModal.svelte';
   import type {
     ActiveTab,
     BatchRenameResult,
@@ -93,6 +94,8 @@
   let inspectedDoc: ExtractedDocument | null = null;
   let isDocModalOpen = false;
   let isCommandPaletteOpen = false;
+  let isLicenseModalOpen = false;
+  let currentTier = 'Free';
 
   $: commandActions = [
     {
@@ -157,6 +160,15 @@
       icon: '🛡️',
       shortcut: 'Ctrl+7',
       run: () => { activeTab = 'compliance'; },
+    },
+    {
+      id: 'license-modal',
+      title: 'Offline License & Tiers',
+      subtitle: 'Inspect tier entitlements or activate offline Ed25519 certificate',
+      category: 'System',
+      icon: '🔑',
+      shortcut: 'Ctrl+L',
+      run: () => { isLicenseModalOpen = true; },
     },
     {
       id: 'act-browse',
@@ -232,7 +244,18 @@
       return;
     }
 
+    if (isCtrl && e.key.toLowerCase() === 'l') {
+      e.preventDefault();
+      isLicenseModalOpen = !isLicenseModalOpen;
+      return;
+    }
+
     if (e.key === 'Escape') {
+      if (isLicenseModalOpen) {
+        e.preventDefault();
+        isLicenseModalOpen = false;
+        return;
+      }
       if (isCommandPaletteOpen) {
         e.preventDefault();
         isCommandPaletteOpen = false;
@@ -723,6 +746,10 @@
   }
 
   onMount(async () => {
+    try {
+      const lic = await invokeIpc<LicenseStatusReport>('get_license_status');
+      if (lic) currentTier = lic.tier;
+    } catch (_) {}
     await loadDrivesAndPlaces();
     await loadSmartFolders();
     await loadDirectory(currentPath);
@@ -741,6 +768,8 @@
     bind:activeTab
     bind:showStatsDrawer
     bind:isDualPaneMode
+    tier={currentTier}
+    onOpenLicenseModal={() => (isLicenseModalOpen = true)}
     onToggleDualPane={() => {
       isDualPaneMode = !isDualPaneMode;
       if (isDualPaneMode && rightFolderItems.length === 0) {
@@ -1077,6 +1106,14 @@
     isOpen={isCommandPaletteOpen}
     actions={commandActions}
     on:close={() => (isCommandPaletteOpen = false)}
+  />
+
+  <!-- Offline License & Tier Management Modal -->
+  <LicenseModal
+    isOpen={isLicenseModalOpen}
+    appName="AI File Explorer"
+    on:close={() => (isLicenseModalOpen = false)}
+    on:statusChange={(e) => { currentTier = e.detail.tier; }}
   />
 </main>
 

@@ -7,6 +7,7 @@
   export let clipboardSeconds: number | null = null;
   export let isLocked: boolean = false;
   export let biometricEnrolled: boolean = false;
+  export let tier: string = 'Free';
 
   const dispatch = createEventDispatcher();
 
@@ -33,6 +34,9 @@
       <div class="brand-info">
         <span class="brand-title">DevOps Secret Vault</span>
         <span class="brand-tag">AES-256-GCM • Offline Zero-Knowledge</span>
+        <button type="button" class="tier-badge-btn" on:click={() => dispatch('openLicenseModal')} title="Manage Offline License">
+          <span class="tier-badge tier-{tier.toLowerCase()}">[{tier.toUpperCase()}]</span>
+        </button>
       </div>
     </div>
 
@@ -324,5 +328,44 @@
     50% {
       box-shadow: 0 0 10px rgba(245, 158, 11, 0.3);
     }
+  }
+
+  .tier-badge-btn {
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    margin-top: 2px;
+  }
+  .tier-badge {
+    cursor: pointer;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    text-transform: uppercase;
+    transition: transform 0.15s ease, opacity 0.15s ease;
+  }
+  .tier-badge:hover {
+    transform: scale(1.05);
+    opacity: 0.9;
+  }
+  .tier-badge.tier-free {
+    background: rgba(148, 163, 184, 0.2);
+    color: #cbd5e1;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+  }
+  .tier-badge.tier-premium {
+    background: rgba(59, 130, 246, 0.25);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.45);
+  }
+  .tier-badge.tier-business {
+    background: rgba(168, 85, 247, 0.25);
+    color: #e9d5ff;
+    border: 1px solid rgba(168, 85, 247, 0.45);
   }
 </style>

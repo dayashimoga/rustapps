@@ -90,6 +90,10 @@ impl DesktopIpcHandler for ExplorerDesktopHandler {
                 command: "query_smart_folder_cmd",
                 payload: json!({ "id": "smart-pdf", "path_context": cwd, "limit": 10 }),
             },
+            SelfTestCheck {
+                command: "get_license_status_cmd",
+                payload: json!({}),
+            },
         ]
     }
 }
