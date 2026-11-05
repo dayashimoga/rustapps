@@ -951,6 +951,70 @@ fn benchmark_api_protocol_studio(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_parquet_analytics_workbench(c: &mut Criterion) {
+    use parquet_analytics_workbench::models::*;
+    use parquet_analytics_workbench::service::AnalyticsService;
+
+    let service = AnalyticsService::new().unwrap();
+    let schema = service.seed_demo_dataset().unwrap();
+    let dataset_id = schema.dataset_id;
+
+    let mut group = c.benchmark_group("parquet_analytics_workbench");
+
+    // 1. Filtered, sorted, paginated query throughput
+    let query_req = QueryRequest {
+        dataset_id: dataset_id.clone(),
+        filters: vec![DataFilter {
+            column: "status".to_string(),
+            operator: FilterOperator::Eq,
+            value: "HEALTHY".to_string(),
+        }],
+        sort: Some(SortClause {
+            column: "cpu_percent".to_string(),
+            direction: SortDirection::Desc,
+        }),
+        search_query: None,
+        limit: 25,
+        offset: 0,
+    };
+
+    group.bench_function("paw_filtered_query_sub_10ms", |b| {
+        b.iter(|| {
+            let res = service.query_dataset(black_box(&query_req)).unwrap();
+            black_box(res.rows.len());
+        });
+    });
+
+    // 2. Chart Group-By aggregation computation
+    let chart_req = ChartRequest {
+        dataset_id: dataset_id.clone(),
+        chart_type: ChartType::Bar,
+        x_column: "datacenter".to_string(),
+        y_column: Some("cpu_percent".to_string()),
+        aggregation: AggregationType::Avg,
+        limit: 10,
+    };
+
+    group.bench_function("paw_chart_groupby_aggregation", |b| {
+        b.iter(|| {
+            let chart = service.compute_chart_data(black_box(&chart_req)).unwrap();
+            black_box(chart.points.len());
+        });
+    });
+
+    // 3. Column statistical distribution calculation
+    group.bench_function("paw_column_statistics_calc", |b| {
+        b.iter(|| {
+            let stats = service
+                .compute_column_stats(black_box(&dataset_id), black_box("cpu_percent"))
+                .unwrap();
+            black_box(stats.distinct_count);
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -969,6 +1033,7 @@ criterion_group!(
     benchmark_universal_live_translator,
     benchmark_pro_av_editor,
     benchmark_personal_knowledge_graph,
-    benchmark_api_protocol_studio
+    benchmark_api_protocol_studio,
+    benchmark_parquet_analytics_workbench
 );
 criterion_main!(benches);

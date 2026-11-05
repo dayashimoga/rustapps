@@ -1,0 +1,30 @@
+[package]
+name = "parquet-analytics-workbench"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Local Database & Parquet Analytics Workbench — 100% Offline Multi-Gigabyte Data Query & Visualization Studio"
+
+[dependencies]
+# Workspace crates
+platform-common.workspace = true
+shared-storage.workspace = true
+shared-telemetry.workspace = true
+shared-licensing = { path = "../../shared/licensing" }
+
+# Data & Storage
+rusqlite.workspace = true
+csv.workspace = true
+memmap2.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Utilities
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

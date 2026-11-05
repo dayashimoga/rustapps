@@ -26,4 +26,5 @@ universal-log-viewer = { path = "../apps/universal-log-viewer" }
 pro-av-editor = { path = "../apps/pro-av-editor" }
 personal-knowledge-graph = { path = "../apps/personal-knowledge-graph" }
 api-protocol-studio = { path = "../apps/api-protocol-studio" }
+parquet-analytics-workbench = { path = "../apps/parquet-analytics-workbench" }
 shared-licensing = { path = "../shared/licensing" }

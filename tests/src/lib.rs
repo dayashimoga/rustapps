@@ -1415,7 +1415,38 @@ mod integration_tests {
             .unwrap();
         assert_eq!(fuzz_results.len(), 5);
 
-        // 8. shared-licensing: 100% offline Ed25519 signature verification across entire suite
+        // 8. parquet-analytics-workbench: 100% offline dataset ingestion, SQL querying & chart aggregation
+        let paw_service = parquet_analytics_workbench::AnalyticsService::new().unwrap();
+        let paw_schema = paw_service.seed_demo_dataset().unwrap();
+        assert_eq!(paw_schema.total_rows, 100);
+        let paw_query_res = paw_service
+            .query_dataset(&parquet_analytics_workbench::QueryRequest {
+                dataset_id: paw_schema.dataset_id.clone(),
+                filters: vec![parquet_analytics_workbench::DataFilter {
+                    column: "status".to_string(),
+                    operator: parquet_analytics_workbench::FilterOperator::Eq,
+                    value: "HEALTHY".to_string(),
+                }],
+                sort: None,
+                search_query: None,
+                limit: 10,
+                offset: 0,
+            })
+            .unwrap();
+        assert!(!paw_query_res.rows.is_empty());
+        let paw_chart = paw_service
+            .compute_chart_data(&parquet_analytics_workbench::ChartRequest {
+                dataset_id: paw_schema.dataset_id,
+                chart_type: parquet_analytics_workbench::ChartType::Bar,
+                x_column: "datacenter".to_string(),
+                y_column: Some("cpu_percent".to_string()),
+                aggregation: parquet_analytics_workbench::AggregationType::Avg,
+                limit: 5,
+            })
+            .unwrap();
+        assert_eq!(paw_chart.points.len(), 4); // 4 distinct datacenters in demo data
+
+        // 9. shared-licensing: 100% offline Ed25519 signature verification across entire suite
         let verified = verifier.verify(&cert, shared_licensing::AppId::AiFileExplorer, 1700000001);
         assert!(
             verified.is_ok(),

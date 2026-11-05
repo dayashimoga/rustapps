@@ -206,6 +206,7 @@ dependencies = [
  "api-protocol-studio",
  "criterion",
  "devops-secret-vault",
+ "parquet-analytics-workbench",
  "personal-knowledge-graph",
  "pro-av-editor",
  "rusqlite",
@@ -886,6 +887,7 @@ dependencies = [
  "ai-file-explorer",
  "api-protocol-studio",
  "devops-secret-vault",
+ "parquet-analytics-workbench",
  "personal-knowledge-graph",
  "platform-common",
  "pro-av-editor",
@@ -1205,6 +1207,24 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "parquet-analytics-workbench"
+version = "0.1.0"
+dependencies = [
+ "csv",
+ "memmap2",
+ "platform-common",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "shared-licensing",
+ "shared-storage",
+ "shared-telemetry",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]

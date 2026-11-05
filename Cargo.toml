@@ -22,6 +22,7 @@ members = [
     "apps/pro-av-editor",
     "apps/personal-knowledge-graph",
     "apps/api-protocol-studio",
+    "apps/parquet-analytics-workbench",
     "tests",
     "benchmarks",
 ]

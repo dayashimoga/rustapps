@@ -39,6 +39,7 @@ pub enum AppId {
     ProAvEditor,
     PersonalKnowledgeGraph,
     ApiProtocolStudio,
+    ParquetAnalyticsWorkbench,
     AllAppsSuite,
 }
 
