@@ -8,18 +8,21 @@ use crate::dedup::DuplicateDetector;
 use crate::doc_extract::DocumentExtractor;
 use crate::models::{
     BatchRenameResult, BatchRenameRule, ContentSearchQuery, ContentSearchResult,
-    DeduplicationSummary, DirectoryListing, ExtractedDocument, FileItem, FolderStats, OcrResult,
-    RenamePreview, ScreenshotFingerprint, ScreenshotSearchResult, SearchMode, TreemapNode,
+    CopyFilesResult, DeduplicationSummary, DirectoryListing, ExtractedDocument, FileItem,
+    FolderStats, MoveFilesResult, OcrResult, RenamePreview, ScreenshotFingerprint,
+    ScreenshotSearchResult, SearchMode, SmartFolder, TreemapNode,
 };
 use crate::service::FileExplorerService;
 use crate::treemap::TreemapGenerator;
 use platform_common::{enumerate_drives_and_places, FsLocationEntry};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 
 static SERVICE: OnceLock<Arc<Mutex<FileExplorerService>>> = OnceLock::new();
+static BUILTIN_SMART_FOLDERS: OnceLock<Vec<SmartFolder>> = OnceLock::new();
+static CUSTOM_SMART_FOLDERS: OnceLock<Mutex<Vec<SmartFolder>>> = OnceLock::new();
 
 pub fn get_service() -> Arc<Mutex<FileExplorerService>> {
     SERVICE
@@ -143,6 +146,462 @@ pub fn delete_files_cmd(paths: Vec<String>) -> Result<crate::models::DeleteFiles
     let svc = service.lock().map_err(|e| e.to_string())?;
     let path_bufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     svc.delete_files(&path_bufs).map_err(|e| e.to_string())
+}
+
+/// Helper to copy directory recursively
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<(usize, u64)> {
+    let mut count = 0;
+    let mut bytes = 0;
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let dest_child = dst.join(entry.file_name());
+        if ty.is_dir() {
+            let (sub_count, sub_bytes) = copy_dir_all(&entry.path(), &dest_child)?;
+            count += sub_count;
+            bytes += sub_bytes;
+        } else {
+            let b = std::fs::copy(entry.path(), dest_child)?;
+            count += 1;
+            bytes += b;
+        }
+    }
+    Ok((count, bytes))
+}
+
+/// Copy files or directories to a target folder (Dual-Pane Commander Mode)
+pub fn copy_files_cmd(sources: Vec<String>, destination_dir: String) -> Result<CopyFilesResult, String> {
+    let dest = Path::new(&destination_dir);
+    if !dest.is_dir() {
+        return Err(format!("Destination is not a directory: {}", destination_dir));
+    }
+    let mut copied_count = 0;
+    let mut total_bytes = 0;
+    let mut failed_paths = Vec::new();
+
+    for src_str in sources {
+        let src = Path::new(&src_str);
+        if !src.exists() {
+            failed_paths.push(format!("{}: source not found", src_str));
+            continue;
+        }
+        let file_name = match src.file_name() {
+            Some(n) => n,
+            None => {
+                failed_paths.push(format!("{}: invalid filename", src_str));
+                continue;
+            }
+        };
+        let target_dest = dest.join(file_name);
+        if src.is_dir() {
+            match copy_dir_all(src, &target_dest) {
+                Ok((c, b)) => {
+                    copied_count += c;
+                    total_bytes += b;
+                }
+                Err(e) => {
+                    failed_paths.push(format!("{}: {}", src_str, e));
+                }
+            }
+        } else {
+            match std::fs::copy(src, &target_dest) {
+                Ok(b) => {
+                    copied_count += 1;
+                    total_bytes += b;
+                }
+                Err(e) => {
+                    failed_paths.push(format!("{}: {}", src_str, e));
+                }
+            }
+        }
+    }
+
+    Ok(CopyFilesResult {
+        copied_count,
+        total_bytes,
+        failed_paths,
+    })
+}
+
+/// Move files or directories to a target folder (Dual-Pane Commander Mode)
+pub fn move_files_cmd(sources: Vec<String>, destination_dir: String) -> Result<MoveFilesResult, String> {
+    let dest = Path::new(&destination_dir);
+    if !dest.is_dir() {
+        return Err(format!("Destination is not a directory: {}", destination_dir));
+    }
+    let mut moved_count = 0;
+    let mut failed_paths = Vec::new();
+
+    for src_str in sources {
+        let src = Path::new(&src_str);
+        if !src.exists() {
+            failed_paths.push(format!("{}: source not found", src_str));
+            continue;
+        }
+        let file_name = match src.file_name() {
+            Some(n) => n,
+            None => {
+                failed_paths.push(format!("{}: invalid filename", src_str));
+                continue;
+            }
+        };
+        let target_dest = dest.join(file_name);
+
+        match std::fs::rename(src, &target_dest) {
+            Ok(_) => {
+                moved_count += 1;
+            }
+            Err(_) => {
+                // Cross-device rename fallback: copy then remove original
+                if src.is_dir() {
+                    match copy_dir_all(src, &target_dest) {
+                        Ok(_) => match std::fs::remove_dir_all(src) {
+                            Ok(_) => {
+                                moved_count += 1;
+                            }
+                            Err(e) => {
+                                failed_paths.push(format!("{}: copied but failed to delete original: {}", src_str, e));
+                            }
+                        },
+                        Err(e) => {
+                            failed_paths.push(format!("{}: {}", src_str, e));
+                        }
+                    }
+                } else {
+                    match std::fs::copy(src, &target_dest) {
+                        Ok(_) => match std::fs::remove_file(src) {
+                            Ok(_) => {
+                                moved_count += 1;
+                            }
+                            Err(e) => {
+                                failed_paths.push(format!("{}: copied but failed to delete original: {}", src_str, e));
+                            }
+                        },
+                        Err(e) => {
+                            failed_paths.push(format!("{}: {}", src_str, e));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(MoveFilesResult {
+        moved_count,
+        failed_paths,
+    })
+}
+
+/// Create a new subdirectory inside parent directory
+pub fn create_directory_cmd(parent_dir: String, dir_name: String) -> Result<String, String> {
+    let p = Path::new(&parent_dir);
+    if !p.is_dir() {
+        return Err(format!("Parent directory does not exist: {}", parent_dir));
+    }
+    let target = p.join(dir_name);
+    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Smart Virtual Folders
+// ---------------------------------------------------------------------------
+
+fn get_builtin_smart_folders() -> Vec<SmartFolder> {
+    vec![
+        SmartFolder {
+            id: "smart-pdf".to_string(),
+            name: "All PDF Documents".to_string(),
+            icon: "📄".to_string(),
+            description: "All indexed PDF manuals, books, and reports".to_string(),
+            query: "pdf".to_string(),
+            extensions: vec!["pdf".to_string()],
+            min_size_bytes: None,
+            max_size_bytes: None,
+            is_builtin: true,
+        },
+        SmartFolder {
+            id: "smart-docs".to_string(),
+            name: "Word & Office Docs".to_string(),
+            icon: "📝".to_string(),
+            description: "Word, Excel, PowerPoint, and Markdown files".to_string(),
+            query: "docx doc odt xlsx pptx md txt".to_string(),
+            extensions: vec![
+                "docx".to_string(), "doc".to_string(), "odt".to_string(),
+                "xlsx".to_string(), "pptx".to_string(), "md".to_string(), "txt".to_string(),
+            ],
+            min_size_bytes: None,
+            max_size_bytes: None,
+            is_builtin: true,
+        },
+        SmartFolder {
+            id: "smart-images".to_string(),
+            name: "Images & Screenshots".to_string(),
+            icon: "🖼️".to_string(),
+            description: "Photos, screenshots, and vector graphics".to_string(),
+            query: "png jpg jpeg webp bmp gif svg".to_string(),
+            extensions: vec![
+                "png".to_string(), "jpg".to_string(), "jpeg".to_string(),
+                "webp".to_string(), "bmp".to_string(), "gif".to_string(), "svg".to_string(),
+            ],
+            min_size_bytes: None,
+            max_size_bytes: None,
+            is_builtin: true,
+        },
+        SmartFolder {
+            id: "smart-archives".to_string(),
+            name: "Archives & Packages".to_string(),
+            icon: "📦".to_string(),
+            description: "ZIP, TAR, GZ, 7Z, and RAR compressed packages".to_string(),
+            query: "zip tar gz tgz 7z rar".to_string(),
+            extensions: vec![
+                "zip".to_string(), "tar".to_string(), "gz".to_string(),
+                "tgz".to_string(), "7z".to_string(), "rar".to_string(),
+            ],
+            min_size_bytes: None,
+            max_size_bytes: None,
+            is_builtin: true,
+        },
+        SmartFolder {
+            id: "smart-code".to_string(),
+            name: "Source Code & Scripts".to_string(),
+            icon: "💻".to_string(),
+            description: "Rust, TypeScript, Python, Go, C++, JSON, YAML source files".to_string(),
+            query: "rs ts js py go c cpp java json toml yaml".to_string(),
+            extensions: vec![
+                "rs".to_string(), "ts".to_string(), "js".to_string(), "py".to_string(),
+                "go".to_string(), "c".to_string(), "cpp".to_string(), "java".to_string(),
+                "json".to_string(), "toml".to_string(), "yaml".to_string(),
+            ],
+            min_size_bytes: None,
+            max_size_bytes: None,
+            is_builtin: true,
+        },
+        SmartFolder {
+            id: "smart-large".to_string(),
+            name: "Large Files (>100MB)".to_string(),
+            icon: "⚡".to_string(),
+            description: "High disk-consumption files over 100 MB".to_string(),
+            query: "*".to_string(),
+            extensions: vec![],
+            min_size_bytes: Some(100 * 1024 * 1024),
+            max_size_bytes: None,
+            is_builtin: true,
+        },
+        SmartFolder {
+            id: "smart-recent".to_string(),
+            name: "Recent Files (24 Hours)".to_string(),
+            icon: "🕒".to_string(),
+            description: "Files created or modified in the last 24 hours".to_string(),
+            query: "*".to_string(),
+            extensions: vec![],
+            min_size_bytes: None,
+            max_size_bytes: None,
+            is_builtin: true,
+        },
+    ]
+}
+
+/// Retrieve all built-in and user-saved Smart Virtual Folders
+pub fn get_smart_folders_cmd() -> Result<Vec<SmartFolder>, String> {
+    let mut list = BUILTIN_SMART_FOLDERS.get_or_init(get_builtin_smart_folders).clone();
+    let custom = CUSTOM_SMART_FOLDERS.get_or_init(|| Mutex::new(Vec::new()));
+    let customs = custom.lock().map_err(|e| e.to_string())?;
+    list.extend(customs.clone());
+    Ok(list)
+}
+
+/// Save a new or updated custom Smart Virtual Folder
+pub fn save_smart_folder_cmd(mut folder: SmartFolder) -> Result<SmartFolder, String> {
+    if folder.id.is_empty() {
+        folder.id = format!(
+            "custom-smart-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
+    }
+    folder.is_builtin = false;
+    let custom = CUSTOM_SMART_FOLDERS.get_or_init(|| Mutex::new(Vec::new()));
+    let mut customs = custom.lock().map_err(|e| e.to_string())?;
+    if let Some(pos) = customs.iter().position(|f| f.id == folder.id) {
+        customs[pos] = folder.clone();
+    } else {
+        customs.push(folder.clone());
+    }
+    Ok(folder)
+}
+
+/// Delete a custom Smart Virtual Folder by ID
+pub fn delete_smart_folder_cmd(id: String) -> Result<bool, String> {
+    let custom = CUSTOM_SMART_FOLDERS.get_or_init(|| Mutex::new(Vec::new()));
+    let mut customs = custom.lock().map_err(|e| e.to_string())?;
+    let orig_len = customs.len();
+    customs.retain(|f| f.id != id);
+    Ok(customs.len() < orig_len)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn find_matching_files_in_dir(
+    dir: &Path,
+    folder: &SmartFolder,
+    depth: usize,
+    max_depth: usize,
+    now_secs: u64,
+    results: &mut Vec<FileItem>,
+    seen: &mut std::collections::HashSet<PathBuf>,
+    limit: usize,
+) {
+    if depth > max_depth || results.len() >= limit {
+        return;
+    }
+    let read_dir = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return,
+    };
+
+    for entry in read_dir.flatten() {
+        if results.len() >= limit {
+            break;
+        }
+        let p = entry.path();
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        if meta.is_dir() {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !name.starts_with('.') && name != "node_modules" && name != "target" {
+                find_matching_files_in_dir(&p, folder, depth + 1, max_depth, now_secs, results, seen, limit);
+            }
+        } else {
+            let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase());
+            let ext_match = folder.extensions.is_empty()
+                || ext.as_ref().map(|e| folder.extensions.iter().any(|fe| fe.eq_ignore_ascii_case(e))).unwrap_or(false);
+            let min_match = folder.min_size_bytes.map(|min| meta.len() >= min).unwrap_or(true);
+            let max_match = folder.max_size_bytes.map(|max| meta.len() <= max).unwrap_or(true);
+
+            let mod_secs = meta
+                .modified()
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let recent_match = if folder.id == "smart-recent" {
+                now_secs.saturating_sub(mod_secs) <= 86400
+            } else {
+                true
+            };
+
+            if ext_match && min_match && max_match && recent_match && seen.insert(p.clone()) {
+                let file_name = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                results.push(FileItem {
+                    path: p,
+                    file_name,
+                    extension: ext,
+                    size_bytes: meta.len(),
+                    is_dir: false,
+                    modified_timestamp_secs: mod_secs,
+                    is_readonly: meta.permissions().readonly(),
+                });
+            }
+        }
+    }
+}
+
+/// Execute dynamic query for a Smart Virtual Folder across directory context and Tantivy index
+pub fn query_smart_folder_cmd(
+    id: String,
+    path_context: Option<String>,
+    limit: usize,
+) -> Result<Vec<FileItem>, String> {
+    let folders = get_smart_folders_cmd()?;
+    let folder = folders
+        .into_iter()
+        .find(|f| f.id == id)
+        .ok_or_else(|| format!("Smart folder not found: {}", id))?;
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let mut matches = Vec::new();
+    let mut seen_paths = std::collections::HashSet::new();
+
+    // 1. Scan directory context if specified
+    if let Some(ctx_str) = path_context {
+        let p = Path::new(&ctx_str);
+        if p.is_dir() {
+            find_matching_files_in_dir(p, &folder, 0, 3, now_secs, &mut matches, &mut seen_paths, limit);
+        }
+    }
+
+    // 2. Query Tantivy index
+    let service = get_service();
+    if let Ok(svc) = service.lock() {
+        for ext in &folder.extensions {
+            if let Ok(hits) = svc.search(ext, limit) {
+                for item in hits {
+                    if item.is_dir {
+                        continue;
+                    }
+                    let ext_match = item
+                        .extension
+                        .as_ref()
+                        .map(|e| e.eq_ignore_ascii_case(ext))
+                        .unwrap_or(false);
+                    let min_match = folder.min_size_bytes.map(|min| item.size_bytes >= min).unwrap_or(true);
+                    let max_match = folder.max_size_bytes.map(|max| item.size_bytes <= max).unwrap_or(true);
+                    if ext_match && min_match && max_match && seen_paths.insert(item.path.clone()) {
+                        matches.push(item);
+                        if matches.len() >= limit {
+                            break;
+                        }
+                    }
+                }
+            }
+            if matches.len() >= limit {
+                break;
+            }
+        }
+
+        if folder.extensions.is_empty() && matches.len() < limit {
+            if let Ok(hits) = svc.search(&folder.query, limit) {
+                for item in hits {
+                    if item.is_dir {
+                        continue;
+                    }
+                    let min_match = folder.min_size_bytes.map(|min| item.size_bytes >= min).unwrap_or(true);
+                    let max_match = folder.max_size_bytes.map(|max| item.size_bytes <= max).unwrap_or(true);
+                    let recent_match = if folder.id == "smart-recent" {
+                        now_secs.saturating_sub(item.modified_timestamp_secs) <= 86400
+                    } else {
+                        true
+                    };
+                    if min_match && max_match && recent_match && seen_paths.insert(item.path.clone()) {
+                        matches.push(item);
+                        if matches.len() >= limit {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    matches.sort_by_key(|b| std::cmp::Reverse(b.modified_timestamp_secs));
+    if matches.len() > limit {
+        matches.truncate(limit);
+    }
+
+    Ok(matches)
 }
 
 // ---------------------------------------------------------------------------
@@ -759,6 +1218,96 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let count = export_compliance_report_cmd(target_dir, output_path, format)?;
             Ok(json!({ "exported_findings": count }))
         }
+        "copy_files_cmd" => {
+            let sources: Vec<String> = args
+                .get("sources")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let destination_dir = resolve_valid_path(
+                args.get("destination_dir")
+                    .or_else(|| args.get("destinationDir"))
+                    .and_then(|v| v.as_str()),
+            );
+            let res = copy_files_cmd(sources, destination_dir)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "move_files_cmd" => {
+            let sources: Vec<String> = args
+                .get("sources")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let destination_dir = resolve_valid_path(
+                args.get("destination_dir")
+                    .or_else(|| args.get("destinationDir"))
+                    .and_then(|v| v.as_str()),
+            );
+            let res = move_files_cmd(sources, destination_dir)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "create_directory_cmd" => {
+            let parent_dir = resolve_valid_path(
+                args.get("parent_dir")
+                    .or_else(|| args.get("parentDir"))
+                    .and_then(|v| v.as_str()),
+            );
+            let dir_name = args
+                .get("dir_name")
+                .or_else(|| args.get("dirName"))
+                .or_else(|| args.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("New Folder")
+                .to_string();
+            let res = create_directory_cmd(parent_dir, dir_name)?;
+            Ok(json!({ "created_path": res }))
+        }
+        "get_smart_folders_cmd" => {
+            let res = get_smart_folders_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "save_smart_folder_cmd" => {
+            let folder_val = args
+                .get("folder")
+                .cloned()
+                .ok_or_else(|| "Missing folder argument".to_string())?;
+            let folder: SmartFolder = serde_json::from_value(folder_val).map_err(|e| e.to_string())?;
+            let res = save_smart_folder_cmd(folder)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "delete_smart_folder_cmd" => {
+            let id = args
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let res = delete_smart_folder_cmd(id)?;
+            Ok(json!({ "deleted": res }))
+        }
+        "query_smart_folder_cmd" => {
+            let id = args
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("smart-pdf")
+                .to_string();
+            let path_context = args
+                .get("path_context")
+                .or_else(|| args.get("pathContext"))
+                .or_else(|| args.get("path"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+            let res = query_smart_folder_cmd(id, path_context, limit)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
         _ => Err(format!("Unknown AI File Explorer IPC command: {}", cmd)),
     }
 }
@@ -946,5 +1495,101 @@ mod tests {
         let preview = get_file_preview_cmd(zip_str).expect("Preview should succeed");
         assert!(preview.is_archive);
         assert_eq!(preview.archive_entries.len(), 1);
+    }
+
+    #[test]
+    fn test_commands_commander_operations() {
+        let dir = tempdir().unwrap();
+        let src_dir = dir.path().join("src_folder");
+        let dst_dir = dir.path().join("dst_folder");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&dst_dir).unwrap();
+
+        let file1 = src_dir.join("item1.txt");
+        std::fs::write(&file1, b"commander copy test").unwrap();
+
+        let src_str = file1.to_string_lossy().to_string();
+        let dst_str = dst_dir.to_string_lossy().to_string();
+
+        // 1. Copy file
+        let copy_res = copy_files_cmd(vec![src_str.clone()], dst_str.clone()).unwrap();
+        assert_eq!(copy_res.copied_count, 1);
+        assert_eq!(copy_res.total_bytes, 19);
+        assert!(dst_dir.join("item1.txt").exists());
+        assert!(file1.exists());
+
+        // 2. Move file
+        let move_target = dst_dir.join("sub_target");
+        std::fs::create_dir_all(&move_target).unwrap();
+        let move_target_str = move_target.to_string_lossy().to_string();
+
+        let move_res = move_files_cmd(vec![src_str], move_target_str).unwrap();
+        assert_eq!(move_res.moved_count, 1);
+        assert!(!file1.exists());
+        assert!(move_target.join("item1.txt").exists());
+
+        // 3. Create directory
+        let created = create_directory_cmd(dst_str.clone(), "new_subfolder".to_string()).unwrap();
+        assert!(std::path::Path::new(&created).is_dir());
+
+        // 4. Test IPC dispatch
+        let ipc_copy_val = dispatch_ipc_command(
+            "copy_files_cmd",
+            serde_json::json!({
+                "sources": [dst_dir.join("item1.txt").to_string_lossy().to_string()],
+                "destination_dir": created,
+            }),
+        )
+        .unwrap();
+        assert_eq!(ipc_copy_val.get("copied_count").unwrap().as_u64().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_commands_smart_folders() {
+        let dir = tempdir().unwrap();
+        let dir_str = dir.path().to_string_lossy().to_string();
+
+        // Create mock PDF and doc files
+        let pdf_file = dir.path().join("manual.pdf");
+        std::fs::write(&pdf_file, b"%PDF-1.4 test pdf content").unwrap();
+
+        let code_file = dir.path().join("main.rs");
+        std::fs::write(&code_file, b"fn main() {}").unwrap();
+
+        // 1. Get built-in smart folders
+        let folders = get_smart_folders_cmd().unwrap();
+        assert!(folders.iter().any(|f| f.id == "smart-pdf"));
+        assert!(folders.iter().any(|f| f.id == "smart-code"));
+
+        // 2. Query smart-pdf with path context
+        let pdf_matches = query_smart_folder_cmd("smart-pdf".to_string(), Some(dir_str.clone()), 20).unwrap();
+        assert_eq!(pdf_matches.len(), 1);
+        assert_eq!(pdf_matches[0].file_name, "manual.pdf");
+
+        // 3. Query smart-code with path context
+        let code_matches = query_smart_folder_cmd("smart-code".to_string(), Some(dir_str), 20).unwrap();
+        assert_eq!(code_matches.len(), 1);
+        assert_eq!(code_matches[0].file_name, "main.rs");
+
+        // 4. Save and delete custom smart folder
+        let custom_folder = SmartFolder {
+            id: "".to_string(),
+            name: "My Custom Folder".to_string(),
+            icon: "⭐".to_string(),
+            description: "Custom test folder".to_string(),
+            query: "test".to_string(),
+            extensions: vec!["pdf".to_string()],
+            min_size_bytes: None,
+            max_size_bytes: None,
+            is_builtin: false,
+        };
+        let saved = save_smart_folder_cmd(custom_folder).unwrap();
+        assert!(!saved.id.is_empty());
+
+        let all_folders = get_smart_folders_cmd().unwrap();
+        assert!(all_folders.iter().any(|f| f.id == saved.id));
+
+        let deleted = delete_smart_folder_cmd(saved.id.clone()).unwrap();
+        assert!(deleted);
     }
 }

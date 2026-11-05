@@ -209,6 +209,29 @@ export interface ArchiveEntryInfo {
   is_dir: boolean;
 }
 
+export interface CopyFilesResult {
+  copied_count: number;
+  total_bytes: number;
+  failed_paths: string[];
+}
+
+export interface MoveFilesResult {
+  moved_count: number;
+  failed_paths: string[];
+}
+
+export interface SmartFolder {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  query: string;
+  extensions: string[];
+  min_size_bytes?: number | null;
+  max_size_bytes?: number | null;
+  is_builtin: boolean;
+}
+
 export interface FilePreviewData {
   path: string;
   file_name: string;

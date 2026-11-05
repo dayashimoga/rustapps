@@ -82,6 +82,14 @@ impl DesktopIpcHandler for ExplorerDesktopHandler {
                 command: "search_screenshots_by_text_cmd",
                 payload: json!({ "query": "error", "limit": 5 }),
             },
+            SelfTestCheck {
+                command: "get_smart_folders_cmd",
+                payload: json!({}),
+            },
+            SelfTestCheck {
+                command: "query_smart_folder_cmd",
+                payload: json!({ "id": "smart-pdf", "path_context": cwd, "limit": 10 }),
+            },
         ]
     }
 }

@@ -5,6 +5,8 @@
   export let searchQuery: string;
   export let activeTab: ActiveTab;
   export let showStatsDrawer: boolean;
+  export let isDualPaneMode: boolean = false;
+  export let onToggleDualPane: () => void = () => {};
   export let onNavigate: (path: string) => void;
   export let onSearch: (query: string) => void;
   export let onRefresh: () => void;
@@ -140,6 +142,18 @@
       </button>
     </div>
 
+
+    <button
+      class="btn btn-secondary commander-toggle-btn {isDualPaneMode ? 'active' : ''}"
+      on:click={onToggleDualPane}
+      title="Toggle Dual-Pane Commander Mode (Ctrl+D)"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="8" height="18" rx="1"></rect>
+        <rect x="13" y="3" width="8" height="18" rx="1"></rect>
+      </svg>
+      Commander
+    </button>
 
     <button
       class="btn btn-secondary stats-btn"
@@ -324,8 +338,19 @@
     font-weight: 600;
   }
 
-  .stats-btn {
+  .stats-btn, .commander-toggle-btn {
     padding: 6px 12px;
     font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .commander-toggle-btn.active {
+    background: rgba(6, 182, 212, 0.22);
+    border-color: rgba(6, 182, 212, 0.6);
+    color: var(--accent-cyan);
+    font-weight: 700;
+    box-shadow: 0 0 10px rgba(6, 182, 212, 0.2);
   }
 </style>

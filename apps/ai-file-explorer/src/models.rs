@@ -94,6 +94,35 @@ pub struct DeleteFilesResult {
     pub failed_paths: Vec<String>,
 }
 
+/// Result of copying files between locations (e.g. Dual-Pane Commander Mode)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CopyFilesResult {
+    pub copied_count: usize,
+    pub total_bytes: u64,
+    pub failed_paths: Vec<String>,
+}
+
+/// Result of moving files between locations
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MoveFilesResult {
+    pub moved_count: usize,
+    pub failed_paths: Vec<String>,
+}
+
+/// Dynamic Smart Virtual Folder query definition
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SmartFolder {
+    pub id: String,
+    pub name: String,
+    pub icon: String,
+    pub description: String,
+    pub query: String,
+    pub extensions: Vec<String>,
+    pub min_size_bytes: Option<u64>,
+    pub max_size_bytes: Option<u64>,
+    pub is_builtin: bool,
+}
+
 /// Bounding rectangle for treemap rendering
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TreemapRect {

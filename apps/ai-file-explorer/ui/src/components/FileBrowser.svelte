@@ -12,6 +12,9 @@
   export let onSelectItem: (item: FileItem | null) => void = () => {};
   export let onInspectFile: (filePath: string) => void = () => {};
   export let onOpenInOs: (path: string) => void = () => {};
+  export let paneTitle: string = '';
+  export let isActivePane: boolean = true;
+  export let onActivatePane: () => void = () => {};
 
   let sortColumn: 'name' | 'type' | 'size' | 'modified' = 'name';
   let sortAsc = true;
@@ -76,7 +79,17 @@
   }
 </script>
 
-<div class="browser-container glass-panel">
+<!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+<div
+  class="browser-container glass-panel {isActivePane ? 'active-pane' : ''}"
+  on:click={onActivatePane}
+>
+  {#if paneTitle}
+    <div class="pane-header-strip {isActivePane ? 'active-strip' : ''}">
+      <span class="pane-title-badge">{paneTitle}</span>
+      <span class="pane-active-indicator">{isActivePane ? '● ACTIVE (Ready)' : '○ Inactive (Click to Focus)'}</span>
+    </div>
+  {/if}
   <!-- Selection Bar -->
   <div class="selection-bar">
     <div class="selection-info">
@@ -414,5 +427,42 @@
   .mini-action-btn.secondary:hover {
     color: var(--text-main);
     background: rgba(255, 255, 255, 0.12);
+  }
+
+  .browser-container.active-pane {
+    border-color: rgba(6, 182, 212, 0.55);
+    box-shadow: 0 0 16px rgba(6, 182, 212, 0.12);
+  }
+
+  .pane-header-strip {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 14px;
+    background: rgba(15, 23, 42, 0.65);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .pane-header-strip.active-strip {
+    background: rgba(6, 182, 212, 0.12);
+    border-bottom-color: rgba(6, 182, 212, 0.35);
+  }
+
+  .pane-title-badge {
+    color: var(--accent-cyan);
+  }
+
+  .pane-active-indicator {
+    color: var(--text-faint);
+    font-size: 10px;
+  }
+
+  .pane-header-strip.active-strip .pane-active-indicator {
+    color: var(--accent-cyan);
+    font-weight: 800;
   }
 </style>

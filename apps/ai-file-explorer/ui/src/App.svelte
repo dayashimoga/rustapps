@@ -18,6 +18,7 @@
     BatchRenameResult,
     BatchRenameRule,
     ComplianceScanSummary,
+    CopyFilesResult,
     DeduplicationSummary,
     DeleteFilesResult,
     DirectoryListing,
@@ -25,10 +26,12 @@
     FileItem,
     FolderStats,
     FsLocationEntry,
+    MoveFilesResult,
     RenamePreview,
     ScreenshotFingerprint,
     ScreenshotSearchResult,
     SensitiveFinding,
+    SmartFolder,
     TreemapNode,
   } from './types';
 
@@ -39,6 +42,28 @@
   let showStatsDrawer = false;
   let navError = '';
   let previewItem: FileItem | null = null;
+
+  // Dual-Pane Commander Mode State
+  let isDualPaneMode = false;
+  let activePane: 'left' | 'right' = 'left';
+  let rightPath = 'H:\\rustapps';
+  let rightFolderItems: FileItem[] = [];
+  let rightListing: DirectoryListing = {
+    current_path: rightPath,
+    parent_path: null,
+    items: [],
+    total_count: 0,
+    total_size_bytes: 0,
+  };
+  let rightSelectedPaths: string[] = [];
+  let rightPreviewItem: FileItem | null = null;
+  let commanderFeedback = '';
+
+  // Smart Virtual Folders State
+  let smartFolders: SmartFolder[] = [];
+  let activeSmartFolder: SmartFolder | null = null;
+  let isSmartFolderMode = false;
+  let isLoadingSmartFolder = false;
 
   // Drives & Quick Access Places
   let drivesAndPlaces: FsLocationEntry[] = [];
@@ -239,9 +264,16 @@
     if (isCtrl && e.key.toLowerCase() === 'o') {
       e.preventDefault();
       handleBrowseFolder();
+    } else if (isCtrl && e.key.toLowerCase() === 'd') {
+      e.preventDefault();
+      isDualPaneMode = !isDualPaneMode;
+      if (isDualPaneMode && rightFolderItems.length === 0) {
+        loadRightDirectory(currentPath);
+      }
     } else if (isCtrl && e.key.toLowerCase() === 'r') {
       e.preventDefault();
       loadDirectory(currentPath);
+      if (isDualPaneMode) loadRightDirectory(rightPath);
     } else if (isCtrl && e.key.toLowerCase() === 's') {
       e.preventDefault();
       showStatsDrawer = !showStatsDrawer;
@@ -250,6 +282,21 @@
       const tabs: ActiveTab[] = ['browser', 'content_search', 'screenshots', 'duplicates', 'treemap', 'batch_rename', 'compliance'];
       const targetTab = tabs[parseInt(e.key, 10) - 1];
       if (targetTab) activeTab = targetTab;
+    } else if (isDualPaneMode && e.key === 'Tab') {
+      e.preventDefault();
+      activePane = activePane === 'left' ? 'right' : 'left';
+    } else if (isDualPaneMode && e.key === 'F5') {
+      e.preventDefault();
+      handleCommanderCopy();
+    } else if (isDualPaneMode && e.key === 'F6') {
+      e.preventDefault();
+      handleCommanderMove();
+    } else if (isDualPaneMode && e.key === 'F7') {
+      e.preventDefault();
+      handleCommanderNewFolder();
+    } else if (isDualPaneMode && e.key === 'F8') {
+      e.preventDefault();
+      handleCommanderDelete();
     } else if ((e.altKey && e.key === 'ArrowUp') || e.key === 'Backspace') {
       e.preventDefault();
       handleNavigateUp();
@@ -323,6 +370,158 @@
       navError = err instanceof Error ? err.message : String(err);
       console.error('Failed to list directory:', err);
     }
+  }
+
+  async function loadRightDirectory(path: string) {
+    try {
+      const result = await invokeTauri<DirectoryListing>('list_directory_cmd', { path });
+      rightListing = result;
+      rightFolderItems = result.items || [];
+      if (result && result.current_path) {
+        rightPath = result.current_path;
+      } else {
+        rightPath = path;
+      }
+      rightSelectedPaths = [];
+    } catch (err) {
+      console.error('Failed to list right directory:', err);
+    }
+  }
+
+  async function handleCommanderCopy() {
+    commanderFeedback = '';
+    const srcPaths = activePane === 'left' ? selectedPaths : rightSelectedPaths;
+    const destDir = activePane === 'left' ? rightPath : currentPath;
+
+    if (srcPaths.length === 0) {
+      commanderFeedback = 'No files selected to copy. Select files in the active pane first.';
+      return;
+    }
+
+    try {
+      const res = await invokeTauri<CopyFilesResult>('copy_files_cmd', {
+        sources: srcPaths,
+        destination_dir: destDir,
+      });
+      commanderFeedback = `Copied ${res.copied_count} item(s) (${(res.total_bytes / 1024).toFixed(1)} KB) to ${destDir}`;
+      await loadDirectory(currentPath);
+      await loadRightDirectory(rightPath);
+    } catch (err) {
+      commanderFeedback = `Copy failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  async function handleCommanderMove() {
+    commanderFeedback = '';
+    const srcPaths = activePane === 'left' ? selectedPaths : rightSelectedPaths;
+    const destDir = activePane === 'left' ? rightPath : currentPath;
+
+    if (srcPaths.length === 0) {
+      commanderFeedback = 'No files selected to move. Select files in the active pane first.';
+      return;
+    }
+
+    try {
+      const res = await invokeTauri<MoveFilesResult>('move_files_cmd', {
+        sources: srcPaths,
+        destination_dir: destDir,
+      });
+      commanderFeedback = `Moved ${res.moved_count} item(s) to ${destDir}`;
+      if (activePane === 'left') selectedPaths = [];
+      else rightSelectedPaths = [];
+      await loadDirectory(currentPath);
+      await loadRightDirectory(rightPath);
+    } catch (err) {
+      commanderFeedback = `Move failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  async function handleCommanderNewFolder() {
+    const parentDir = activePane === 'left' ? currentPath : rightPath;
+    const folderName = prompt('Enter new folder name:', 'New Folder');
+    if (!folderName || !folderName.trim()) return;
+
+    try {
+      await invokeTauri<string>('create_directory_cmd', {
+        parent_dir: parentDir,
+        dir_name: folderName.trim(),
+      });
+      if (activePane === 'left') await loadDirectory(currentPath);
+      else await loadRightDirectory(rightPath);
+      commanderFeedback = `Created folder "${folderName.trim()}"`;
+    } catch (err) {
+      commanderFeedback = `Create folder failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  async function handleCommanderDelete() {
+    const srcPaths = activePane === 'left' ? selectedPaths : rightSelectedPaths;
+    if (srcPaths.length === 0) {
+      commanderFeedback = 'No files selected to delete in active pane.';
+      return;
+    }
+
+    const confirmed = confirm(`Are you sure you want to permanently delete ${srcPaths.length} selected item(s)?`);
+    if (!confirmed) return;
+
+    try {
+      const res = await invokeTauri<DeleteFilesResult>('delete_files_cmd', {
+        paths: srcPaths,
+      });
+      commanderFeedback = `Deleted ${res.deleted_count} item(s)`;
+      if (activePane === 'left') {
+        selectedPaths = [];
+        await loadDirectory(currentPath);
+      } else {
+        rightSelectedPaths = [];
+        await loadRightDirectory(rightPath);
+      }
+    } catch (err) {
+      commanderFeedback = `Delete failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  async function loadSmartFolders() {
+    try {
+      smartFolders = await invokeTauri<SmartFolder[]>('get_smart_folders_cmd');
+    } catch (err) {
+      console.error('Failed to load smart folders:', err);
+    }
+  }
+
+  async function selectSmartFolder(folder: SmartFolder) {
+    activeSmartFolder = folder;
+    isSmartFolderMode = true;
+    isLoadingSmartFolder = true;
+    navError = '';
+    activeTab = 'browser';
+    try {
+      const results = await invokeTauri<FileItem[]>('query_smart_folder_cmd', {
+        id: folder.id,
+        path_context: currentPath,
+        limit: 250,
+      });
+      currentFolderItems = results || [];
+      listing = {
+        current_path: `Smart: ${folder.name}`,
+        parent_path: null,
+        items: results,
+        total_count: results.length,
+        total_size_bytes: results.reduce((acc, it) => acc + it.size_bytes, 0),
+      };
+      selectedPaths = [];
+      previewItem = null;
+    } catch (err) {
+      navError = `Smart folder query failed: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      isLoadingSmartFolder = false;
+    }
+  }
+
+  function exitSmartFolderMode() {
+    isSmartFolderMode = false;
+    activeSmartFolder = null;
+    loadDirectory(currentPath);
   }
 
   $: if (showStatsDrawer && currentPath && (!folderStats || folderStats.root_path !== currentPath)) {
@@ -525,7 +724,9 @@
 
   onMount(async () => {
     await loadDrivesAndPlaces();
+    await loadSmartFolders();
     await loadDirectory(currentPath);
+    await loadRightDirectory(currentPath);
   });
 
   $: driveEntries = drivesAndPlaces.filter((e) => e.kind === 'drive');
@@ -539,9 +740,19 @@
     {searchQuery}
     bind:activeTab
     bind:showStatsDrawer
+    bind:isDualPaneMode
+    onToggleDualPane={() => {
+      isDualPaneMode = !isDualPaneMode;
+      if (isDualPaneMode && rightFolderItems.length === 0) {
+        loadRightDirectory(currentPath);
+      }
+    }}
     onNavigate={loadDirectory}
     onSearch={handleSearch}
-    onRefresh={() => loadDirectory(currentPath)}
+    onRefresh={() => {
+      loadDirectory(currentPath);
+      if (isDualPaneMode) loadRightDirectory(rightPath);
+    }}
     onNavigateUp={handleNavigateUp}
     onBrowseFolder={handleBrowseFolder}
   />
@@ -563,8 +774,11 @@
         </div>
         {#each driveEntries as drv (drv.path)}
           <button
-            class="place-item {currentPath.toLowerCase().startsWith(drv.path.toLowerCase()) ? 'active' : ''}"
-            on:click={() => loadDirectory(drv.path)}
+            class="place-item {!isSmartFolderMode && currentPath.toLowerCase().startsWith(drv.path.toLowerCase()) ? 'active' : ''}"
+            on:click={() => {
+              isSmartFolderMode = false;
+              loadDirectory(drv.path);
+            }}
             title={drv.path}
           >
             <span class="place-icon">💽</span>
@@ -573,12 +787,35 @@
         {/each}
       </div>
 
+      <!-- Smart Virtual Folders -->
+      <div class="sidebar-group">
+        <div class="sidebar-title-row">
+          <span class="sidebar-title">Smart Folders</span>
+          {#if isSmartFolderMode}
+            <button class="sidebar-clear-btn" on:click={exitSmartFolderMode} title="Return to normal view">✕ Normal</button>
+          {/if}
+        </div>
+        {#each smartFolders as sf (sf.id)}
+          <button
+            class="place-item smart-folder-item {isSmartFolderMode && activeSmartFolder?.id === sf.id ? 'active-smart' : ''}"
+            on:click={() => selectSmartFolder(sf)}
+            title="{sf.name}: {sf.description}"
+          >
+            <span class="place-icon">{sf.icon}</span>
+            <span class="place-label">{sf.name}</span>
+          </button>
+        {/each}
+      </div>
+
       <div class="sidebar-group">
         <span class="sidebar-title">Quick Access</span>
         {#each quickAccessEntries as place (place.path)}
           <button
-            class="place-item {currentPath.toLowerCase() === place.path.toLowerCase() ? 'active' : ''}"
-            on:click={() => loadDirectory(place.path)}
+            class="place-item {!isSmartFolderMode && currentPath.toLowerCase() === place.path.toLowerCase() ? 'active' : ''}"
+            on:click={() => {
+              isSmartFolderMode = false;
+              loadDirectory(place.path);
+            }}
             title={place.path}
           >
             <span class="place-icon">📁</span>
@@ -605,37 +842,167 @@
     </aside>
 
     <div class="main-content-view">
+      {#if isSmartFolderMode && activeSmartFolder}
+        <div class="smart-folder-banner glass-panel">
+          <div class="smart-banner-info">
+            <span class="smart-banner-icon">{activeSmartFolder.icon}</span>
+            <div>
+              <div class="smart-banner-title">Smart Virtual Folder: {activeSmartFolder.name}</div>
+              <div class="smart-banner-desc">{activeSmartFolder.description} • {listing.total_count} matching files</div>
+            </div>
+          </div>
+          <button class="btn btn-secondary smart-exit-btn" on:click={exitSmartFolderMode}>
+            Back to Directory
+          </button>
+        </div>
+      {/if}
+
       <!-- Active Tab View Surface -->
       {#if activeTab === 'browser'}
-        <div class="browser-split-layout">
-          <FileBrowser
-            items={listing.items}
-            {selectedPaths}
-            selectedItem={previewItem}
-            onSelectItem={(item) => (previewItem = item)}
-            onNavigateToFolder={(p) => {
-              previewItem = null;
-              loadDirectory(p);
-            }}
-            onNavigateUp={() => {
-              previewItem = null;
-              handleNavigateUp();
-            }}
-            onToggleSelect={handleToggleSelect}
-            onSelectAll={handleSelectAll}
-            onDeselectAll={handleDeselectAll}
-            onInspectFile={handleInspectDoc}
-            onOpenInOs={handleOpenInOs}
-          />
-          {#if previewItem}
-            <FilePreviewPane
-              item={previewItem}
-              onClose={() => (previewItem = null)}
+        {#if isDualPaneMode}
+          <!-- Dual-Pane Commander View -->
+          <div class="commander-container">
+            <div class="commander-panes">
+              <!-- Left Pane -->
+              <div class="commander-pane {activePane === 'left' ? 'pane-active' : ''}">
+                <div class="pane-path-bar">
+                  <span class="pane-tag">L:</span>
+                  <input
+                    type="text"
+                    class="pane-path-input"
+                    value={currentPath}
+                    on:change={(e) => loadDirectory(e.currentTarget.value)}
+                  />
+                  <button class="icon-btn-sm" on:click={handleNavigateUp} title="Up">⬆</button>
+                  <button class="icon-btn-sm" on:click={() => loadDirectory(currentPath)} title="Refresh">↻</button>
+                </div>
+                <FileBrowser
+                  paneTitle="Left Pane"
+                  isActivePane={activePane === 'left'}
+                  onActivatePane={() => (activePane = 'left')}
+                  items={listing.items}
+                  {selectedPaths}
+                  selectedItem={previewItem}
+                  onSelectItem={(item) => (previewItem = item)}
+                  onNavigateToFolder={(p) => {
+                    previewItem = null;
+                    loadDirectory(p);
+                  }}
+                  onNavigateUp={() => {
+                    previewItem = null;
+                    handleNavigateUp();
+                  }}
+                  onToggleSelect={handleToggleSelect}
+                  onSelectAll={handleSelectAll}
+                  onDeselectAll={handleDeselectAll}
+                  onInspectFile={handleInspectDoc}
+                  onOpenInOs={handleOpenInOs}
+                />
+              </div>
+
+              <!-- Right Pane -->
+              <div class="commander-pane {activePane === 'right' ? 'pane-active' : ''}">
+                <div class="pane-path-bar">
+                  <span class="pane-tag">R:</span>
+                  <input
+                    type="text"
+                    class="pane-path-input"
+                    value={rightPath}
+                    on:change={(e) => loadRightDirectory(e.currentTarget.value)}
+                  />
+                  <button class="icon-btn-sm" on:click={() => {
+                    if (rightListing.parent_path) loadRightDirectory(rightListing.parent_path);
+                  }} title="Up">⬆</button>
+                  <button class="icon-btn-sm" on:click={() => loadRightDirectory(rightPath)} title="Refresh">↻</button>
+                </div>
+                <FileBrowser
+                  paneTitle="Right Pane"
+                  isActivePane={activePane === 'right'}
+                  onActivatePane={() => (activePane = 'right')}
+                  items={rightListing.items}
+                  selectedPaths={rightSelectedPaths}
+                  selectedItem={rightPreviewItem}
+                  onSelectItem={(item) => (rightPreviewItem = item)}
+                  onNavigateToFolder={(p) => {
+                    rightPreviewItem = null;
+                    loadRightDirectory(p);
+                  }}
+                  onNavigateUp={() => {
+                    rightPreviewItem = null;
+                    if (rightListing.parent_path) loadRightDirectory(rightListing.parent_path);
+                  }}
+                  onToggleSelect={(p) => {
+                    if (rightSelectedPaths.includes(p)) {
+                      rightSelectedPaths = rightSelectedPaths.filter(x => x !== p);
+                    } else {
+                      rightSelectedPaths = [...rightSelectedPaths, p];
+                    }
+                  }}
+                  onSelectAll={() => {
+                    rightSelectedPaths = rightListing.items.map(i => i.path);
+                  }}
+                  onDeselectAll={() => {
+                    rightSelectedPaths = [];
+                  }}
+                  onInspectFile={handleInspectDoc}
+                  onOpenInOs={handleOpenInOs}
+                />
+              </div>
+            </div>
+
+            <!-- Commander Function Keys Footer -->
+            <div class="commander-footer glass-panel">
+              <button class="commander-fn-btn" on:click={() => (activePane = activePane === 'left' ? 'right' : 'left')}>
+                <kbd>Tab</kbd> Switch Pane
+              </button>
+              <button class="commander-fn-btn copy-btn" on:click={handleCommanderCopy}>
+                <kbd>F5</kbd> Copy to {activePane === 'left' ? 'Right' : 'Left'}
+              </button>
+              <button class="commander-fn-btn move-btn" on:click={handleCommanderMove}>
+                <kbd>F6</kbd> Move to {activePane === 'left' ? 'Right' : 'Left'}
+              </button>
+              <button class="commander-fn-btn newdir-btn" on:click={handleCommanderNewFolder}>
+                <kbd>F7</kbd> New Folder
+              </button>
+              <button class="commander-fn-btn del-btn" on:click={handleCommanderDelete}>
+                <kbd>F8</kbd> Delete
+              </button>
+              {#if commanderFeedback}
+                <span class="commander-feedback-pill">{commanderFeedback}</span>
+              {/if}
+            </div>
+          </div>
+        {:else}
+          <div class="browser-split-layout">
+            <FileBrowser
+              items={listing.items}
+              {selectedPaths}
+              selectedItem={previewItem}
+              onSelectItem={(item) => (previewItem = item)}
+              onNavigateToFolder={(p) => {
+                previewItem = null;
+                loadDirectory(p);
+              }}
+              onNavigateUp={() => {
+                previewItem = null;
+                handleNavigateUp();
+              }}
+              onToggleSelect={handleToggleSelect}
+              onSelectAll={handleSelectAll}
+              onDeselectAll={handleDeselectAll}
+              onInspectFile={handleInspectDoc}
               onOpenInOs={handleOpenInOs}
-              onInspectDoc={handleInspectDoc}
             />
-          {/if}
-        </div>
+            {#if previewItem}
+              <FilePreviewPane
+                item={previewItem}
+                onClose={() => (previewItem = null)}
+                onOpenInOs={handleOpenInOs}
+                onInspectDoc={handleInspectDoc}
+              />
+            {/if}
+          </div>
+        {/if}
       {:else if activeTab === 'content_search'}
         <ContentSearch
           onInspectDoc={handleInspectDoc}
@@ -878,5 +1245,177 @@
     overflow: hidden;
     gap: 12px;
     height: 100%;
+  }
+
+  /* Smart Folders */
+  .smart-folder-item {
+    transition: all 0.15s ease;
+  }
+  .smart-folder-item.active-smart {
+    background: rgba(6, 182, 212, 0.22);
+    border: 1px solid rgba(6, 182, 212, 0.55);
+    color: var(--accent-cyan);
+    font-weight: 700;
+  }
+  .sidebar-clear-btn {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #ef4444;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .smart-folder-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    margin-bottom: 12px;
+    border-left: 3px solid var(--accent-cyan);
+    background: rgba(6, 182, 212, 0.08);
+  }
+  .smart-banner-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .smart-banner-icon {
+    font-size: 24px;
+  }
+  .smart-banner-title {
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--text-main);
+  }
+  .smart-banner-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .smart-exit-btn {
+    font-size: 11px;
+    padding: 4px 10px;
+  }
+
+  /* Commander Dual-Pane */
+  .commander-container {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+    height: 100%;
+    gap: 8px;
+  }
+  .commander-panes {
+    display: flex;
+    flex: 1;
+    gap: 12px;
+    overflow: hidden;
+  }
+  .commander-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow: hidden;
+    border-radius: var(--radius-md);
+    transition: all 0.2s ease;
+  }
+  .commander-pane.pane-active {
+    box-shadow: 0 0 14px rgba(6, 182, 212, 0.18);
+  }
+  .pane-path-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid var(--border-subtle);
+    padding: 4px 8px;
+    border-radius: 6px;
+  }
+  .pane-tag {
+    font-weight: 800;
+    font-size: 12px;
+    color: var(--accent-cyan);
+  }
+  .pane-path-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text-main);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    outline: none;
+  }
+  .icon-btn-sm {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text-main);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .icon-btn-sm:hover {
+    background: rgba(255, 255, 255, 0.15);
+  }
+  .commander-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: var(--radius-md);
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  .commander-fn-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: var(--text-main);
+    border-radius: 5px;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.15s ease;
+  }
+  .commander-fn-btn kbd {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-size: 10px;
+    color: var(--accent-cyan);
+  }
+  .commander-fn-btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+  }
+  .commander-fn-btn.copy-btn:hover {
+    border-color: var(--accent-cyan);
+    color: var(--accent-cyan);
+  }
+  .commander-fn-btn.move-btn:hover {
+    border-color: #3b82f6;
+    color: #3b82f6;
+  }
+  .commander-fn-btn.newdir-btn:hover {
+    border-color: #10b981;
+    color: #10b981;
+  }
+  .commander-fn-btn.del-btn:hover {
+    border-color: #ef4444;
+    color: #ef4444;
+  }
+  .commander-feedback-pill {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--accent-cyan);
+    font-family: var(--font-mono);
+    background: rgba(6, 182, 212, 0.12);
+    padding: 3px 8px;
+    border-radius: 4px;
   }
 </style>
