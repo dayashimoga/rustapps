@@ -2,8 +2,8 @@
 //! DevOps Secret Vault - Tauri Desktop IPC Command Handlers
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use shared_licensing::{AppId, LicenseStatusReport, LicensingManager};
+use std::sync::Arc;
 
 static LICENSING: std::sync::OnceLock<LicensingManager> = std::sync::OnceLock::new();
 
@@ -1222,7 +1222,11 @@ stringData:
     #[test]
     fn test_licensing_ipc_commands() {
         let status_val = dispatch_ipc_command("get_license_status", serde_json::json!({})).unwrap();
-        assert!(status_val["tier"] == "Free" || status_val["tier"] == "Premium" || status_val["tier"] == "Business");
+        assert!(
+            status_val["tier"] == "Free"
+                || status_val["tier"] == "Premium"
+                || status_val["tier"] == "Business"
+        );
 
         let auth = shared_licensing::LicenseAuthority::official();
         let cert = auth.sign_license(shared_licensing::LicenseParameters {
@@ -1238,7 +1242,11 @@ stringData:
         });
         let cert_json = serde_json::to_string(&cert).unwrap();
 
-        let act_val = dispatch_ipc_command("activate_license", serde_json::json!({ "license_json": cert_json })).unwrap();
+        let act_val = dispatch_ipc_command(
+            "activate_license",
+            serde_json::json!({ "license_json": cert_json }),
+        )
+        .unwrap();
         assert_eq!(act_val["tier"], "Business");
         assert_eq!(act_val["is_active"], true);
         assert_eq!(act_val["licensee_name"], "DevOps Engineer");
@@ -1246,7 +1254,11 @@ stringData:
         let mut forged_cert = cert.clone();
         forged_cert.licensee_name = "Intruder".to_string();
         let forged_json = serde_json::to_string(&forged_cert).unwrap();
-        let err = dispatch_ipc_command("activate_license", serde_json::json!({ "license_json": forged_json })).unwrap_err();
+        let err = dispatch_ipc_command(
+            "activate_license",
+            serde_json::json!({ "license_json": forged_json }),
+        )
+        .unwrap_err();
         assert!(err.contains("signature") || err.contains("InvalidSignature"));
     }
 }

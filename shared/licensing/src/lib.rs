@@ -587,7 +587,9 @@ mod tests {
             max_seats: 10,
             features: vec!["all".to_string()],
         });
-        assert!(verifier.verify(&cert, AppId::AiFileExplorer, 1750000000).is_ok());
+        assert!(verifier
+            .verify(&cert, AppId::AiFileExplorer, 1750000000)
+            .is_ok());
     }
 
     #[test]
@@ -607,23 +609,31 @@ mod tests {
 
         // 1. Verify genuine license succeeds
         let verifier = LicenseVerifier::official();
-        assert!(verifier.verify(&cert, AppId::DevopsSecretVault, 1750000000).is_ok());
+        assert!(verifier
+            .verify(&cert, AppId::DevopsSecretVault, 1750000000)
+            .is_ok());
 
         // 2. Tampering with tier from Premium to Business must fail
         cert.tier = LicenseTier::Business;
-        let err = verifier.verify(&cert, AppId::DevopsSecretVault, 1750000000).unwrap_err();
+        let err = verifier
+            .verify(&cert, AppId::DevopsSecretVault, 1750000000)
+            .unwrap_err();
         assert!(matches!(err, LicensingError::InvalidSignature(_)));
 
         // 3. Tampering with licensee name must fail
         cert.tier = LicenseTier::Premium;
         cert.licensee_name = "Attacker".to_string();
-        let err = verifier.verify(&cert, AppId::DevopsSecretVault, 1750000000).unwrap_err();
+        let err = verifier
+            .verify(&cert, AppId::DevopsSecretVault, 1750000000)
+            .unwrap_err();
         assert!(matches!(err, LicensingError::InvalidSignature(_)));
 
         // 4. Corrupting signature hex must fail
         cert.licensee_name = "Genuine Buyer".to_string();
         cert.signature_hex = "00".repeat(64);
-        let err = verifier.verify(&cert, AppId::DevopsSecretVault, 1750000000).unwrap_err();
+        let err = verifier
+            .verify(&cert, AppId::DevopsSecretVault, 1750000000)
+            .unwrap_err();
         assert!(matches!(err, LicensingError::InvalidSignature(_)));
     }
 
@@ -643,7 +653,8 @@ mod tests {
         });
 
         let json = serde_json::to_string(&cert).unwrap();
-        let verified = verify_license_json(&json, AppId::ProAvEditor).expect("JSON verification must succeed");
+        let verified =
+            verify_license_json(&json, AppId::ProAvEditor).expect("JSON verification must succeed");
         assert_eq!(verified.tier, LicenseTier::Business);
         assert_eq!(verified.licensee_name, "Alice Developer");
 

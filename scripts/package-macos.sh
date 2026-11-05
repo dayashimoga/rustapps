@@ -77,6 +77,12 @@ for app in "${APPS[@]}"; do
 </dict>
 </plist>
 EOF
+
+    # Generate CycloneDX SBOM for the application
+    if [ -f "scripts/generate-sbom.sh" ]; then
+        bash scripts/generate-sbom.sh "${app}" "${OUTPUT_DIR}" || true
+        [ -f "${OUTPUT_DIR}/${app}-sbom.json" ] && cp "${OUTPUT_DIR}/${app}-sbom.json" "${resources_dir}/"
+    fi
     echo "  -> Created macOS bundle: ${app_bundle}"
 done
 
@@ -105,8 +111,8 @@ done
 # 4. Compute Checksums
 echo "[4/4] Computing SHA-256 cryptographic checksums..."
 cd "${OUTPUT_DIR}"
-for file in *.dmg *.tar.gz; do
-    if [ -f "${file}" ]; then
+for file in *.dmg *.tar.gz *.pkg *-sbom.json; do
+    if [ -f "${file}" ] && [ "${file##*.}" != "sha256" ]; then
         if command -v sha256sum &>/dev/null; then
             sha256sum "${file}" > "${file}.sha256"
         elif command -v shasum &>/dev/null; then

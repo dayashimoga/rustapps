@@ -1276,8 +1276,14 @@ mod integration_tests {
         // 2. devops-secret-vault: 100% offline AES-256-GCM, Argon2id, Shamir secret sharing
         let dsv_db = temp.path().join("dsv_airgap.db");
         let dsv_storage = vault_core::storage::VaultStorage::open(&dsv_db).unwrap();
-        let dsv_service = vault_core::service::VaultService::new(dsv_storage, Some(shared_encryption::Argon2Params::fast_for_tests()));
-        dsv_service.initialize("AirGapMasterPassword2026!#").await.unwrap();
+        let dsv_service = vault_core::service::VaultService::new(
+            dsv_storage,
+            Some(shared_encryption::Argon2Params::fast_for_tests()),
+        );
+        dsv_service
+            .initialize("AirGapMasterPassword2026!#")
+            .await
+            .unwrap();
         assert!(!dsv_service.is_locked().await);
         let auth = shared_licensing::LicenseAuthority::official();
         let cert = auth.sign_license(shared_licensing::LicenseParameters {
@@ -1292,32 +1298,55 @@ mod integration_tests {
             features: vec!["all_features".to_string()],
         });
         let verifier = shared_licensing::LicenseVerifier::official();
-        let verified_lic = verifier.verify(&cert, shared_licensing::AppId::DevopsSecretVault, 1700000001).unwrap();
+        let verified_lic = verifier
+            .verify(
+                &cert,
+                shared_licensing::AppId::DevopsSecretVault,
+                1700000001,
+            )
+            .unwrap();
         let tier_gate = shared_licensing::TierGate::new(Some(verified_lic));
-        let shares = dsv_service.split_master_key(3, 5, &tier_gate).await.unwrap();
+        let shares = dsv_service
+            .split_master_key(3, 5, &tier_gate)
+            .await
+            .unwrap();
         assert_eq!(shares.len(), 5);
 
         // 3. universal-log-viewer: 100% offline memory-mapped log ingestion, regex search, PII redaction
         let log_file = temp.path().join("airgap_app.log");
         std::fs::write(&log_file, "2026-11-05T00:00:00Z [INFO] Service started offline\n2026-11-05T00:00:01Z [ERROR] Failed to find route\n").unwrap();
-        let ws_store = std::sync::Arc::new(universal_log_viewer::WorkspaceStore::open_in_memory().unwrap());
-        let ulv_service = universal_log_viewer::LogViewerService::new(ws_store, shared_telemetry::LocalTelemetry::new(true));
-        let ulv_info = ulv_service.open_file(log_file.to_str().unwrap()).await.unwrap();
+        let ws_store =
+            std::sync::Arc::new(universal_log_viewer::WorkspaceStore::open_in_memory().unwrap());
+        let ulv_service = universal_log_viewer::LogViewerService::new(
+            ws_store,
+            shared_telemetry::LocalTelemetry::new(true),
+        );
+        let ulv_info = ulv_service
+            .open_file(log_file.to_str().unwrap())
+            .await
+            .unwrap();
         assert_eq!(ulv_info.total_lines, 2);
-        let redacted_count = ulv_service.export_redacted(&temp.path().join("redacted.log"), &tier_gate).await.unwrap();
+        let redacted_count = ulv_service
+            .export_redacted(&temp.path().join("redacted.log"), &tier_gate)
+            .await
+            .unwrap();
         assert_eq!(redacted_count, 2);
 
         // 4. universal-live-translator: 100% offline LID, NMT dictionary, TTS WAV synthesis
         let ult_service = ult_core::TranslatorService::open(temp.path()).unwrap();
-        let lid_result = ult_service.detect_language("Bonjour tout le monde").unwrap();
+        let lid_result = ult_service
+            .detect_language("Bonjour tout le monde")
+            .unwrap();
         assert_eq!(lid_result.language, ult_core::LanguageCode::Fr);
-        let trans_result = ult_service.translate_text(&ult_core::TranslationRequest {
-            text: "Hello world".to_string(),
-            source_lang: Some(ult_core::LanguageCode::En),
-            target_lang: ult_core::LanguageCode::Es,
-            preserve_formatting: true,
-            domain_glossary: None,
-        }).unwrap();
+        let trans_result = ult_service
+            .translate_text(&ult_core::TranslationRequest {
+                text: "Hello world".to_string(),
+                source_lang: Some(ult_core::LanguageCode::En),
+                target_lang: ult_core::LanguageCode::Es,
+                preserve_formatting: true,
+                domain_glossary: None,
+            })
+            .unwrap();
         assert!(!trans_result.translated_text.is_empty());
 
         // 5. pro-av-editor: 100% offline layer compositing, SMPTE calculations, waveform auto-sync
@@ -1329,13 +1358,22 @@ mod integration_tests {
 
         // 6. shared-licensing: 100% offline Ed25519 signature verification across entire suite
         let verified = verifier.verify(&cert, shared_licensing::AppId::AiFileExplorer, 1700000001);
-        assert!(verified.is_ok(), "Air-gapped Ed25519 signature verification must succeed offline");
+        assert!(
+            verified.is_ok(),
+            "Air-gapped Ed25519 signature verification must succeed offline"
+        );
 
         // 7. Network Air-Gap Assertion:
         // Attempting to dial external non-loopback IPs or external WAN addresses in air-gapped tests
         // is strictly prohibited and fails without leaking socket packets.
         let external_addr: std::net::SocketAddr = "192.0.2.1:80".parse().unwrap(); // RFC 5737 TEST-NET-1 (unroutable)
-        let attempt = std::net::TcpStream::connect_timeout(&external_addr, std::time::Duration::from_millis(50));
-        assert!(attempt.is_err(), "External WAN socket must be strictly unreachable under air-gapped SLA");
+        let attempt = std::net::TcpStream::connect_timeout(
+            &external_addr,
+            std::time::Duration::from_millis(50),
+        );
+        assert!(
+            attempt.is_err(),
+            "External WAN socket must be strictly unreachable under air-gapped SLA"
+        );
     }
 }

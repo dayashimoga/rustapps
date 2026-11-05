@@ -52,6 +52,12 @@ for app in "${APPS[@]}"; do
         [ -f "LICENSE" ] && cp "LICENSE" "${stage_dir}/"
         [ -f "README.md" ] && cp "README.md" "${stage_dir}/"
 
+        # Generate CycloneDX SBOM for the application
+        if [ -f "scripts/generate-sbom.sh" ]; then
+            bash scripts/generate-sbom.sh "${app}" "${OUTPUT_DIR}" || true
+            [ -f "${OUTPUT_DIR}/${app}-sbom.json" ] && cp "${OUTPUT_DIR}/${app}-sbom.json" "${stage_dir}/"
+        fi
+
         tar_name="${app}_${VERSION}_${TARGET}.tar.gz"
         tar -czf "${OUTPUT_DIR}/${tar_name}" -C "${OUTPUT_DIR}/stage" "${app}"
         echo "  -> Created tarball: ${tar_name}"
@@ -145,8 +151,8 @@ done
 # 5. Compute Cryptographic Checksums (SHA-256)
 echo "[5/5] Computing SHA-256 cryptographic checksums..."
 cd "${OUTPUT_DIR}"
-for file in *.tar.gz; do
-    if [ -f "${file}" ]; then
+for file in *.tar.gz *.deb *-sbom.json; do
+    if [ -f "${file}" ] && [ "${file##*.}" != "sha256" ]; then
         sha256sum "${file}" > "${file}.sha256"
         echo "  -> Checksum generated for: ${file}"
     fi

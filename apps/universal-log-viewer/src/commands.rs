@@ -20,12 +20,12 @@ use crate::tail_mode::TailFollower;
 use crate::timeline::{TimelineHistogram, TimelineIndex};
 use crate::workspace::{BookmarkRecord, WorkspaceStore};
 use platform_common::ProcessResourceUsage;
+use shared_licensing::{AppId, LicenseStatusReport, LicensingManager};
 use shared_plugins::PluginManifest;
 use shared_telemetry::LocalTelemetry;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use shared_licensing::{AppId, LicenseStatusReport, LicensingManager};
 
 static LICENSING: std::sync::OnceLock<LicensingManager> = std::sync::OnceLock::new();
 
@@ -1393,7 +1393,11 @@ mod tests {
     #[test]
     fn test_licensing_ipc_commands() {
         let status_val = dispatch_ipc_command("get_license_status", serde_json::json!({})).unwrap();
-        assert!(status_val["tier"] == "Free" || status_val["tier"] == "Premium" || status_val["tier"] == "Business");
+        assert!(
+            status_val["tier"] == "Free"
+                || status_val["tier"] == "Premium"
+                || status_val["tier"] == "Business"
+        );
 
         let auth = shared_licensing::LicenseAuthority::official();
         let cert = auth.sign_license(shared_licensing::LicenseParameters {
@@ -1409,7 +1413,11 @@ mod tests {
         });
         let cert_json = serde_json::to_string(&cert).unwrap();
 
-        let act_val = dispatch_ipc_command("activate_license", serde_json::json!({ "license_json": cert_json })).unwrap();
+        let act_val = dispatch_ipc_command(
+            "activate_license",
+            serde_json::json!({ "license_json": cert_json }),
+        )
+        .unwrap();
         assert_eq!(act_val["tier"], "Premium");
         assert_eq!(act_val["is_active"], true);
         assert_eq!(act_val["licensee_name"], "SRE Lead");
@@ -1417,7 +1425,11 @@ mod tests {
         let mut forged_cert = cert.clone();
         forged_cert.licensee_name = "Impostor".to_string();
         let forged_json = serde_json::to_string(&forged_cert).unwrap();
-        let err = dispatch_ipc_command("activate_license", serde_json::json!({ "license_json": forged_json })).unwrap_err();
+        let err = dispatch_ipc_command(
+            "activate_license",
+            serde_json::json!({ "license_json": forged_json }),
+        )
+        .unwrap_err();
         assert!(err.contains("signature") || err.contains("InvalidSignature"));
     }
 }

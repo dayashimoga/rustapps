@@ -110,30 +110,59 @@ jobs:
             "${bin_path}" --self-test
           fi
 
-      - name: Package Standalone Windows ZIP Bundle
+      - name: Generate CycloneDX SBOM (${{ matrix.app }})
+        shell: bash
+        run: |
+          mkdir -p "dist-packages/${{ matrix.app }}"
+          powershell -ExecutionPolicy Bypass -File scripts/generate-sbom.ps1 -AppName "${{ matrix.app }}" -OutputDir "dist-packages/${{ matrix.app }}"
+
+      - name: Package Standalone Windows ZIP Bundle & WiX Manifest
         shell: bash
         run: |
           mkdir -p "dist-packages/${{ matrix.app }}"
           stage_dir="stage_${{ matrix.app }}"
           mkdir -p "${stage_dir}"
           cp "target/release/${{ matrix.app }}.exe" "${stage_dir}/"
+          cp "target/release/${{ matrix.app }}.exe" "dist-packages/${{ matrix.app }}/"
           touch "${stage_dir}/portable.flag"
           [ -f "README.md" ] && cp "README.md" "${stage_dir}/"
           [ -f "LICENSE" ] && cp "LICENSE" "${stage_dir}/"
+          [ -f "dist-packages/${{ matrix.app }}/${{ matrix.app }}-sbom.json" ] && cp "dist-packages/${{ matrix.app }}/${{ matrix.app }}-sbom.json" "${stage_dir}/"
+          
+          # WiX Manifest
+          cat > "dist-packages/${{ matrix.app }}/${{ matrix.app }}-0.1.0.wxs" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Product Id="*" Name="${{ matrix.app }}" Language="1033" Version="0.1.0" Manufacturer="OfflineApps" UpgradeCode="{A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D}">
+        <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
+        <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+        <MediaTemplate EmbedCab="yes" />
+        <Feature Id="ProductFeature" Title="${{ matrix.app }}" Level="1">
+            <ComponentRef Id="MainExecutable" />
+        </Feature>
+        <Directory Id="TARGETDIR" Name="SourceDir">
+            <Directory Id="ProgramFilesFolder">
+                <Directory Id="INSTALLFOLDER" Name="${{ matrix.app }}">
+                    <Component Id="MainExecutable" Guid="*">
+                        <File Id="AppExe" Source="${{ matrix.app }}.exe" KeyPath="yes" />
+                    </Component>
+                </Directory>
+            </Directory>
+        </Directory>
+    </Product>
+</Wix>
+EOF
+
           zip_path="dist-packages/${{ matrix.app }}/${{ matrix.app }}-0.1.0-windows-x64.zip"
           if command -v 7z >/dev/null 2>&1; then
             7z a -tzip "${zip_path}" "./${stage_dir}/*"
           elif command -v powershell >/dev/null 2>&1; then
             powershell -Command "Compress-Archive -Path '${stage_dir}/*' -DestinationPath '${zip_path}' -Force"
           fi
-          if [ -f "${zip_path}" ]; then
-            if command -v sha256sum >/dev/null 2>&1; then
-              (cd "dist-packages/${{ matrix.app }}" && sha256sum "$(basename "${zip_path}")" > "$(basename "${zip_path}").sha256")
-            elif command -v powershell >/dev/null 2>&1; then
-              powershell -Command "Get-FileHash -Path '${zip_path}' -Algorithm SHA256 | ForEach-Object { \"`$(`$_.Hash.ToLower())  `$(`$_.Path | Split-Path -Leaf)\" } | Set-Content '${zip_path}.sha256'"
-            fi
-          fi
           rm -rf "${stage_dir}"
+
+          # Compute SHA-256 for all artifacts
+          powershell -Command "Get-ChildItem -Path 'dist-packages/${{ matrix.app }}' -File | Where-Object { -not \$_.Name.EndsWith('.sha256') } | ForEach-Object { \$hash = (Get-FileHash -Path \$_.FullName -Algorithm SHA256).Hash.ToLower(); \"\$hash  \$(\$_.Name)\" | Set-Content \"\$(\$_.FullName).sha256\" -Encoding ASCII }"
 
       - name: Upload ${{ matrix.app }} Windows Artifact
         uses: actions/upload-artifact@v4
@@ -211,7 +240,13 @@ jobs:
             "${bin_path}" --self-test
           fi
 
-      - name: Package Standalone Linux ZIP Bundle
+      - name: Generate CycloneDX SBOM (${{ matrix.app }})
+        shell: bash
+        run: |
+          mkdir -p "dist-packages/${{ matrix.app }}"
+          bash scripts/generate-sbom.sh "${{ matrix.app }}" "dist-packages/${{ matrix.app }}"
+
+      - name: Package Standalone Linux Distribution Bundles
         shell: bash
         run: |
           mkdir -p "dist-packages/${{ matrix.app }}"
@@ -220,16 +255,41 @@ jobs:
           stage_dir="stage_${{ matrix.app }}"
           mkdir -p "${stage_dir}"
           cp "target/release/${{ matrix.app }}" "${stage_dir}/"
+          cp "target/release/${{ matrix.app }}" "${abs_pkg_dir}/"
           touch "${stage_dir}/portable.flag"
           [ -f "README.md" ] && cp "README.md" "${stage_dir}/"
           [ -f "LICENSE" ] && cp "LICENSE" "${stage_dir}/"
+          [ -f "${abs_pkg_dir}/${{ matrix.app }}-sbom.json" ] && cp "${abs_pkg_dir}/${{ matrix.app }}-sbom.json" "${stage_dir}/"
           if command -v zip >/dev/null 2>&1; then
             (cd "${stage_dir}" && zip -r "${abs_zip}" .)
           fi
-          if [ -f "${abs_zip}" ]; then
-            (cd "${abs_pkg_dir}" && sha256sum "$(basename "${abs_zip}")" > "$(basename "${abs_zip}").sha256")
+          
+          # Debian layout packaging
+          deb_stage="deb_stage_${{ matrix.app }}"
+          mkdir -p "${deb_stage}/DEBIAN" "${deb_stage}/usr/bin"
+          cp "target/release/${{ matrix.app }}" "${deb_stage}/usr/bin/${{ matrix.app }}"
+          chmod 755 "${deb_stage}/usr/bin/${{ matrix.app }}"
+          cat <<EOF > "${deb_stage}/DEBIAN/control"
+Package: ${{ matrix.app }}
+Version: 0.1.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Offline Apps Engineering <maintainers@offlineapps.local>
+Description: 100% Offline Standalone Application: ${{ matrix.app }}
+EOF
+          if command -v dpkg-deb >/dev/null 2>&1; then
+            dpkg-deb --build "${deb_stage}" "${abs_pkg_dir}/${{ matrix.app }}_0.1.0_amd64.deb" || true
           fi
-          rm -rf "${stage_dir}"
+          rm -rf "${deb_stage}" "${stage_dir}"
+
+          # Compute SHA-256 for all artifacts
+          cd "${abs_pkg_dir}"
+          for f in *; do
+            if [ -f "$f" ] && [ "${f##*.}" != "sha256" ]; then
+              sha256sum "$f" > "$f.sha256"
+            fi
+          done
 
       - name: Upload ${{ matrix.app }} Linux Artifact
         uses: actions/upload-artifact@v4
@@ -308,7 +368,13 @@ jobs:
             "${bin_path}" --self-test
           fi
 
-      - name: Package Standalone macOS Universal ZIP Bundle
+      - name: Generate CycloneDX SBOM (${{ matrix.app }})
+        shell: bash
+        run: |
+          mkdir -p "dist-packages/${{ matrix.app }}"
+          bash scripts/generate-sbom.sh "${{ matrix.app }}" "dist-packages/${{ matrix.app }}"
+
+      - name: Package Standalone macOS Universal Bundles
         shell: bash
         run: |
           mkdir -p "dist-packages/${{ matrix.app }}"
@@ -320,13 +386,54 @@ jobs:
           touch "${stage_dir}/portable.flag"
           [ -f "README.md" ] && cp "README.md" "${stage_dir}/"
           [ -f "LICENSE" ] && cp "LICENSE" "${stage_dir}/"
+          [ -f "${abs_pkg_dir}/${{ matrix.app }}-sbom.json" ] && cp "${abs_pkg_dir}/${{ matrix.app }}-sbom.json" "${stage_dir}/"
           if command -v zip >/dev/null 2>&1; then
             (cd "${stage_dir}" && zip -r "${abs_zip}" .)
           fi
-          if [ -f "${abs_zip}" ]; then
-            (cd "${abs_pkg_dir}" && shasum -a 256 "$(basename "${abs_zip}")" > "$(basename "${abs_zip}").sha256")
+
+          # Assemble .app bundle layout
+          app_bundle="${abs_pkg_dir}/${{ matrix.app }}.app"
+          mkdir -p "${app_bundle}/Contents/MacOS" "${app_bundle}/Contents/Resources"
+          cp "target/universal/${{ matrix.app }}" "${app_bundle}/Contents/MacOS/${{ matrix.app }}"
+          chmod +x "${app_bundle}/Contents/MacOS/${{ matrix.app }}"
+          cat > "${app_bundle}/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>${{ matrix.app }}</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.offlineapps.${{ matrix.app }}</string>
+    <key>CFBundleName</key>
+    <string>${{ matrix.app }}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
+EOF
+          if command -v hdiutil >/dev/null 2>&1; then
+            hdiutil create -volname "${{ matrix.app }}" -srcfolder "${app_bundle}" -ov -format UDZO "${abs_pkg_dir}/${{ matrix.app }}-0.1.0-macos.dmg" || true
           fi
           rm -rf "${stage_dir}"
+
+          # Compute SHA-256 for all artifacts
+          cd "${abs_pkg_dir}"
+          for f in *; do
+            if [ -f "$f" ] && [ "${f##*.}" != "sha256" ]; then
+              if command -v sha256sum >/dev/null 2>&1; then
+                sha256sum "$f" > "$f.sha256"
+              elif command -v shasum >/dev/null 2>&1; then
+                shasum -a 256 "$f" > "$f.sha256"
+              fi
+            fi
+          done
 
       - name: Upload ${{ matrix.app }} macOS Artifact
         uses: actions/upload-artifact@v4

@@ -16,10 +16,10 @@ use crate::service::FileExplorerService;
 use crate::treemap::TreemapGenerator;
 use platform_common::{enumerate_drives_and_places, FsLocationEntry};
 use serde_json::{json, Value};
+use shared_licensing::{AppId, LicenseStatusReport, LicensingManager};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
-use shared_licensing::{AppId, LicenseStatusReport, LicensingManager};
 
 static SERVICE: OnceLock<Arc<Mutex<FileExplorerService>>> = OnceLock::new();
 static BUILTIN_SMART_FOLDERS: OnceLock<Vec<SmartFolder>> = OnceLock::new();
@@ -1726,7 +1726,11 @@ mod tests {
     #[test]
     fn test_licensing_ipc_commands() {
         let status_val = dispatch_ipc_command("get_license_status", json!({})).unwrap();
-        assert!(status_val["tier"] == "Free" || status_val["tier"] == "Premium" || status_val["tier"] == "Business");
+        assert!(
+            status_val["tier"] == "Free"
+                || status_val["tier"] == "Premium"
+                || status_val["tier"] == "Business"
+        );
 
         // Mint a valid license
         let auth = shared_licensing::LicenseAuthority::official();
@@ -1744,7 +1748,8 @@ mod tests {
         let cert_json = serde_json::to_string(&cert).unwrap();
 
         // Activate valid license
-        let act_val = dispatch_ipc_command("activate_license", json!({ "license_json": cert_json })).unwrap();
+        let act_val =
+            dispatch_ipc_command("activate_license", json!({ "license_json": cert_json })).unwrap();
         assert_eq!(act_val["tier"], "Premium");
         assert_eq!(act_val["is_active"], true);
         assert_eq!(act_val["licensee_name"], "Explorer User");
@@ -1753,7 +1758,8 @@ mod tests {
         let mut forged_cert = cert.clone();
         forged_cert.licensee_name = "Hacker".to_string();
         let forged_json = serde_json::to_string(&forged_cert).unwrap();
-        let err = dispatch_ipc_command("activate_license", json!({ "license_json": forged_json })).unwrap_err();
+        let err = dispatch_ipc_command("activate_license", json!({ "license_json": forged_json }))
+            .unwrap_err();
         assert!(err.contains("signature") || err.contains("InvalidSignature"));
     }
 }

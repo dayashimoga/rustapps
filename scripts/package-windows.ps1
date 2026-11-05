@@ -32,13 +32,20 @@ foreach ($app in $Apps) {
 
 # 1. Compile Release Binaries
 Write-Host "[1/4] Building release binaries for target: $Target..." -ForegroundColor Yellow
-cargo build --workspace --release --target $Target
+if ($AppName -ne "") {
+    cargo build --release --target $Target -p $AppName
+} else {
+    cargo build --workspace --release --target $Target
+}
 
 # 2. Verify Embedded UI & IPC Self-Test and Package Portable ZIP Archives
 Write-Host "[2/4] Verifying --self-test and assembling portable ZIP archives..." -ForegroundColor Yellow
 foreach ($app in $Apps) {
     $binName = "$app.exe"
     $srcPath = "target/$Target/release/$binName"
+    if (-not (Test-Path $srcPath) -and (Test-Path "target/release/$binName")) {
+        $srcPath = "target/release/$binName"
+    }
     if (Test-Path $srcPath) {
         Write-Host "  -> Running live GUI & IPC self-test: $srcPath --self-test" -ForegroundColor Cyan
         & $srcPath --self-test
@@ -53,6 +60,12 @@ foreach ($app in $Apps) {
         New-Item -ItemType File -Force -Path "$stageDir/portable.flag" | Out-Null
         if (Test-Path "LICENSE") { Copy-Item "LICENSE" -Destination $stageDir }
         if (Test-Path "README.md") { Copy-Item "README.md" -Destination $stageDir }
+
+        # Generate CycloneDX SBOM for the application
+        & "$PSScriptRoot/generate-sbom.ps1" -AppName $app -OutputDir "$stageDir"
+        if (Test-Path "$stageDir/$app-sbom.json") {
+            Copy-Item "$stageDir/$app-sbom.json" -Destination "$OutputDir/$app-sbom.json" -Force
+        }
 
         # Also copy standalone executable directly into $OutputDir for direct launch
         Copy-Item $srcPath -Destination "$OutputDir/$binName" -Force
@@ -100,7 +113,7 @@ foreach ($app in $Apps) {
 
 # 4. Compute Cryptographic Checksums (SHA-256)
 Write-Host "[4/4] Computing SHA-256 cryptographic checksums..." -ForegroundColor Yellow
-Get-ChildItem -Path $OutputDir -File -Filter "*.zip" | ForEach-Object {
+Get-ChildItem -Path $OutputDir -File | Where-Object { ($_.Extension -in @(".zip", ".exe", ".json") -or $_.Name.EndsWith(".wxs")) -and -not $_.Name.EndsWith(".sha256") } | ForEach-Object {
     $hash = (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLower()
     $hashFile = "$($_.FullName).sha256"
     "$hash  $($_.Name)" | Set-Content -Path $hashFile -Encoding ASCII

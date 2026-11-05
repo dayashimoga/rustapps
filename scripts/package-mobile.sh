@@ -44,6 +44,11 @@ for app in "${APPS[@]}"; do
 }
 EOF
 
+    # Generate CycloneDX SBOM for the mobile target
+    if [ -f "scripts/generate-sbom.sh" ]; then
+        bash scripts/generate-sbom.sh "${app}" "${OUTPUT_DIR}" || true
+    fi
+
     # Detect platform intent from output directory name or host
     is_ios=false
     if [[ "${OUTPUT_DIR}" == *"ios"* ]] || [ "$(uname -s)" = "Darwin" ]; then
