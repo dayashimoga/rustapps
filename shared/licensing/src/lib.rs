@@ -38,6 +38,7 @@ pub enum AppId {
     UniversalLiveTranslator,
     ProAvEditor,
     PersonalKnowledgeGraph,
+    ApiProtocolStudio,
     AllAppsSuite,
 }
 

@@ -20,6 +20,7 @@ ai-file-explorer = { path = "../apps/ai-file-explorer" }
 universal-live-translator = { path = "../apps/universal-live-translator" }
 pro-av-editor = { path = "../apps/pro-av-editor" }
 personal-knowledge-graph = { path = "../apps/personal-knowledge-graph" }
+api-protocol-studio = { path = "../apps/api-protocol-studio" }
 
 [[bench]]
 name = "bench_suite"

@@ -1,0 +1,42 @@
+[package]
+name = "api-protocol-studio"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "api_protocol_studio"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "api-protocol-studio"
+path = "src/main.rs"
+
+[dependencies]
+thiserror.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+regex.workspace = true
+rusqlite.workspace = true
+uuid.workspace = true
+tempfile.workspace = true
+
+# Internal workspace crates
+platform-common = { path = "../../platform" }
+shared-logging = { path = "../../shared/logging" }
+shared-storage = { path = "../../shared/storage" }
+shared-encryption = { path = "../../shared/encryption" }
+shared-settings = { path = "../../shared/settings" }
+shared-telemetry = { path = "../../shared/telemetry" }
+shared-plugins = { path = "../../shared/plugins" }
+shared-licensing = { path = "../../shared/licensing" }
+
+[dev-dependencies]
+tempfile.workspace = true
+

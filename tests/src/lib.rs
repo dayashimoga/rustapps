@@ -1371,7 +1371,51 @@ mod integration_tests {
         let pkg_graph = pkg_service.get_graph().unwrap();
         assert_eq!(pkg_graph.nodes.len(), 2);
 
-        // 7. shared-licensing: 100% offline Ed25519 signature verification across entire suite
+        // 7. api-protocol-studio: 100% offline collections, interpolation & security fuzzing
+        let aps_service = api_protocol_studio::service::ApiStudioService::open_in_memory().unwrap();
+        let aps_coll = api_protocol_studio::models::ApiCollection {
+            id: "aps-airgap-coll".to_string(),
+            name: "Internal Offline Service".to_string(),
+            description: "Air-gapped internal test collection".to_string(),
+            variables: vec![api_protocol_studio::models::KeyValuePair {
+                key: "host".to_string(),
+                value: "127.0.0.1".to_string(),
+                enabled: true,
+                description: None,
+            }],
+            created_at: 1700000000,
+            updated_at: 1700000000,
+        };
+        aps_service.save_collection(&aps_coll).unwrap();
+        let aps_req = api_protocol_studio::models::ApiRequestItem {
+            id: "aps-airgap-req".to_string(),
+            collection_id: "aps-airgap-coll".to_string(),
+            name: "Query User".to_string(),
+            protocol: api_protocol_studio::models::ProtocolType::HttpRest,
+            method: api_protocol_studio::models::HttpMethod::GET,
+            url: "http://{{host}}:8080/user?id=1".to_string(),
+            headers: vec![],
+            query_params: vec![],
+            auth: api_protocol_studio::models::AuthConfig::None,
+            body: api_protocol_studio::models::RequestBody {
+                body_type: "none".to_string(),
+                raw_content: String::new(),
+                graphql_query: None,
+                graphql_variables: None,
+            },
+            timeout_ms: 1000,
+        };
+        aps_service.save_request(&aps_req).unwrap();
+        let fuzz_results = aps_service
+            .fuzz_request(
+                "aps-airgap-req",
+                api_protocol_studio::models::FuzzingStrategy::SqlInjection,
+                "id",
+            )
+            .unwrap();
+        assert_eq!(fuzz_results.len(), 5);
+
+        // 8. shared-licensing: 100% offline Ed25519 signature verification across entire suite
         let verified = verifier.verify(&cert, shared_licensing::AppId::AiFileExplorer, 1700000001);
         assert!(
             verified.is_ok(),

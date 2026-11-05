@@ -118,6 +118,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "api-protocol-studio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "platform-common",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "shared-encryption",
+ "shared-licensing",
+ "shared-logging",
+ "shared-plugins",
+ "shared-settings",
+ "shared-storage",
+ "shared-telemetry",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -178,6 +203,7 @@ name = "benchmarks"
 version = "0.1.0"
 dependencies = [
  "ai-file-explorer",
+ "api-protocol-studio",
  "criterion",
  "devops-secret-vault",
  "personal-knowledge-graph",
@@ -858,6 +884,7 @@ name = "integration-tests"
 version = "0.1.0"
 dependencies = [
  "ai-file-explorer",
+ "api-protocol-studio",
  "devops-secret-vault",
  "personal-knowledge-graph",
  "platform-common",

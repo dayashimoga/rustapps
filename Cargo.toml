@@ -21,6 +21,7 @@ members = [
     "apps/universal-live-translator",
     "apps/pro-av-editor",
     "apps/personal-knowledge-graph",
+    "apps/api-protocol-studio",
     "tests",
     "benchmarks",
 ]

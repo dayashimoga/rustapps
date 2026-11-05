@@ -850,6 +850,107 @@ fn benchmark_personal_knowledge_graph(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_api_protocol_studio(c: &mut Criterion) {
+    use api_protocol_studio::collection_store::CollectionStore;
+    use api_protocol_studio::fuzzer::ApiFuzzer;
+    use api_protocol_studio::models::*;
+    use api_protocol_studio::service::ApiStudioService;
+
+    let service = ApiStudioService::open_in_memory().unwrap();
+    let coll = ApiCollection {
+        id: "bench-coll".to_string(),
+        name: "Performance Bench Suite".to_string(),
+        description: "Collection for criterion benchmarking".to_string(),
+        variables: vec![
+            KeyValuePair {
+                key: "baseUrl".to_string(),
+                value: "http://127.0.0.1:8080".to_string(),
+                enabled: true,
+                description: None,
+            },
+            KeyValuePair {
+                key: "token".to_string(),
+                value: "tok_secure_airgap_token_999".to_string(),
+                enabled: true,
+                description: None,
+            },
+        ],
+        created_at: 1700000000,
+        updated_at: 1700000000,
+    };
+    service.save_collection(&coll).unwrap();
+
+    let req = ApiRequestItem {
+        id: "bench-req".to_string(),
+        collection_id: "bench-coll".to_string(),
+        name: "Interpolated Request".to_string(),
+        protocol: ProtocolType::HttpRest,
+        method: HttpMethod::POST,
+        url: "{{baseUrl}}/api/v1/resource?auth={{token}}".to_string(),
+        headers: vec![KeyValuePair {
+            key: "Authorization".to_string(),
+            value: "Bearer {{token}}".to_string(),
+            enabled: true,
+            description: None,
+        }],
+        query_params: vec![],
+        auth: AuthConfig::None,
+        body: RequestBody {
+            body_type: "json".to_string(),
+            raw_content: "{\"target\": \"{{baseUrl}}\"}".to_string(),
+            graphql_query: None,
+            graphql_variables: None,
+        },
+        timeout_ms: 5000,
+    };
+    service.save_request(&req).unwrap();
+
+    let mut group = c.benchmark_group("api_protocol_studio");
+
+    // 1. Variable interpolation throughput
+    let template_text = "{{baseUrl}}/v1/users/{{token}}/query?ref={{baseUrl}}";
+    let vars = coll.variables.clone();
+    group.bench_function("aps_variable_interpolation", |b| {
+        b.iter(|| {
+            let res =
+                CollectionStore::interpolate_variables(black_box(template_text), black_box(&vars));
+            black_box(res.len());
+        });
+    });
+
+    // 2. Security fuzzing payload generation
+    group.bench_function("aps_fuzz_payload_generation_sqli", |b| {
+        b.iter(|| {
+            let payloads = ApiFuzzer::generate_payloads(black_box(FuzzingStrategy::SqlInjection));
+            black_box(payloads.len());
+        });
+    });
+
+    // 3. Fuzzing request campaign execution
+    group.bench_function("aps_fuzz_request_campaign", |b| {
+        b.iter(|| {
+            let results = service
+                .fuzz_request(
+                    black_box("bench-req"),
+                    black_box(FuzzingStrategy::BoundaryValues),
+                    black_box("auth"),
+                )
+                .unwrap();
+            black_box(results.len());
+        });
+    });
+
+    // 4. Request retrieval and store lookup
+    group.bench_function("aps_get_request_lookup", |b| {
+        b.iter(|| {
+            let r = service.get_request(black_box("bench-req")).unwrap();
+            black_box(r.unwrap().url.len());
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -867,6 +968,7 @@ criterion_group!(
     benchmark_file_explorer_advanced_features,
     benchmark_universal_live_translator,
     benchmark_pro_av_editor,
-    benchmark_personal_knowledge_graph
+    benchmark_personal_knowledge_graph,
+    benchmark_api_protocol_studio
 );
 criterion_main!(benches);

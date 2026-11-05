@@ -25,4 +25,5 @@ universal-live-translator = { path = "../apps/universal-live-translator" }
 universal-log-viewer = { path = "../apps/universal-log-viewer" }
 pro-av-editor = { path = "../apps/pro-av-editor" }
 personal-knowledge-graph = { path = "../apps/personal-knowledge-graph" }
+api-protocol-studio = { path = "../apps/api-protocol-studio" }
 shared-licensing = { path = "../shared/licensing" }
