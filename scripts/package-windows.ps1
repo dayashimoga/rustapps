@@ -15,7 +15,7 @@ Write-Host "==========================================================" -Foregro
 if ($AppName -ne "") {
     $Apps = @($AppName)
 } else {
-    $Apps = @("devops-secret-vault", "ai-file-explorer", "universal-log-viewer", "universal-live-translator", "pro-av-editor", "personal-knowledge-graph", "api-protocol-studio", "parquet-analytics-workbench", "dfir-triage-kit", "screen-recorder-studio", "signal-telemetry-oscilloscope")
+    $Apps = @("devops-secret-vault", "ai-file-explorer", "universal-log-viewer", "universal-live-translator", "pro-av-editor", "personal-knowledge-graph", "api-protocol-studio", "parquet-analytics-workbench", "dfir-triage-kit", "screen-recorder-studio", "signal-telemetry-oscilloscope", "audio-mastering-studio")
 }
 
 # Ensure output directory exists

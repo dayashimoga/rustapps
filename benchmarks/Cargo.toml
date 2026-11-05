@@ -25,6 +25,7 @@ parquet-analytics-workbench = { path = "../apps/parquet-analytics-workbench" }
 dfir-triage-kit = { path = "../apps/dfir-triage-kit" }
 screen-recorder-studio = { path = "../apps/screen-recorder-studio" }
 signal-telemetry-oscilloscope = { path = "../apps/signal-telemetry-oscilloscope" }
+audio-mastering-studio = { path = "../apps/audio-mastering-studio" }
 
 [[bench]]
 name = "bench_suite"

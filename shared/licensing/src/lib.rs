@@ -43,6 +43,7 @@ pub enum AppId {
     DfirTriageKit,
     ScreenRecorderStudio,
     SignalTelemetryOscilloscope,
+    AudioMasteringStudio,
     AllAppsSuite,
 }
 

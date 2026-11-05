@@ -1190,6 +1190,46 @@ fn benchmark_signal_telemetry_oscilloscope(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_audio_mastering_studio(c: &mut Criterion) {
+    use audio_mastering_studio::{AudioDspEngine, MasteringConfig};
+
+    let mut group = c.benchmark_group("audio_mastering");
+
+    let audio = AudioDspEngine::generate_synthetic_audio(44100, 44100);
+    let config = MasteringConfig::default();
+
+    // 1. 4-Stem Separation over 1 second of audio
+    group.bench_function("ams_stem_separation_1sec_44k", |b| {
+        b.iter(|| {
+            let stems = AudioDspEngine::separate_stems(black_box(&audio), 44100);
+            black_box(stems.len());
+        });
+    });
+
+    // 2. 5-Band Parametric Equalizer Processing
+    group.bench_function("ams_parametric_eq_5bands_44k", |b| {
+        b.iter(|| {
+            let mut processed = audio.clone();
+            for band in &config.bands {
+                processed = AudioDspEngine::apply_eq_band(&processed, band, 44100.0);
+            }
+            black_box(processed.len());
+        });
+    });
+
+    // 3. EBU R128 Full Mastering & Limiting Chain
+    group.bench_function("ams_master_audio_ebu_r128_chain", |b| {
+        b.iter(|| {
+            let (mastered, loudness) =
+                AudioDspEngine::master_audio(black_box(&audio), 44100, black_box(&config));
+            black_box(mastered.len());
+            black_box(loudness.integrated_lufs);
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -1212,6 +1252,7 @@ criterion_group!(
     benchmark_parquet_analytics_workbench,
     benchmark_dfir_triage_kit,
     benchmark_screen_recorder_studio,
-    benchmark_signal_telemetry_oscilloscope
+    benchmark_signal_telemetry_oscilloscope,
+    benchmark_audio_mastering_studio
 );
 criterion_main!(benches);

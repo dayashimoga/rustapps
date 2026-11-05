@@ -26,6 +26,7 @@ members = [
     "apps/dfir-triage-kit",
     "apps/screen-recorder-studio",
     "apps/signal-telemetry-oscilloscope",
+    "apps/audio-mastering-studio",
     "tests",
     "benchmarks",
 ]

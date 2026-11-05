@@ -1,0 +1,27 @@
+[package]
+name = "audio-mastering-studio"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Offline AI Stem Splitter & Audio Mastering Studio — 100% Offline 4-Stem Separation, De-Reverb, 5-Band EQ & EBU R128 Loudness Mastering"
+
+[dependencies]
+# Workspace crates
+platform-common.workspace = true
+shared-storage.workspace = true
+shared-telemetry.workspace = true
+shared-licensing = { path = "../../shared/licensing" }
+
+# Storage & Serialization
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Utilities
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+

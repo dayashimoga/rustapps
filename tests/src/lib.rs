@@ -1499,7 +1499,18 @@ mod integration_tests {
         assert_eq!(scope_stats.total_captures, 1);
         assert!(scope_stats.total_samples_analyzed > 0);
 
-        // 12. shared-licensing: 100% offline Ed25519 signature verification across entire suite
+        // 12. audio-mastering-studio: 100% offline 4-stem demixing, 5-band EQ, and EBU R128 mastering
+        let mastering_service =
+            audio_mastering_studio::AudioMasteringService::open_in_memory().unwrap();
+        let proj = mastering_service.seed_demo_project().unwrap();
+        assert_eq!(proj.stems.len(), 4);
+        assert!(!proj.mastered_samples.is_empty());
+        assert!(proj.mastered_loudness.integrated_lufs > -30.0);
+        let mastering_stats = mastering_service.get_stats().unwrap();
+        assert_eq!(mastering_stats.total_projects, 1);
+        assert_eq!(mastering_stats.total_stems_extracted, 4);
+
+        // 13. shared-licensing: 100% offline Ed25519 signature verification across entire suite
         let verified = verifier.verify(&cert, shared_licensing::AppId::AiFileExplorer, 1700000001);
         assert!(
             verified.is_ok(),

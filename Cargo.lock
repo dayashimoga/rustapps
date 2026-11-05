@@ -181,6 +181,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "audio-mastering-studio"
+version = "0.1.0"
+dependencies = [
+ "platform-common",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "shared-licensing",
+ "shared-storage",
+ "shared-telemetry",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -204,6 +220,7 @@ version = "0.1.0"
 dependencies = [
  "ai-file-explorer",
  "api-protocol-studio",
+ "audio-mastering-studio",
  "criterion",
  "devops-secret-vault",
  "dfir-triage-kit",
@@ -910,6 +927,7 @@ version = "0.1.0"
 dependencies = [
  "ai-file-explorer",
  "api-protocol-studio",
+ "audio-mastering-studio",
  "devops-secret-vault",
  "dfir-triage-kit",
  "parquet-analytics-workbench",
