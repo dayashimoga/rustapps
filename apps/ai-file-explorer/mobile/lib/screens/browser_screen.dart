@@ -126,6 +126,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
                     onTap: () {
                       if (item.isDir) {
                         _loadDirectory(item.path);
+                      } else {
+                        _showFileDetailsSheet(item);
                       }
                     },
                   );
@@ -134,6 +136,134 @@ class _BrowserScreenState extends State<BrowserScreen> {
             ),
         ],
       ),
+    );
+  }
+
+  void _showFileDetailsSheet(FileItem item) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E293B),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        final isArchive = item.extension != null &&
+            ['zip', 'tar', 'gz', 'tgz'].contains(item.extension!.toLowerCase());
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    isArchive ? Icons.archive : Icons.insert_drive_file,
+                    color: const Color(0xFF38BDF8),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      item.fileName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Path: ${item.path}',
+                style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12),
+              ),
+              Text(
+                'Size: ${item.humanReadableSize}',
+                style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.fingerprint, size: 18),
+                      label: const Text('BLAKE3 Hash'),
+                      onPressed: () async {
+                        Navigator.pop(ctx);
+                        try {
+                          final hash = await widget.service.computeFileHash(item.path);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('BLAKE3: $hash'),
+                                duration: const Duration(seconds: 4),
+                              ),
+                            );
+                          }
+                        } catch (e) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Hash error: $e')),
+                            );
+                          }
+                        }
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  if (isArchive)
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.folder_zip, size: 18),
+                        label: const Text('Inspect'),
+                        onPressed: () async {
+                          Navigator.pop(ctx);
+                          final entries = await widget.service.inspectArchive(item.path);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Archive contains ${entries.length} entries'),
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                    )
+                  else
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.visibility, size: 18),
+                        label: const Text('Preview'),
+                        onPressed: () async {
+                          Navigator.pop(ctx);
+                          try {
+                            final doc = await widget.service.extractDocument(item.path);
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Extracted ${doc.metadata.wordCount} words (${doc.extension ?? "plain"})'),
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Extract error: $e')),
+                              );
+                            }
+                          }
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

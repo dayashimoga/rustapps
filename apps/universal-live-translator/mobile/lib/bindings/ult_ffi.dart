@@ -131,6 +131,11 @@ typedef _c_ult_list_glossary_domains = Pointer<Utf8> Function(
 typedef _dart_ult_list_glossary_domains = Pointer<Utf8> Function(
     Pointer<UltHandleOpaque> handle);
 
+typedef _c_ult_dispatch_command = Pointer<Utf8> Function(
+    Pointer<UltHandleOpaque> handle, Pointer<Utf8> cmd, Pointer<Utf8> argsJson);
+typedef _dart_ult_dispatch_command = Pointer<Utf8> Function(
+    Pointer<UltHandleOpaque> handle, Pointer<Utf8> cmd, Pointer<Utf8> argsJson);
+
 /// High-level Dart wrapper around native `ult_*` FFI symbols
 class UltNativeBindings {
   static UltNativeBindings? _instance;
@@ -154,6 +159,7 @@ class UltNativeBindings {
   late final _dart_ult_add_glossary_term ultAddGlossaryTerm;
   late final _dart_ult_get_glossary_terms ultGetGlossaryTerms;
   late final _dart_ult_list_glossary_domains ultListGlossaryDomains;
+  late final _dart_ult_dispatch_command ultDispatchCommand;
 
   UltNativeBindings._(this._dylib) {
     ultCreateHandle = _dylib
@@ -209,6 +215,9 @@ class UltNativeBindings {
         .asFunction();
     ultListGlossaryDomains = _dylib
         .lookup<NativeFunction<_c_ult_list_glossary_domains>>('ult_list_glossary_domains')
+        .asFunction();
+    ultDispatchCommand = _dylib
+        .lookup<NativeFunction<_c_ult_dispatch_command>>('ult_dispatch_command')
         .asFunction();
   }
 

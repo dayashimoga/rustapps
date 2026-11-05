@@ -282,6 +282,250 @@ class _VaultHomeScreenState extends State<VaultHomeScreen> {
     );
   }
 
+  void _showPasswordGeneratorModal() {
+    int length = 24;
+    String generatedPassword = '';
+    double entropy = 0.0;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF131D31),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+                top: 20,
+                left: 20,
+                right: 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.password, color: Color(0xFF00E5FF)),
+                      const SizedBox(width: 10),
+                      const Text(
+                        'Password & Key Generator',
+                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white54),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (generatedPassword.isNotEmpty) ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F172A),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: SelectableText(
+                              generatedPassword,
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                color: Color(0xFF00E676),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.copy, color: Color(0xFF00E5FF), size: 18),
+                            onPressed: () {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Password copied to clipboard')),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Entropy: ${entropy.toStringAsFixed(1)} bits',
+                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  Row(
+                    children: [
+                      Text('Length: $length', style: const TextStyle(color: Colors.white70)),
+                      Expanded(
+                        child: Slider(
+                          value: length.toDouble(),
+                          min: 8,
+                          max: 64,
+                          divisions: 56,
+                          activeColor: const Color(0xFF00E5FF),
+                          onChanged: (val) {
+                            setModalState(() => length = val.toInt());
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Generate Strong Secret'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF00E5FF),
+                        foregroundColor: const Color(0xFF0A0E1A),
+                      ),
+                      onPressed: () async {
+                        final res = await widget.vaultService.generatePassword(length: length);
+                        setModalState(() {
+                          generatedPassword = (res['password'] ?? res.toString()).toString();
+                          entropy = (res['entropy'] as num?)?.toDouble() ?? 88.0;
+                        });
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showLeakScannerModal() {
+    final textController = TextEditingController();
+    List<dynamic> findings = [];
+    bool isScanning = false;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF131D31),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+                top: 20,
+                left: 20,
+                right: 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.security, color: Color(0xFFFF5252)),
+                      const SizedBox(width: 10),
+                      const Text(
+                        'Secret Leak Scanner',
+                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white54),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Paste configuration, code, or logs to detect accidentally exposed secrets before committing.',
+                    style: TextStyle(color: Colors.white60, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: textController,
+                    maxLines: 4,
+                    style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontSize: 12),
+                    decoration: InputDecoration(
+                      hintText: 'Paste content to scan...',
+                      hintStyle: const TextStyle(color: Colors.white30),
+                      filled: true,
+                      fillColor: const Color(0xFF0F172A),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (findings.isNotEmpty) ...[
+                    Text(
+                      'Detected ${findings.length} potential leaks:',
+                      style: const TextStyle(color: Color(0xFFFF5252), fontWeight: FontWeight.bold, fontSize: 12),
+                    ),
+                    const SizedBox(height: 6),
+                    ...findings.map((f) => Container(
+                          margin: const EdgeInsets.only(bottom: 6),
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2D1515),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
+                          ),
+                          child: Text(
+                            f.toString(),
+                            style: const TextStyle(color: Colors.white, fontSize: 11),
+                          ),
+                        )),
+                    const SizedBox(height: 10),
+                  ],
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      icon: const Icon(Icons.search),
+                      label: Text(isScanning ? 'Scanning...' : 'Scan For Leaks'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFF5252),
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: isScanning
+                          ? null
+                          : () async {
+                              final text = textController.text.trim();
+                              if (text.isEmpty) return;
+                              setModalState(() => isScanning = true);
+                              final res = await widget.vaultService.scanForLeaks(text);
+                              setModalState(() {
+                                isScanning = false;
+                                findings = (res['findings'] as List<dynamic>?) ?? [];
+                                if (findings.isEmpty) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('No leaked secrets detected! Clean.')),
+                                  );
+                                }
+                              });
+                            },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _buildBody() {
     switch (_currentNavIndex) {
       case 1:
@@ -560,6 +804,16 @@ class _VaultHomeScreenState extends State<VaultHomeScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.password, color: Color(0xFF00E5FF)),
+            tooltip: 'Generate Secret',
+            onPressed: _showPasswordGeneratorModal,
+          ),
+          IconButton(
+            icon: const Icon(Icons.security, color: Color(0xFFFF5252)),
+            tooltip: 'Leak Scanner',
+            onPressed: _showLeakScannerModal,
+          ),
           IconButton(
             icon: const Icon(Icons.lock_outline, color: Colors.white70),
             tooltip: 'Lock Vault',

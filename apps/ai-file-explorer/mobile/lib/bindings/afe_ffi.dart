@@ -119,6 +119,21 @@ typedef _dart_afe_scan_compliance = Pointer<Utf8> Function(
     Pointer<Utf8> path,
     Pointer<Utf8> tier);
 
+typedef _c_afe_compute_file_hash = Pointer<Utf8> Function(
+    Pointer<AfeHandleOpaque> handle, Pointer<Utf8> path);
+typedef _dart_afe_compute_file_hash = Pointer<Utf8> Function(
+    Pointer<AfeHandleOpaque> handle, Pointer<Utf8> path);
+
+typedef _c_afe_inspect_archive = Pointer<Utf8> Function(
+    Pointer<AfeHandleOpaque> handle, Pointer<Utf8> path, IntPtr maxEntries);
+typedef _dart_afe_inspect_archive = Pointer<Utf8> Function(
+    Pointer<AfeHandleOpaque> handle, Pointer<Utf8> path, int maxEntries);
+
+typedef _c_afe_dispatch_command = Pointer<Utf8> Function(
+    Pointer<AfeHandleOpaque> handle, Pointer<Utf8> cmd, Pointer<Utf8> argsJson);
+typedef _dart_afe_dispatch_command = Pointer<Utf8> Function(
+    Pointer<AfeHandleOpaque> handle, Pointer<Utf8> cmd, Pointer<Utf8> argsJson);
+
 /// Complete FFI Bindings for AI File Explorer Native Engine
 class AfeFfiBindings {
   final DynamicLibrary _lib;
@@ -141,6 +156,9 @@ class AfeFfiBindings {
   late final _dart_afe_search_screenshots_by_hash searchScreenshotsByHash;
   late final _dart_afe_search_screenshots_by_text searchScreenshotsByText;
   late final _dart_afe_scan_compliance scanCompliance;
+  late final _dart_afe_compute_file_hash computeFileHash;
+  late final _dart_afe_inspect_archive inspectArchive;
+  late final _dart_afe_dispatch_command dispatchCommand;
 
   AfeFfiBindings(this._lib) {
     createHandle = _lib
@@ -196,6 +214,15 @@ class AfeFfiBindings {
         .asFunction();
     scanCompliance = _lib
         .lookup<NativeFunction<_c_afe_scan_compliance>>('afe_scan_compliance')
+        .asFunction();
+    computeFileHash = _lib
+        .lookup<NativeFunction<_c_afe_compute_file_hash>>('afe_compute_file_hash')
+        .asFunction();
+    inspectArchive = _lib
+        .lookup<NativeFunction<_c_afe_inspect_archive>>('afe_inspect_archive')
+        .asFunction();
+    dispatchCommand = _lib
+        .lookup<NativeFunction<_c_afe_dispatch_command>>('afe_dispatch_command')
         .asFunction();
   }
 

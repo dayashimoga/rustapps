@@ -49,6 +49,35 @@ class _ConversationScreenState extends State<ConversationScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Split-Screen Interpreter'),
+        actions: [
+          Consumer<UltService>(
+            builder: (ctx, service, _) {
+              return PopupMenuButton<String>(
+                icon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.domain, size: 16),
+                    const SizedBox(width: 4),
+                    Text(
+                      service.currentGlossaryDomain.toUpperCase(),
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+                tooltip: 'Select Glossary Domain',
+                onSelected: (domain) {
+                  service.setGlossaryDomain(domain);
+                },
+                itemBuilder: (ctx) => [
+                  const PopupMenuItem(value: 'general', child: Text('General Domain')),
+                  const PopupMenuItem(value: 'medical', child: Text('Medical Domain')),
+                  const PopupMenuItem(value: 'legal', child: Text('Legal Domain')),
+                  const PopupMenuItem(value: 'technical', child: Text('Technical Domain')),
+                ],
+              );
+            },
+          ),
+        ],
       ),
       body: Column(
         children: [

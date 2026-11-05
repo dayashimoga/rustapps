@@ -124,6 +124,40 @@ class _AveStudioScreenState extends State<AveStudioScreen>
             ),
           ),
           ListTile(
+            leading: const Icon(Icons.music_note, color: Colors.purpleAccent),
+            title: const Text('Waveform Auto-Sync', style: TextStyle(color: Colors.white)),
+            subtitle: const Text('Align camera and external audio via cross-correlation', style: TextStyle(color: Colors.white70)),
+            trailing: ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                final res = await ave.syncAudioTracks(['track_1', 'track_2']);
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Waveform Synced: Offset ${res['offset_ms'] ?? 0}ms')),
+                  );
+                }
+              },
+              child: const Text('Sync'),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.flash_on, color: Colors.orangeAccent),
+            title: const Text('Generate Editing Proxy', style: TextStyle(color: Colors.white)),
+            subtitle: const Text('Create 720p proxy for low-power mobile playback', style: TextStyle(color: Colors.white70)),
+            trailing: ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await ave.generateProxy('sample.mp4');
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('720p Proxy Generated & Ready for Timeline')),
+                  );
+                }
+              },
+              child: const Text('Proxy'),
+            ),
+          ),
+          ListTile(
             leading: const Icon(Icons.music_note, color: Colors.pinkAccent),
             title: const Text('Rhythm Beat Detector', style: TextStyle(color: Colors.white)),
             subtitle: const Text('Detect transient beats & place snap markers', style: TextStyle(color: Colors.white70)),

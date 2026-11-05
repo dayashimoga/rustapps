@@ -58,6 +58,11 @@ typedef _dart_ulv_cluster_errors = Pointer<Utf8> Function(
 typedef _c_ulv_free_string = Void Function(Pointer<Utf8> ptr);
 typedef _dart_ulv_free_string = void Function(Pointer<Utf8> ptr);
 
+typedef _c_ulv_dispatch_command = Pointer<Utf8> Function(
+    Pointer<UlvHandleOpaque> handle, Pointer<Utf8> cmd, Pointer<Utf8> argsJson);
+typedef _dart_ulv_dispatch_command = Pointer<Utf8> Function(
+    Pointer<UlvHandleOpaque> handle, Pointer<Utf8> cmd, Pointer<Utf8> argsJson);
+
 /// Dynamic loader and FFI interface to Rust `universal_log_viewer`
 class UlvFfiBindings {
   static UlvFfiBindings? _instance;
@@ -72,6 +77,7 @@ class UlvFfiBindings {
   late _dart_ulv_mine_templates mineTemplates;
   late _dart_ulv_cluster_errors clusterErrors;
   late _dart_ulv_free_string freeString;
+  late _dart_ulv_dispatch_command dispatchCommand;
 
   UlvFfiBindings._(DynamicLibrary lib) {
     _lib = lib;
@@ -94,6 +100,8 @@ class UlvFfiBindings {
         _dart_ulv_cluster_errors>('ulv_cluster_errors');
     freeString = _lib
         .lookupFunction<_c_ulv_free_string, _dart_ulv_free_string>('ulv_free_string');
+    dispatchCommand = _lib
+        .lookupFunction<_c_ulv_dispatch_command, _dart_ulv_dispatch_command>('ulv_dispatch_command');
   }
 
   /// Factory resolving OS-specific dynamic library binary path

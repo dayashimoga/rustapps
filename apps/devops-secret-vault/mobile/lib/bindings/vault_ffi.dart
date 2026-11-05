@@ -129,6 +129,11 @@ typedef _c_vault_unlock_with_shamir_shares = Int32 Function(
 typedef _dart_vault_unlock_with_shamir_shares = int Function(
     Pointer<VaultHandleOpaque> handle, Pointer<Utf8> sharesJson);
 
+typedef _c_vault_dispatch_command = Pointer<Utf8> Function(
+    Pointer<VaultHandleOpaque> handle, Pointer<Utf8> cmd, Pointer<Utf8> argsJson);
+typedef _dart_vault_dispatch_command = Pointer<Utf8> Function(
+    Pointer<VaultHandleOpaque> handle, Pointer<Utf8> cmd, Pointer<Utf8> argsJson);
+
 /// Dynamic loader and FFI interface to Rust `vault_core`
 class VaultFfiBindings {
   static VaultFfiBindings? _instance;
@@ -157,6 +162,7 @@ class VaultFfiBindings {
   late _dart_vault_unlock_with_biometrics unlockWithBiometrics;
   late _dart_vault_split_master_key splitMasterKey;
   late _dart_vault_unlock_with_shamir_shares unlockWithShamirShares;
+  late _dart_vault_dispatch_command dispatchCommand;
 
   VaultFfiBindings._(DynamicLibrary lib) {
     _lib = lib;
@@ -205,6 +211,8 @@ class VaultFfiBindings {
         _dart_vault_split_master_key>('vault_split_master_key');
     unlockWithShamirShares = _lib.lookupFunction<_c_vault_unlock_with_shamir_shares,
         _dart_vault_unlock_with_shamir_shares>('vault_unlock_with_shamir_shares');
+    dispatchCommand = _lib.lookupFunction<_c_vault_dispatch_command,
+        _dart_vault_dispatch_command>('vault_dispatch_command');
   }
 
   /// Factory resolving OS-specific dynamic library binary path

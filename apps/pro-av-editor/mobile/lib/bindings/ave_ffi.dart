@@ -79,6 +79,11 @@ typedef _dart_ave_get_templates = Pointer<Utf8> Function(Pointer<AveHandleOpaque
 typedef _c_ave_get_export_presets = Pointer<Utf8> Function(Pointer<AveHandleOpaque> handle);
 typedef _dart_ave_get_export_presets = Pointer<Utf8> Function(Pointer<AveHandleOpaque> handle);
 
+typedef _c_ave_dispatch_command = Pointer<Utf8> Function(
+    Pointer<AveHandleOpaque> handle, Pointer<Utf8> cmd, Pointer<Utf8> argsJson);
+typedef _dart_ave_dispatch_command = Pointer<Utf8> Function(
+    Pointer<AveHandleOpaque> handle, Pointer<Utf8> cmd, Pointer<Utf8> argsJson);
+
 /// Low-level FFI binding class
 class AveFfiBindings {
   late final DynamicLibrary _lib;
@@ -103,6 +108,7 @@ class AveFfiBindings {
   late final _dart_ave_export_fcpxml _exportFcpxml;
   late final _dart_ave_get_templates _getTemplates;
   late final _dart_ave_get_export_presets _getExportPresets;
+  late final _dart_ave_dispatch_command _dispatchCommand;
 
   AveFfiBindings([DynamicLibrary? lib]) {
     _lib = lib ?? _openLibrary();
@@ -154,6 +160,7 @@ class AveFfiBindings {
     _exportFcpxml = _lib.lookupFunction<_c_ave_export_fcpxml, _dart_ave_export_fcpxml>('ave_export_fcpxml');
     _getTemplates = _lib.lookupFunction<_c_ave_get_templates, _dart_ave_get_templates>('ave_get_templates');
     _getExportPresets = _lib.lookupFunction<_c_ave_get_export_presets, _dart_ave_get_export_presets>('ave_get_export_presets');
+    _dispatchCommand = _lib.lookupFunction<_c_ave_dispatch_command, _dart_ave_dispatch_command>('ave_dispatch_command');
   }
 
   Pointer<AveHandleOpaque> createHandle([String? dataDir]) {
@@ -326,6 +333,23 @@ class AveFfiBindings {
       return ptr.toDartString();
     } finally {
       _freeString(ptr);
+    }
+  }
+
+  String dispatchCommand(Pointer<AveHandleOpaque> handle, String cmd, String argsJson) {
+    final cmdPtr = cmd.toNativeUtf8();
+    final argsPtr = argsJson.toNativeUtf8();
+    try {
+      final ptr = _dispatchCommand(handle, cmdPtr, argsPtr);
+      if (ptr == nullptr) return '{}';
+      try {
+        return ptr.toDartString();
+      } finally {
+        _freeString(ptr);
+      }
+    } finally {
+      calloc.free(cmdPtr);
+      calloc.free(argsPtr);
     }
   }
 }

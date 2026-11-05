@@ -242,6 +242,25 @@ void main() {
       expect(await vaultService.unlockWithShamirShares(shares), isTrue);
       expect(await vaultService.isLocked(), isFalse);
     });
+
+    test('VaultService password generator, leak scanner, and dispatch command in mock mode', () async {
+      final vaultService = VaultService(mockMode: true);
+      await vaultService.open(':memory:');
+      await vaultService.initialize('MasterPass!');
+
+      final pwd = await vaultService.generatePassword(length: 32);
+      expect(pwd['password'], isNotEmpty);
+      expect((pwd['entropy'] as num).toDouble(), greaterThan(50.0));
+
+      final leaks = await vaultService.scanForLeaks('AWS_SECRET_ACCESS_KEY=dummy');
+      expect(leaks, isNotNull);
+
+      final hook = await vaultService.generatePreCommitHook();
+      expect(hook, contains('#!/bin/sh'));
+
+      final res = await vaultService.dispatchCommand('ping');
+      expect(res['status'], 'ok');
+    });
   });
 
   group('BiometricService Unit Tests', () {

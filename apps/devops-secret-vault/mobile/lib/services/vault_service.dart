@@ -452,4 +452,75 @@ class VaultService {
       calloc.free(jsonPtr);
     }
   }
+
+  /// Dispatch any desktop IPC command via unified JSON-RPC over C-ABI
+  Future<dynamic> dispatchCommand(String cmd, [Map<String, dynamic>? args]) async {
+    if (_mockMode) {
+      if (cmd == 'generate_secret') {
+        return {'password': 'Mock-Secure-Password-99!', 'entropy': 96.5};
+      }
+      if (cmd == 'scan_secret_leaks') {
+        return {'findings': [], 'total_scanned': 1, 'leaks_found': 0};
+      }
+      if (cmd == 'generate_pre_commit_hook') {
+        return {'hook_script': '#!/bin/sh\nexit 0', 'installed': false};
+      }
+      return {'status': 'ok', 'cmd': cmd, 'mock': true};
+    }
+    if (_handle == null) throw StateError('Vault handle not opened');
+
+    final cmdPtr = cmd.toNativeUtf8();
+    final argsJson = jsonEncode(args ?? {});
+    final argsPtr = argsJson.toNativeUtf8();
+    try {
+      final resPtr = _ffi!.dispatchCommand(_handle!, cmdPtr, argsPtr);
+      final outStr = _ffi!.readAndFreeString(resPtr);
+      if (outStr == null) {
+        throw Exception('Null response returned from vault_dispatch_command');
+      }
+      return jsonDecode(outStr);
+    } finally {
+      calloc.free(cmdPtr);
+      calloc.free(argsPtr);
+    }
+  }
+
+  /// Generate a cryptographically secure random password
+  Future<Map<String, dynamic>> generatePassword({
+    int length = 24,
+    bool numbers = true,
+    bool symbols = true,
+    bool uppercase = true,
+    bool lowercase = true,
+  }) async {
+    final res = await dispatchCommand('generate_secret', {
+      'length': length,
+      'include_numbers': numbers,
+      'include_symbols': symbols,
+      'include_uppercase': uppercase,
+      'include_lowercase': lowercase,
+    });
+    return res is Map<String, dynamic> ? res : {'password': res.toString(), 'entropy': 80.0};
+  }
+
+  /// Scan arbitrary text or code for secret leaks / sensitive tokens
+  Future<Map<String, dynamic>> scanForLeaks(String content) async {
+    final res = await dispatchCommand('scan_secret_leaks', {'content': content});
+    return res is Map<String, dynamic> ? res : {'findings': [], 'leaks_found': 0};
+  }
+
+  /// Import secrets from .env formatted content
+  Future<Map<String, dynamic>> importEnv(String content) async {
+    final res = await dispatchCommand('import_env_file', {'content': content});
+    return res is Map<String, dynamic> ? res : {'imported': 0};
+  }
+
+  /// Generate git pre-commit hook script to prevent secret commits
+  Future<String> generatePreCommitHook() async {
+    final res = await dispatchCommand('generate_pre_commit_hook');
+    if (res is Map<String, dynamic> && res.containsKey('hook_script')) {
+      return res['hook_script'] as String;
+    }
+    return res.toString();
+  }
 }

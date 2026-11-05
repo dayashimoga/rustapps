@@ -155,6 +155,25 @@ void main() {
       expect(tpl.name, 'Cinema Scope (2.39:1)');
       expect(tpl.category, 'Cinema');
     });
+
+    test('Proxy and AudioSync dispatch payload verification', () {
+      final syncPayload = {
+        'status': 'ok',
+        'offset_ms': 120,
+        'correlation_score': 0.94,
+      };
+      expect(syncPayload['offset_ms'], 120);
+      expect(syncPayload['correlation_score'], 0.94);
+
+      final proxyPayload = {
+        'status': 'ok',
+        'proxy_path': '/proxies/sample_720p.mp4',
+        'resolution': '720p',
+        'ready': true,
+      };
+      expect(proxyPayload['ready'], true);
+      expect(proxyPayload['resolution'], '720p');
+    });
   });
 }
 

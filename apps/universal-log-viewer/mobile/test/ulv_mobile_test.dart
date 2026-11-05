@@ -184,6 +184,24 @@ void main() {
       expect(clusters.isNotEmpty, isTrue);
       expect(clusters.first.errorCount, 45);
     });
+
+    test('mergeLogFiles, buildWaterfall, aggregateFields, and dispatchCommand in mock mode', () async {
+      await service.open('test_file.log');
+
+      final mergeRes = await service.mergeLogFiles(['a.log', 'b.log']);
+      expect(mergeRes['status'], 'ok');
+      expect(mergeRes['merged_lines'], 500);
+
+      final waterfall = await service.buildWaterfall();
+      expect(waterfall, isNotNull);
+
+      final freqs = await service.aggregateFields('level');
+      expect(freqs['frequencies'], isNotNull);
+      expect((freqs['frequencies'] as Map)['INFO'], 120);
+
+      final pingRes = await service.dispatchCommand('ping');
+      expect(pingRes['status'], 'ok');
+    });
   });
 }
 

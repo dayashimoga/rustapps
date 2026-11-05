@@ -341,7 +341,7 @@ class _UnlockScreenState extends State<UnlockScreen> {
                             ),
                           ),
                           style: OutlinedButton.styleFrom(
-                            side: Border.all(
+                            side: BorderSide(
                               color: const Color(0xFF00E5FF).withOpacity(0.3),
                             ),
                             shape: RoundedRectangleBorder(

@@ -4,7 +4,6 @@ import '../lib/models/explorer_models.dart';
 import '../lib/services/afe_service.dart';
 import '../lib/screens/browser_screen.dart';
 import '../lib/screens/content_search_screen.dart';
-import '../lib/screens/ocr_screen.dart';
 import '../lib/screens/compliance_screen.dart';
 
 void main() {
@@ -141,6 +140,22 @@ void main() {
       expect(comp.findings[0].dataType, 'private_key');
       expect(comp.findings[0].severity, 'critical');
     });
+
+    test('ArchiveEntryItem parsing', () {
+      final json = {
+        'path': 'docs/manual.pdf',
+        'size': 10240,
+        'compressed_size': 4096,
+        'is_dir': false,
+        'crc32': 12345678,
+      };
+      final item = ArchiveEntryItem.fromJson(json);
+      expect(item.path, 'docs/manual.pdf');
+      expect(item.size, 10240);
+      expect(item.compressedSize, 4096);
+      expect(item.isDir, false);
+      expect(item.crc32, 12345678);
+    });
   });
 
   group('AfeService Mock Integration Tests', () {
@@ -166,6 +181,17 @@ void main() {
       final comp = await service.scanCompliance('/storage/emulated/0/Documents');
       expect(comp.findingsCount, 2);
       expect(comp.criticalCount, 1);
+
+      // Hash, Archive & Dispatch
+      final hash = await service.computeFileHash('/storage/emulated/0/Documents/project_plan.md');
+      expect(hash.length, 64);
+
+      final entries = await service.inspectArchive('/storage/emulated/0/archive.zip');
+      expect(entries.length, 3);
+      expect(entries.first.path, 'README.md');
+
+      final cmdRes = await service.dispatchCommand('ping');
+      expect(cmdRes['status'], 'ok');
 
       service.close();
     });

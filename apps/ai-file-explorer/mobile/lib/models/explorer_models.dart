@@ -410,3 +410,38 @@ class ComplianceScanSummary {
   }
 }
 
+class ArchiveEntryItem {
+  final String path;
+  final int size;
+  final int compressedSize;
+  final bool isDir;
+  final int? crc32;
+
+  ArchiveEntryItem({
+    required this.path,
+    required this.size,
+    required this.compressedSize,
+    required this.isDir,
+    this.crc32,
+  });
+
+  factory ArchiveEntryItem.fromJson(Map<String, dynamic> json) {
+    return ArchiveEntryItem(
+      path: json['path'] as String? ?? '',
+      size: (json['size'] as num?)?.toInt() ?? 0,
+      compressedSize: (json['compressed_size'] as num?)?.toInt() ?? 0,
+      isDir: json['is_dir'] as bool? ?? false,
+      crc32: (json['crc32'] as num?)?.toInt(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'path': path,
+        'size': size,
+        'compressed_size': compressedSize,
+        'is_dir': isDir,
+        'crc32': crc32,
+      };
+}
+
+

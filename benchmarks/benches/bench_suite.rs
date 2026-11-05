@@ -696,6 +696,7 @@ fn benchmark_universal_live_translator(c: &mut Criterion) {
                 black_box(SubtitleFormat::Srt),
                 black_box(Some(LanguageCode::En)),
                 black_box(LanguageCode::Es),
+                black_box(None),
             );
             black_box(res).unwrap();
         });

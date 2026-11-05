@@ -1095,6 +1095,7 @@ mod integration_tests {
                 SubtitleFormat::Srt,
                 Some(LanguageCode::En),
                 LanguageCode::Es,
+                None,
             )
             .unwrap();
         assert!(srt_translated.contains("00:00:01,000 --> 00:00:04,500"));
@@ -1144,6 +1145,8 @@ mod integration_tests {
             blend_mode: Default::default(),
             transform: Default::default(),
             color_grading: Default::default(),
+            chroma_key: Default::default(),
+            keyframed_transform: None,
             eq_settings: Default::default(),
             compressor: Default::default(),
         };
@@ -1166,6 +1169,8 @@ mod integration_tests {
             blend_mode: Default::default(),
             transform: Default::default(),
             color_grading: Default::default(),
+            chroma_key: Default::default(),
+            keyframed_transform: None,
             eq_settings: Default::default(),
             compressor: Default::default(),
         };

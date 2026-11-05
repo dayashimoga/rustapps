@@ -75,7 +75,7 @@ void main() {
 
     test('UltService fallback in test environment', () async {
       final service = UltService();
-      await service.initialize();
+      await service.initialize(mockMode: true);
 
       // In unit test environment without loading dynamic library, fallback is triggered
       final lid = await service.detectLanguage('Hola amigo');
@@ -89,6 +89,16 @@ void main() {
 
       final phrases = await service.listPhrases();
       expect(phrases.isNotEmpty, true);
+
+      // Stage 2 additions: glossary domain and document translation
+      service.setGlossaryDomain('medical');
+      expect(service.currentGlossaryDomain, 'medical');
+
+      final docTrans = await service.translateDocument('Patient hypertension diagnosis', 'en', 'es', domain: 'medical');
+      expect(docTrans, contains('Patient hypertension diagnosis'));
+
+      final pingRes = await service.dispatchCommand('ping');
+      expect(pingRes['status'], 'ok');
     });
   });
 }

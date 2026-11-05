@@ -14,4 +14,28 @@ Thumbs.db
 portable.flag
 .vite/
 vitest.results.json
+
+# Flutter / Dart build artifacts
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+**/build/
+**/android/local.properties
+**/ios/Flutter/
+**/GeneratedPluginRegistrant.*
+**/pubspec.lock
+
+
 results.json
+
+# Flutter / Dart build artifacts
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+**/build/
+**/android/local.properties
+**/ios/Flutter/
+**/GeneratedPluginRegistrant.*
+**/pubspec.lock
+
+

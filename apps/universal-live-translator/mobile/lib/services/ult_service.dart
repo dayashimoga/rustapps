@@ -54,7 +54,7 @@ class UltService extends ChangeNotifier {
     if (_bindings == null || _handle == null || _handle == nullptr) {
       // Deterministic fallback for mock/preview mode
       return LidResult(
-        language: text.contains('¿') || text.contains('ñ') ? 'es' : 'en',
+        language: text.toLowerCase().contains('hola') || text.contains('¿') || text.contains('ñ') ? 'es' : 'en',
         confidence: 0.95,
         detectedScript: 'Latin',
       );
@@ -200,6 +200,58 @@ class UltService extends ChangeNotifier {
     } finally {
       if (catPtr != nullptr) calloc.free(catPtr);
     }
+  }
+
+  String _currentGlossaryDomain = 'general';
+  String get currentGlossaryDomain => _currentGlossaryDomain;
+
+  void setGlossaryDomain(String domain) {
+    _currentGlossaryDomain = domain.toLowerCase();
+    dispatchCommand('set_glossary_domain', {'domain': _currentGlossaryDomain});
+    notifyListeners();
+  }
+
+  /// Dispatch any desktop IPC command via unified JSON-RPC over C-ABI
+  Future<dynamic> dispatchCommand(String cmd, [Map<String, dynamic>? args]) async {
+    if (_mockMode || _bindings == null || _handle == null || _handle == nullptr) {
+      if (cmd == 'set_glossary_domain') {
+        return {'status': 'ok', 'domain': args?['domain'] ?? 'general'};
+      }
+      if (cmd == 'translate_document') {
+        return {'translated_text': 'Translated document: ${args?['text'] ?? ''}', 'latency_ms': 42.0};
+      }
+      if (cmd == 'list_glossary_domains') {
+        return ['general', 'medical', 'legal', 'technical'];
+      }
+      return {'status': 'ok', 'cmd': cmd, 'mock': true};
+    }
+
+    final cmdPtr = cmd.toNativeUtf8();
+    final argsJson = jsonEncode(args ?? {});
+    final argsPtr = argsJson.toNativeUtf8();
+    try {
+      final resPtr = _bindings!.ultDispatchCommand(_handle!, cmdPtr, argsPtr);
+      final outStr = resPtr.toDartString();
+      _bindings!.ultFreeString(resPtr);
+      return jsonDecode(outStr);
+    } finally {
+      calloc.free(cmdPtr);
+      calloc.free(argsPtr);
+    }
+  }
+
+  /// Batch translate structured or continuous document
+  Future<String> translateDocument(String text, String from, String to, {String domain = 'general'}) async {
+    final res = await dispatchCommand('translate_document', {
+      'text': text,
+      'source_lang': from,
+      'target_lang': to,
+      'domain': domain,
+    });
+    if (res is Map<String, dynamic> && res.containsKey('translated_text')) {
+      return res['translated_text'] as String;
+    }
+    return res.toString();
   }
 
   @override

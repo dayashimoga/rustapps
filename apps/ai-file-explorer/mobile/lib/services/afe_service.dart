@@ -341,6 +341,84 @@ class AfeService {
     }
   }
 
+  /// Compute BLAKE3 cryptographic hash of a file
+  Future<String> computeFileHash(String path) async {
+    if (_mockMode) {
+      return 'af1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef';
+    }
+    if (_handle == null) throw StateError('AFE handle not opened');
+
+    final pathPtr = path.toNativeUtf8();
+    try {
+      final resPtr = _ffi!.computeFileHash(_handle!, pathPtr);
+      if (resPtr == nullptr) {
+        throw Exception('Null pointer returned from afe_compute_file_hash');
+      }
+      try {
+        final str = resPtr.toDartString();
+        final decoded = jsonDecode(str);
+        if (decoded is Map<String, dynamic> && decoded.containsKey('error')) {
+          throw Exception(decoded['error'] as String);
+        }
+        if (decoded is Map<String, dynamic> && decoded.containsKey('hash')) {
+          return decoded['hash'] as String;
+        }
+        return decoded.toString();
+      } finally {
+        _ffi!.freeString(resPtr);
+      }
+    } finally {
+      calloc.free(pathPtr);
+    }
+  }
+
+  /// Inspect archive file contents (.zip, .tar, .gz) without full extraction
+  Future<List<ArchiveEntryItem>> inspectArchive(String path, {int maxEntries = 500}) async {
+    if (_mockMode) {
+      return [
+        ArchiveEntryItem(path: 'README.md', size: 1024, compressedSize: 400, isDir: false),
+        ArchiveEntryItem(path: 'src/', size: 0, compressedSize: 0, isDir: true),
+        ArchiveEntryItem(path: 'src/main.rs', size: 2048, compressedSize: 850, isDir: false),
+      ];
+    }
+    if (_handle == null) throw StateError('AFE handle not opened');
+
+    final pathPtr = path.toNativeUtf8();
+    try {
+      final resPtr = _ffi!.inspectArchive(_handle!, pathPtr, maxEntries);
+      return _parseJsonListAndFree(resPtr, (j) => ArchiveEntryItem.fromJson(j));
+    } finally {
+      calloc.free(pathPtr);
+    }
+  }
+
+  /// Dispatch generic IPC command via unified JSON-RPC over C-ABI
+  Future<dynamic> dispatchCommand(String cmd, [Map<String, dynamic>? args]) async {
+    if (_mockMode) {
+      return {'status': 'ok', 'cmd': cmd, 'mock': true};
+    }
+    if (_handle == null) throw StateError('AFE handle not opened');
+
+    final cmdPtr = cmd.toNativeUtf8();
+    final argsJson = jsonEncode(args ?? {});
+    final argsPtr = argsJson.toNativeUtf8();
+    try {
+      final resPtr = _ffi!.dispatchCommand(_handle!, cmdPtr, argsPtr);
+      if (resPtr == nullptr) {
+        throw Exception('Null pointer returned from afe_dispatch_command');
+      }
+      try {
+        final str = resPtr.toDartString();
+        return jsonDecode(str);
+      } finally {
+        _ffi!.freeString(resPtr);
+      }
+    } finally {
+      calloc.free(cmdPtr);
+      calloc.free(argsPtr);
+    }
+  }
+
   // -------------------------------------------------------------------------
   // JSON Deserialization & Pointer Freeing Helpers
   // -------------------------------------------------------------------------

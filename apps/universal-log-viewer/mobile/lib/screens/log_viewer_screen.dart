@@ -153,6 +153,181 @@ class _LogViewerScreenState extends State<LogViewerScreen> {
     }
   }
 
+  void _showOpenFileModal() {
+    final controller = TextEditingController(text: _fileInfo?.filePath ?? '');
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161B22),
+        title: const Text('Open Log File / Stream', style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Enter an absolute file path or directory to load logs offline.',
+              style: TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              decoration: const InputDecoration(
+                hintText: '/path/to/logfile.log',
+                filled: true,
+                fillColor: Color(0xFF0F141C),
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final path = controller.text.trim();
+              if (path.isNotEmpty) {
+                Navigator.pop(ctx);
+                _loadFile(path);
+              }
+            },
+            child: const Text('Open'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTraceWaterfallModal() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF161B22),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.waterfall_chart, color: Color(0xFF38BDF8)),
+                SizedBox(width: 8),
+                Text(
+                  'OpenTelemetry Trace Waterfall',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Correlates spans and HTTP/gRPC traces chronologically to detect latency bottlenecks.',
+              style: TextStyle(color: Colors.white60, fontSize: 12),
+            ),
+            const SizedBox(height: 16),
+            FutureBuilder<Map<String, dynamic>>(
+              future: widget.service.buildWaterfall(),
+              builder: (ctx, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final traces = (snapshot.data?['traces'] as List<dynamic>?) ?? [];
+                if (traces.isEmpty) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: Center(
+                      child: Text(
+                        'No trace spans detected in current log stream',
+                        style: TextStyle(color: Colors.white54),
+                      ),
+                    ),
+                  );
+                }
+                return SizedBox(
+                  height: 200,
+                  child: ListView.builder(
+                    itemCount: traces.length,
+                    itemBuilder: (ctx, i) {
+                      final span = traces[i];
+                      return ListTile(
+                        leading: const Icon(Icons.hub_outlined, color: Colors.cyanAccent),
+                        title: Text(span.toString(), style: const TextStyle(color: Colors.white, fontSize: 12)),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showFieldAggregatorModal() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF161B22),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.pie_chart_outline, color: Color(0xFF38BDF8)),
+                SizedBox(width: 8),
+                Text(
+                  'Structured Field Frequency Aggregator',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            FutureBuilder<Map<String, dynamic>>(
+              future: widget.service.aggregateFields('level'),
+              builder: (ctx, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final freqs = (snapshot.data?['frequencies'] as Map<String, dynamic>?) ?? {};
+                return Column(
+                  children: freqs.entries.map((e) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey.withOpacity(0.3),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(e.key, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          ),
+                          const Spacer(),
+                          Text('${e.value} occurrences', style: const TextStyle(color: Colors.white70)),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _openAiInsightsSheet() {
     showModalBottomSheet(
       context: context,
@@ -302,6 +477,21 @@ class _LogViewerScreenState extends State<LogViewerScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.folder_open, color: Color(0xFF38BDF8)),
+            onPressed: _showOpenFileModal,
+            tooltip: 'Open Log File / Stream',
+          ),
+          IconButton(
+            icon: const Icon(Icons.waterfall_chart, color: Color(0xFF38BDF8)),
+            onPressed: _showTraceWaterfallModal,
+            tooltip: 'OpenTelemetry Trace Waterfall',
+          ),
+          IconButton(
+            icon: const Icon(Icons.pie_chart_outline, color: Color(0xFF38BDF8)),
+            onPressed: _showFieldAggregatorModal,
+            tooltip: 'Field Frequency Aggregator',
+          ),
           IconButton(
             icon: const Icon(Icons.insights_outlined, color: Color(0xFF38BDF8)),
             onPressed: _openAiInsightsSheet,

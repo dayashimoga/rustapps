@@ -275,6 +275,62 @@ class UlvService {
     return [];
   }
 
+  /// Dispatch any desktop IPC command via unified JSON-RPC over C-ABI
+  Future<dynamic> dispatchCommand(String cmd, [Map<String, dynamic>? args]) async {
+    if (_mockMode) {
+      if (cmd == 'merge_log_files') {
+        return {'status': 'ok', 'merged_lines': 500, 'merged_file': 'merged.log'};
+      }
+      if (cmd == 'build_waterfall') {
+        return {'traces': [], 'total_spans': 0};
+      }
+      if (cmd == 'aggregate_fields') {
+        return {'field': args?['field_name'] ?? 'level', 'frequencies': {'INFO': 120, 'WARN': 30, 'ERROR': 5}};
+      }
+      return {'status': 'ok', 'cmd': cmd, 'mock': true};
+    }
+    if (_handle == null) throw StateError('Handle is not opened');
+
+    final cmdPtr = cmd.toNativeUtf8();
+    final argsJson = jsonEncode(args ?? {});
+    final argsPtr = argsJson.toNativeUtf8();
+    try {
+      final resPtr = _ffi!.dispatchCommand(_handle!, cmdPtr, argsPtr);
+      final outStr = _ffi!.readAndFreeString(resPtr);
+      if (outStr == null) {
+        throw Exception('Null response returned from ulv_dispatch_command');
+      }
+      return jsonDecode(outStr);
+    } finally {
+      calloc.free(cmdPtr);
+      calloc.free(argsPtr);
+    }
+  }
+
+  /// Chronologically merge multiple log files into a single unified stream
+  Future<Map<String, dynamic>> mergeLogFiles(List<String> paths, {String? outputPath}) async {
+    final res = await dispatchCommand('merge_log_files', {
+      'paths': paths,
+      'output_path': outputPath,
+    });
+    return res is Map<String, dynamic> ? res : {'status': 'ok', 'result': res};
+  }
+
+  /// Extract OpenTelemetry spans and build trace waterfall
+  Future<Map<String, dynamic>> buildWaterfall({int maxSpans = 200}) async {
+    final res = await dispatchCommand('build_waterfall', {'max_spans': maxSpans});
+    return res is Map<String, dynamic> ? res : {'traces': []};
+  }
+
+  /// Aggregate occurrences of structured log fields
+  Future<Map<String, dynamic>> aggregateFields(String fieldName, {int topN = 10}) async {
+    final res = await dispatchCommand('aggregate_fields', {
+      'field_name': fieldName,
+      'top_n': topN,
+    });
+    return res is Map<String, dynamic> ? res : {'frequencies': {}};
+  }
+
   void _generateMockLogs(int count) {
     _mockLines.clear();
     final levels = ['INFO', 'INFO', 'WARN', 'ERROR', 'DEBUG'];

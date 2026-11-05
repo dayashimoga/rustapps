@@ -327,22 +327,25 @@ class _BackupScreenState extends State<BackupScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  SwitchListTile(
-                    title: const Text(
-                      'Overwrite Existing Items',
-                      style: TextStyle(color: Colors.white, fontSize: 13),
-                    ),
-                    subtitle: Text(
-                      'Replaces secrets with matching IDs or fingerprints',
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(0.5),
-                        fontSize: 11,
+                  Material(
+                    type: MaterialType.transparency,
+                    child: SwitchListTile(
+                      title: const Text(
+                        'Overwrite Existing Items',
+                        style: TextStyle(color: Colors.white, fontSize: 13),
                       ),
+                      subtitle: Text(
+                        'Replaces secrets with matching IDs or fingerprints',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.5),
+                          fontSize: 11,
+                        ),
+                      ),
+                      value: _overwriteExisting,
+                      activeColor: const Color(0xFF00E676),
+                      contentPadding: EdgeInsets.zero,
+                      onChanged: (val) => setState(() => _overwriteExisting = val),
                     ),
-                    value: _overwriteExisting,
-                    activeColor: const Color(0xFF00E676),
-                    contentPadding: EdgeInsets.zero,
-                    onChanged: (val) => setState(() => _overwriteExisting = val),
                   ),
                   const SizedBox(height: 12),
                   SizedBox(
