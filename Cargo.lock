@@ -863,6 +863,7 @@ dependencies = [
  "rusqlite",
  "shared-encryption",
  "shared-indexing",
+ "shared-licensing",
  "shared-logging",
  "shared-plugins",
  "shared-search",
@@ -873,6 +874,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "universal-live-translator",
+ "universal-log-viewer",
 ]
 
 [[package]]

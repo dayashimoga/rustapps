@@ -705,6 +705,76 @@ fn benchmark_universal_live_translator(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_pro_av_editor(c: &mut Criterion) {
+    use pave_core::audio_engine::{EbuR128Meter, WaveformAligner};
+    use pave_core::compositor::LayerCompositor;
+    use pave_core::models::{FrameRate, Timecode};
+    use pave_core::service::EditorService;
+
+    let mut group = c.benchmark_group("pro_av_editor");
+
+    // 1. 60 FPS SLA Layer Compositing (< 16.6 ms per frame)
+    let service = EditorService::new();
+    let proj = service.get_project().unwrap();
+
+    group.bench_function("pave_layer_composite_1080p_60fps_sla", |b| {
+        b.iter(|| {
+            let frame = LayerCompositor::evaluate_frame(
+                black_box(&proj),
+                black_box(1000),
+                black_box(1920),
+                black_box(1080),
+            );
+            black_box(frame).unwrap();
+        });
+    });
+
+    // 2. SMPTE Timecode Conversion & Calculation (< 1 ms)
+    group.bench_function("pave_smpte_timecode_calc", |b| {
+        b.iter(|| {
+            let tc = Timecode::from_millis(black_box(125430), black_box(FrameRate::Fps60));
+            let s = tc.to_smpte();
+            black_box(s);
+        });
+    });
+
+    // 3. Audio Waveform Cross-Correlation Sync (< 5 ms)
+    let mut audio_ref = Vec::with_capacity(48000);
+    let mut audio_target = Vec::with_capacity(48000);
+    for i in 0..48000 {
+        let t = i as f32 / 48000.0;
+        let s = (2.0 * std::f32::consts::PI * 440.0 * t).sin();
+        audio_ref.push(s);
+        let s_target = (2.0 * std::f32::consts::PI * 440.0 * (t + 100.0 / 48000.0)).sin();
+        audio_target.push(s_target);
+    }
+
+    group.bench_function("pave_audio_cross_correlation_sync", |b| {
+        b.iter(|| {
+            let shift = WaveformAligner::calculate_offset(
+                black_box(&audio_ref),
+                black_box(&audio_target),
+                black_box(48000),
+                black_box(1000),
+            );
+            black_box(shift);
+        });
+    });
+
+    // 4. EBU R128 Loudness Meter Processing Block (< 10 ms)
+    let stereo_samples: Vec<(f32, f32)> = audio_ref.iter().map(|&x| (x, x * 0.9)).collect();
+    group.bench_function("pave_ebu_r128_loudness_analysis", |b| {
+        b.iter(|| {
+            let mut meter = EbuR128Meter::new(48000);
+            meter.process_block(black_box(&stereo_samples));
+            let readings = meter.readings();
+            black_box(readings);
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -720,6 +790,7 @@ criterion_group!(
     benchmark_vault_advanced_features,
     benchmark_file_explorer_operations,
     benchmark_file_explorer_advanced_features,
-    benchmark_universal_live_translator
+    benchmark_universal_live_translator,
+    benchmark_pro_av_editor
 );
 criterion_main!(benches);

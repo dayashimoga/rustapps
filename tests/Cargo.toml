@@ -22,4 +22,6 @@ shared-settings.workspace = true
 devops-secret-vault = { path = "../apps/devops-secret-vault" }
 ai-file-explorer = { path = "../apps/ai-file-explorer" }
 universal-live-translator = { path = "../apps/universal-live-translator" }
+universal-log-viewer = { path = "../apps/universal-log-viewer" }
 pro-av-editor = { path = "../apps/pro-av-editor" }
+shared-licensing = { path = "../shared/licensing" }
