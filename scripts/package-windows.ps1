@@ -1,5 +1,5 @@
 # Windows Packaging Automation Script (ADR-0030)
-# Packages DevOps Secret Vault, AI File Explorer, Universal Log Viewer, Universal Live Translator, and Pro AV Editor for Windows
+# Packages all 12 monorepo standalone applications for Windows
 param (
     [string]$Target = $( (rustc -vV | Select-String "host:").ToString().Split(':')[1].Trim() ),
     [string]$Version = "0.1.0",
@@ -22,7 +22,7 @@ if ($AppName -ne "") {
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
 # 0. Build Embedded Svelte 5 Desktop UI Bundles
-Write-Host "[0/4] Building Svelte 5 desktop UI bundles for all 5 apps..." -ForegroundColor Yellow
+Write-Host "[0/4] Building Svelte 5 desktop UI bundles for all applications..." -ForegroundColor Yellow
 foreach ($app in $Apps) {
     $uiDir = "apps/$app/ui"
     if (Test-Path "$uiDir/package.json") {

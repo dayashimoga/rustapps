@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # macOS Packaging Automation Script (ADR-0030)
-# Packages DevOps Secret Vault, AI File Explorer, Universal Log Viewer, Universal Live Translator, and Pro AV Editor for macOS (Intel / Apple Silicon / Universal)
+# Packages all 12 monorepo standalone applications for macOS (Intel / Apple Silicon / Universal)
 set -euo pipefail
 
 VERSION="${1:-0.1.0}"
@@ -19,7 +19,7 @@ fi
 mkdir -p "${OUTPUT_DIR}"
 
 # 0. Build Embedded Svelte 5 Desktop UI Bundles
-echo "[0/4] Building Svelte 5 desktop UI bundles for all 5 apps..."
+echo "[0/4] Building Svelte 5 desktop UI bundles for all applications..."
 for app in "${APPS[@]}"; do
     if [ -f "apps/${app}/ui/package.json" ]; then
         npm --prefix "apps/${app}/ui" run build

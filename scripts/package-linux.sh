@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Linux Packaging Automation Script (ADR-0030)
-# Packages DevOps Secret Vault, AI File Explorer, Universal Log Viewer, Universal Live Translator, and Pro AV Editor for Linux (x64 / ARM64)
+# Packages all 12 monorepo standalone applications for Linux (x64 / ARM64)
 set -euo pipefail
 
 TARGET="${1:-x86_64-unknown-linux-gnu}"
@@ -20,7 +20,7 @@ fi
 mkdir -p "${OUTPUT_DIR}"
 
 # 0. Build Embedded Svelte 5 Desktop UI Bundles
-echo "[0/5] Building Svelte 5 desktop UI bundles for all 5 apps..."
+echo "[0/5] Building Svelte 5 desktop UI bundles for all applications..."
 for app in "${APPS[@]}"; do
     if [ -f "apps/${app}/ui/package.json" ]; then
         npm --prefix "apps/${app}/ui" run build
