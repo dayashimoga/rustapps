@@ -140,37 +140,59 @@ EOF
             echo "  [Android] Setting up local.properties and Gradle wrapper..."
             mkdir -p "${mobile_dir}/android"
 
-            ndk_line=""
-            if [ -n "${ANDROID_NDK_HOME:-}" ]; then
-                ndk_ver=$(basename "${ANDROID_NDK_HOME}")
-                ndk_line="ndk.dir=${ANDROID_NDK_HOME}\nndk.version=${ndk_ver}"
-            fi
-
             cat <<EOF > "${mobile_dir}/android/local.properties"
 sdk.dir=${ANDROID_HOME:-/usr/local/lib/android/sdk}
 flutter.sdk=${FLUTTER_ROOT:-/opt/hostedtoolcache/flutter}
 flutter.buildMode=release
 flutter.versionName=${VERSION}
 flutter.versionCode=1
-${ndk_line}
 EOF
+            if [ -n "${ANDROID_NDK_HOME:-}" ]; then
+                ndk_ver=$(basename "${ANDROID_NDK_HOME}")
+                echo "ndk.dir=${ANDROID_NDK_HOME}" >> "${mobile_dir}/android/local.properties"
+                echo "ndk.version=${ndk_ver}" >> "${mobile_dir}/android/local.properties"
+            fi
 
             # If Gradle wrapper is missing in project, copy from pre-generated template or unpack from Flutter SDK
             if [ ! -f "${mobile_dir}/android/gradlew" ] || [ ! -f "${mobile_dir}/android/gradle/wrapper/gradle-wrapper.jar" ]; then
                 if [ -d "/tmp/flutter_tmpl_wrapper/android/gradle" ]; then
                     echo "  -> Copying Gradle wrapper from /tmp/flutter_tmpl_wrapper..."
-                    cp -rf /tmp/flutter_tmpl_wrapper/android/gradle "${mobile_dir}/android/"
+                    mkdir -p "${mobile_dir}/android/gradle/wrapper"
+                    cp -f /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/gradle-wrapper.jar "${mobile_dir}/android/gradle/wrapper/"
+                    if [ ! -f "${mobile_dir}/android/gradle/wrapper/gradle-wrapper.properties" ]; then
+                        cp -f /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/gradle-wrapper.properties "${mobile_dir}/android/gradle/wrapper/"
+                    fi
                     cp /tmp/flutter_tmpl_wrapper/android/gradlew "${mobile_dir}/android/"
                     cp /tmp/flutter_tmpl_wrapper/android/gradlew.bat "${mobile_dir}/android/"
                 elif command -v flutter &>/dev/null; then
                     echo "  -> Unpacking Flutter Gradle wrapper template..."
                     flutter create --platforms=android --org com.offlineapps --project-name tmpl_wrapper /tmp/flutter_tmpl_wrapper >/dev/null 2>&1 || true
                     if [ -d "/tmp/flutter_tmpl_wrapper/android/gradle" ]; then
-                        cp -rf /tmp/flutter_tmpl_wrapper/android/gradle "${mobile_dir}/android/"
+                        mkdir -p "${mobile_dir}/android/gradle/wrapper"
+                        cp -f /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/gradle-wrapper.jar "${mobile_dir}/android/gradle/wrapper/"
+                        if [ ! -f "${mobile_dir}/android/gradle/wrapper/gradle-wrapper.properties" ]; then
+                            cp -f /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/gradle-wrapper.properties "${mobile_dir}/android/gradle/wrapper/"
+                        fi
                         cp /tmp/flutter_tmpl_wrapper/android/gradlew "${mobile_dir}/android/"
                         cp /tmp/flutter_tmpl_wrapper/android/gradlew.bat "${mobile_dir}/android/"
                     fi
                 fi
+            fi
+
+            # Enforce Gradle 8.5 in gradle-wrapper.properties across all builds
+            if [ -f "${mobile_dir}/android/gradle/wrapper/gradle-wrapper.properties" ]; then
+                sed -i -E 's/gradle-[0-9.]*-(all|bin)\.zip/gradle-8.5-all.zip/g' "${mobile_dir}/android/gradle/wrapper/gradle-wrapper.properties" 2>/dev/null || true
+            else
+                mkdir -p "${mobile_dir}/android/gradle/wrapper"
+                cat <<'WRAPPER_EOF' > "${mobile_dir}/android/gradle/wrapper/gradle-wrapper.properties"
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.5-all.zip
+networkTimeout=10000
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+WRAPPER_EOF
             fi
             chmod +x "${mobile_dir}/android/gradlew" 2>/dev/null || true
         fi

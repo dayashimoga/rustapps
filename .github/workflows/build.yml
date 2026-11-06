@@ -487,6 +487,11 @@ jobs:
         run: |
           mkdir -p /tmp/flutter_tmpl_wrapper
           flutter create --platforms=android --org com.offlineapps --project-name tmpl_wrapper /tmp/flutter_tmpl_wrapper
+          if [ -f /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/gradle-wrapper.properties ]; then
+            sed -i -E 's/gradle-[0-9.]*-(all|bin)\.zip/gradle-8.5-all.zip/g' /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/gradle-wrapper.properties
+            echo "Updated /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/gradle-wrapper.properties:"
+            cat /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/gradle-wrapper.properties
+          fi
           echo "Template Gradle wrapper generated at /tmp/flutter_tmpl_wrapper"
           ls -la /tmp/flutter_tmpl_wrapper/android
           ls -la /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/
