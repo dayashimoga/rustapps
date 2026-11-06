@@ -509,6 +509,7 @@ jobs:
           cp -rf dist/android/${{ matrix.app }}/. "dist-packages/${{ matrix.app }}/"
           echo "Generated Android artifacts:"
           ls -la "dist-packages/${{ matrix.app }}/"
+          test -f "dist-packages/${{ matrix.app }}/${{ matrix.app }}-0.1.0.apk" || { echo "CRITICAL: APK was not generated!"; exit 1; }
         shell: bash
 
       - name: Upload ${{ matrix.app }} Android Artifact

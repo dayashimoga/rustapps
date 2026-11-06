@@ -139,12 +139,20 @@ EOF
         if ! ${is_ios}; then
             echo "  [Android] Setting up local.properties and Gradle wrapper..."
             mkdir -p "${mobile_dir}/android"
+
+            ndk_line=""
+            if [ -n "${ANDROID_NDK_HOME:-}" ]; then
+                ndk_ver=$(basename "${ANDROID_NDK_HOME}")
+                ndk_line="ndk.dir=${ANDROID_NDK_HOME}\nndk.version=${ndk_ver}"
+            fi
+
             cat <<EOF > "${mobile_dir}/android/local.properties"
 sdk.dir=${ANDROID_HOME:-/usr/local/lib/android/sdk}
 flutter.sdk=${FLUTTER_ROOT:-/opt/hostedtoolcache/flutter}
 flutter.buildMode=release
 flutter.versionName=${VERSION}
 flutter.versionCode=1
+${ndk_line}
 EOF
 
             # If Gradle wrapper is missing in project, copy from pre-generated template or unpack from Flutter SDK
@@ -176,10 +184,10 @@ EOF
             (
                 cd "${mobile_dir}"
                 flutter config --no-analytics || true
-                flutter pub get || true
+                flutter pub get
                 if ! ${is_ios}; then
                     echo "  [Flutter] Building Standalone Android Release APK..."
-                    flutter build apk --release --no-tree-shake-icons || true
+                    flutter build apk --release --no-tree-shake-icons
                 fi
             )
 
@@ -187,6 +195,7 @@ EOF
             for candidate in \
                 "${mobile_dir}/build/app/outputs/flutter-apk/app-release.apk" \
                 "${mobile_dir}/build/app/outputs/apk/release/app-release.apk" \
+                "${mobile_dir}/android/app/build/outputs/apk/release/app-release.apk" \
                 "${mobile_dir}/build/app/outputs/flutter-apk/app-debug.apk" \
                 "${mobile_dir}/build/app/outputs/apk/debug/app-debug.apk"; do
                 if [ -f "${candidate}" ]; then
@@ -204,10 +213,11 @@ EOF
             echo "  [Gradle] Attempting direct assembleRelease with gradlew..."
             (
                 cd "${mobile_dir}/android"
-                ./gradlew assembleRelease --stacktrace || ./gradlew assembleDebug --stacktrace || true
+                ./gradlew app:assembleRelease --stacktrace || ./gradlew app:assembleDebug --stacktrace || true
             )
             for candidate in \
                 "${mobile_dir}/android/app/build/outputs/apk/release/app-release.apk" \
+                "${mobile_dir}/android/app/build/outputs/apk/release/app-release-unsigned.apk" \
                 "${mobile_dir}/android/app/build/outputs/apk/debug/app-debug.apk" \
                 "${mobile_dir}/build/app/outputs/flutter-apk/app-release.apk"; do
                 if [ -f "${candidate}" ]; then
@@ -225,7 +235,8 @@ EOF
             cp "${apk_found}" "${apk_target}"
             echo "  -> Verified and staged standalone APK: ${apk_target} ($(ls -lh "${apk_target}" | awk '{print $5}'))"
         elif ! ${is_ios}; then
-            echo "  [Warning] Real Flutter APK build not completed in this environment (requires Flutter SDK + Android SDK)."
+            echo "ERROR: Standalone Android APK could not be produced for ${app}!" >&2
+            exit 1
         fi
 
         # F. Create Standalone Flutter Platform Bundle ZIP
