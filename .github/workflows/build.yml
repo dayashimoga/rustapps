@@ -138,27 +138,27 @@ jobs:
           
           # WiX Manifest
           cat > "dist-packages/${{ matrix.app }}/${{ matrix.app }}-0.1.0.wxs" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-    <Product Id="*" Name="${{ matrix.app }}" Language="1033" Version="0.1.0" Manufacturer="OfflineApps" UpgradeCode="{A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D}">
-        <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
-        <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
-        <MediaTemplate EmbedCab="yes" />
-        <Feature Id="ProductFeature" Title="${{ matrix.app }}" Level="1">
-            <ComponentRef Id="MainExecutable" />
-        </Feature>
-        <Directory Id="TARGETDIR" Name="SourceDir">
-            <Directory Id="ProgramFilesFolder">
-                <Directory Id="INSTALLFOLDER" Name="${{ matrix.app }}">
-                    <Component Id="MainExecutable" Guid="*">
-                        <File Id="AppExe" Source="${{ matrix.app }}.exe" KeyPath="yes" />
-                    </Component>
-                </Directory>
-            </Directory>
-        </Directory>
-    </Product>
-</Wix>
-EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+              <Product Id="*" Name="${{ matrix.app }}" Language="1033" Version="0.1.0" Manufacturer="OfflineApps" UpgradeCode="{A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D}">
+                  <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
+                  <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+                  <MediaTemplate EmbedCab="yes" />
+                  <Feature Id="ProductFeature" Title="${{ matrix.app }}" Level="1">
+                      <ComponentRef Id="MainExecutable" />
+                  </Feature>
+                  <Directory Id="TARGETDIR" Name="SourceDir">
+                      <Directory Id="ProgramFilesFolder">
+                          <Directory Id="INSTALLFOLDER" Name="${{ matrix.app }}">
+                              <Component Id="MainExecutable" Guid="*">
+                                  <File Id="AppExe" Source="${{ matrix.app }}.exe" KeyPath="yes" />
+                              </Component>
+                          </Directory>
+                      </Directory>
+                  </Directory>
+              </Product>
+          </Wix>
+          EOF
 
           zip_path="dist-packages/${{ matrix.app }}/${{ matrix.app }}-0.1.0-windows-x64.zip"
           if command -v 7z >/dev/null 2>&1; then
@@ -277,14 +277,14 @@ EOF
           cp "target/release/${{ matrix.app }}" "${deb_stage}/usr/bin/${{ matrix.app }}"
           chmod 755 "${deb_stage}/usr/bin/${{ matrix.app }}"
           cat <<EOF > "${deb_stage}/DEBIAN/control"
-Package: ${{ matrix.app }}
-Version: 0.1.0
-Section: utils
-Priority: optional
-Architecture: amd64
-Maintainer: Offline Apps Engineering <maintainers@offlineapps.local>
-Description: 100% Offline Standalone Application: ${{ matrix.app }}
-EOF
+          Package: ${{ matrix.app }}
+          Version: 0.1.0
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Offline Apps Engineering <maintainers@offlineapps.local>
+          Description: 100% Offline Standalone Application: ${{ matrix.app }}
+          EOF
           if command -v dpkg-deb >/dev/null 2>&1; then
             dpkg-deb --build "${deb_stage}" "${abs_pkg_dir}/${{ matrix.app }}_0.1.0_amd64.deb" || true
           fi
@@ -404,27 +404,27 @@ EOF
           cp "target/universal/${{ matrix.app }}" "${app_bundle}/Contents/MacOS/${{ matrix.app }}"
           chmod +x "${app_bundle}/Contents/MacOS/${{ matrix.app }}"
           cat > "${app_bundle}/Contents/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>${{ matrix.app }}</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.offlineapps.${{ matrix.app }}</string>
-    <key>CFBundleName</key>
-    <string>${{ matrix.app }}</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>11.0</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-</dict>
-</plist>
-EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>${{ matrix.app }}</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.offlineapps.${{ matrix.app }}</string>
+              <key>CFBundleName</key>
+              <string>${{ matrix.app }}</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>0.1.0</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>11.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
           if command -v hdiutil >/dev/null 2>&1; then
             hdiutil create -volname "${{ matrix.app }}" -srcfolder "${app_bundle}" -ov -format UDZO "${abs_pkg_dir}/${{ matrix.app }}-0.1.0-macos.dmg" || true
           fi
