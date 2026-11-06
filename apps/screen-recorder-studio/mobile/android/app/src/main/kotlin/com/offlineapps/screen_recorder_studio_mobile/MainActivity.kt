@@ -1,4 +1,4 @@
-﻿package com.offlineapps.screen_recorder_studio_mobile
+package com.offlineapps.screen_recorder_studio_mobile
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -1,4 +1,4 @@
-﻿name: signal_telemetry_oscilloscope_mobile
+name: signal_telemetry_oscilloscope_mobile
 description: "Signal Oscilloscope Mobile - 100% Offline Standalone App."
 publish_to: "none"
 version: 0.1.0+1

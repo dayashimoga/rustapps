@@ -1,4 +1,4 @@
-﻿name: parquet_analytics_workbench_mobile
+name: parquet_analytics_workbench_mobile
 description: "Parquet Analytics Workbench Mobile - 100% Offline Standalone App."
 publish_to: "none"
 version: 0.1.0+1
