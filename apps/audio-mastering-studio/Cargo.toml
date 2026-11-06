@@ -6,6 +6,15 @@ authors.workspace = true
 license.workspace = true
 description = "Offline AI Stem Splitter & Audio Mastering Studio — 100% Offline 4-Stem Separation, De-Reverb, 5-Band EQ & EBU R128 Loudness Mastering"
 
+[lib]
+name = "audio_mastering_studio"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "audio-mastering-studio"
+path = "src/main.rs"
+
 [dependencies]
 # Workspace crates
 platform-common.workspace = true

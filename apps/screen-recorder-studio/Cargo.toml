@@ -6,6 +6,15 @@ authors.workspace = true
 license.workspace = true
 description = "Offline AI Screen Recorder & Interactive Tutorial Builder — 100% Offline Capture, Auto-Zoom & Subtitles"
 
+[lib]
+name = "screen_recorder_studio"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "screen-recorder-studio"
+path = "src/main.rs"
+
 [dependencies]
 # Workspace crates
 platform-common.workspace = true

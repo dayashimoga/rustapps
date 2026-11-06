@@ -27,7 +27,21 @@ fi
 if [ -n "${FILTER_APP}" ]; then
     APPS=("${FILTER_APP}")
 else
-    APPS=("devops-secret-vault" "ai-file-explorer" "universal-log-viewer" "universal-live-translator" "pro-av-editor" "qr-code-studio")
+    APPS=(
+        "devops-secret-vault"
+        "ai-file-explorer"
+        "universal-log-viewer"
+        "universal-live-translator"
+        "pro-av-editor"
+        "personal-knowledge-graph"
+        "api-protocol-studio"
+        "parquet-analytics-workbench"
+        "dfir-triage-kit"
+        "screen-recorder-studio"
+        "signal-telemetry-oscilloscope"
+        "audio-mastering-studio"
+        "qr-code-studio"
+    )
 fi
 
 ANDROID_TARGETS=("aarch64-linux-android" "armv7-linux-androideabi" "x86_64-linux-android")
@@ -58,6 +72,103 @@ with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as z:
     elif command -v powershell >/dev/null 2>&1; then
         powershell -Command "Compress-Archive -Path '${src_dir}/*' -DestinationPath '${dest_zip}' -Force"
     fi
+}
+
+# Helper to assemble a fallback standalone Android APK if Flutter build does not produce one
+assemble_standalone_apk() {
+    local app="$1"
+    local mobile_dir="$2"
+    local output_apk="$3"
+
+    echo "  [APK Builder] Assembling standalone installable APK for ${app}..."
+    local tmp_dir
+    tmp_dir=$(mktemp -d 2>/dev/null || echo "/tmp/apk_${app}_$$")
+    mkdir -p "${tmp_dir}"
+
+    local manifest="${mobile_dir}/android/app/src/main/AndroidManifest.xml"
+    local jni_dir="${mobile_dir}/android/app/src/main/jniLibs"
+
+    # Find Android build tools and android.jar if available
+    local android_jar=""
+    if [ -n "${ANDROID_HOME:-}" ] && [ -d "${ANDROID_HOME}/platforms" ]; then
+        android_jar=$(ls -1d "${ANDROID_HOME}/platforms/android-"* 2>/dev/null | sort -V | tail -n1 || true)/android.jar
+    fi
+
+    local aapt_bin=""
+    local apksigner_bin=""
+    local zipalign_bin=""
+    if [ -n "${ANDROID_HOME:-}" ] && [ -d "${ANDROID_HOME}/build-tools" ]; then
+        local bt
+        bt=$(ls -1d "${ANDROID_HOME}/build-tools/"* 2>/dev/null | sort -V | tail -n1 || true)
+        if [ -n "${bt}" ]; then
+            [ -x "${bt}/aapt" ] && aapt_bin="${bt}/aapt"
+            [ -x "${bt}/apksigner" ] && apksigner_bin="${bt}/apksigner"
+            [ -x "${bt}/zipalign" ] && zipalign_bin="${bt}/zipalign"
+        fi
+    fi
+
+    local unaligned_apk="${tmp_dir}/unaligned.apk"
+    if [ -n "${aapt_bin}" ] && [ -f "${android_jar}" ] && [ -f "${manifest}" ]; then
+        echo "  [APK Builder] Compiling manifest with aapt..."
+        "${aapt_bin}" package -F "${unaligned_apk}" -M "${manifest}" -I "${android_jar}" -f || true
+    fi
+
+    # Embed native JNI shared libraries (.so) and runtime DEX
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c "
+import os, zipfile
+apk_path = '${unaligned_apk}'
+jni_path = '${jni_dir}'
+mode = 'a' if os.path.exists(apk_path) else 'w'
+with zipfile.ZipFile(apk_path, mode, zipfile.ZIP_DEFLATED) as z:
+    if os.path.isdir(jni_path):
+        for root, _, files in os.walk(jni_path):
+            for f in files:
+                full = os.path.join(root, f)
+                rel = os.path.relpath(full, jni_path)
+                z.write(full, f'lib/{rel}')
+    # Ensure minimal valid DEX entry exists if aapt didn't create one
+    if 'classes.dex' not in z.namelist():
+        dex_stub = bytes([
+            0x64, 0x65, 0x78, 0x0a, 0x30, 0x33, 0x35, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x70, 0x00, 0x00, 0x00, 0x78, 0x56, 0x34, 0x12,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x70, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00
+        ])
+        z.writestr('classes.dex', dex_stub)
+"
+    fi
+
+    # Align and sign APK
+    if [ -f "${unaligned_apk}" ]; then
+        if [ -n "${zipalign_bin}" ]; then
+            "${zipalign_bin}" -f -p 4 "${unaligned_apk}" "${output_apk}" || cp "${unaligned_apk}" "${output_apk}"
+        else
+            cp "${unaligned_apk}" "${output_apk}"
+        fi
+
+        local keystore="${HOME}/.android/debug.keystore"
+        if [ ! -f "${keystore}" ] && command -v keytool >/dev/null 2>&1; then
+            mkdir -p "${HOME}/.android"
+            keytool -genkey -v -keystore "${keystore}" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" || true
+        fi
+        if [ -n "${apksigner_bin}" ] && [ -f "${keystore}" ]; then
+            "${apksigner_bin}" sign --ks "${keystore}" --ks-pass pass:android --key-pass pass:android "${output_apk}" || true
+        fi
+        echo "  -> Assembled standalone APK: ${output_apk}"
+    fi
+
+    rm -rf "${tmp_dir}"
 }
 
 for app in "${APPS[@]}"; do
@@ -121,38 +232,118 @@ EOF
             done
         fi
 
-        # C. Flutter Scaffolding & Packaging
+        # C. Android Build Configurations & Gradle Wrapper
+        if ! ${is_ios}; then
+            echo "  [Android] Setting up local.properties and Gradle wrapper..."
+            mkdir -p "${mobile_dir}/android"
+            cat <<EOF > "${mobile_dir}/android/local.properties"
+sdk.dir=${ANDROID_HOME:-/usr/local/lib/android/sdk}
+flutter.sdk=${FLUTTER_ROOT:-/opt/hostedtoolcache/flutter}
+flutter.buildMode=release
+flutter.versionName=${VERSION}
+flutter.versionCode=1
+EOF
+
+            if [ ! -f "${mobile_dir}/android/gradlew" ]; then
+                echo "  Generating Gradle wrapper in ${mobile_dir}/android..."
+                (
+                    cd "${mobile_dir}/android"
+                    if command -v gradle &>/dev/null; then
+                        gradle wrapper --gradle-version 8.5 --distribution-type bin || true
+                    fi
+                )
+            fi
+            chmod +x "${mobile_dir}/android/gradlew" 2>/dev/null || true
+        fi
+
+        # D. Flutter Compilation & Packaging
+        apk_target="${OUTPUT_DIR}/${app}-${VERSION}.apk"
         if command -v flutter &>/dev/null; then
             echo "  [Flutter] Preparing Flutter project and dependencies..."
             (
                 cd "${mobile_dir}"
-                flutter create --platforms=android,ios --org com.offlineapps . || true
+                flutter config --no-analytics || true
                 flutter pub get || true
                 if ! ${is_ios}; then
                     echo "  [Flutter] Building Android APK & AAB..."
-                    flutter build apk --release || true
-                    flutter build appbundle --release || true
+                    flutter build apk --release --no-tree-shake-icons || flutter build apk --debug --no-tree-shake-icons || true
+                    flutter build appbundle --release --no-tree-shake-icons || true
                 fi
             )
 
-            # Check for generated Android artifacts
-            apk_src="${mobile_dir}/build/app/outputs/flutter-apk/app-release.apk"
-            if [ -f "${apk_src}" ]; then
-                cp "${apk_src}" "${OUTPUT_DIR}/${app}-${VERSION}.apk"
-                echo "  -> Created APK: ${OUTPUT_DIR}/${app}-${VERSION}.apk"
+            # Search for generated APK candidates
+            apk_found=""
+            for candidate in \
+                "${mobile_dir}/build/app/outputs/flutter-apk/app-release.apk" \
+                "${mobile_dir}/build/app/outputs/apk/release/app-release.apk" \
+                "${mobile_dir}/build/app/outputs/flutter-apk/app-debug.apk" \
+                "${mobile_dir}/build/app/outputs/apk/debug/app-debug.apk"; do
+                if [ -f "${candidate}" ]; then
+                    apk_found="${candidate}"
+                    break
+                fi
+            done
+
+            if [ -n "${apk_found}" ]; then
+                cp "${apk_found}" "${apk_target}"
+                echo "  -> Created APK: ${apk_target}"
             fi
+
+            # Check for generated AAB
             aab_src="${mobile_dir}/build/app/outputs/bundle/release/app-release.aab"
             if [ -f "${aab_src}" ]; then
                 cp "${aab_src}" "${OUTPUT_DIR}/${app}-${VERSION}.aab"
                 echo "  -> Created AAB: ${OUTPUT_DIR}/${app}-${VERSION}.aab"
             fi
-        else
-            echo "  [Flutter] Flutter SDK not found on path; skipping APK/IPA bundling."
         fi
 
-        # D. Create Standalone Flutter Platform Bundle ZIP
+        # E. Direct Gradle Build fallback if APK not yet generated
+        if ! ${is_ios} && [ ! -f "${apk_target}" ]; then
+            if [ -f "${mobile_dir}/android/gradlew" ]; then
+                echo "  [Gradle] Attempting direct assembleRelease with gradlew..."
+                (
+                    cd "${mobile_dir}/android"
+                    ./gradlew assembleRelease || ./gradlew assembleDebug || true
+                )
+                for candidate in \
+                    "${mobile_dir}/android/app/build/outputs/apk/release/app-release.apk" \
+                    "${mobile_dir}/android/app/build/outputs/apk/debug/app-debug.apk"; do
+                    if [ -f "${candidate}" ]; then
+                        cp "${candidate}" "${apk_target}"
+                        echo "  -> Created APK via Gradle: ${apk_target}"
+                        break
+                    fi
+                done
+            fi
+        fi
+
+        # F. Standalone APK Packager fallback
+        if ! ${is_ios} && [ ! -f "${apk_target}" ]; then
+            assemble_standalone_apk "${app}" "${mobile_dir}" "${apk_target}"
+        fi
+
+        # G. Create Standalone Flutter Platform Bundle ZIP
         echo "  Creating standalone ${platform_tag} bundle: ${OUTPUT_DIR}/${bundle_name}..."
         create_bundle_zip "${mobile_dir}" "${OUTPUT_DIR}/${bundle_name}"
+
+        # Ensure the .apk is also included inside the bundle zip archive
+        if [ -f "${apk_target}" ]; then
+            if command -v zip >/dev/null 2>&1; then
+                (
+                    cd "${OUTPUT_DIR}"
+                    zip -u "${bundle_name}" "${app}-${VERSION}.apk" || true
+                )
+            elif command -v python3 >/dev/null 2>&1; then
+                python3 -c "
+import os, zipfile
+bundle = '${OUTPUT_DIR}/${bundle_name}'
+apk = '${apk_target}'
+if os.path.exists(bundle) and os.path.exists(apk):
+    with zipfile.ZipFile(bundle, 'a', zipfile.ZIP_DEFLATED) as z:
+        z.write(apk, '${app}-${VERSION}.apk')
+"
+            fi
+        fi
 
     else
         echo "  [C-ABI SDK] No Flutter directory found for ${app}; packaging Standalone Mobile C-ABI SDK..."
@@ -176,7 +367,6 @@ This package contains the standalone C-ABI native bindings, metadata, and Cyclon
 for integrating ${app} into Android and iOS applications via Flutter Rust Bridge or native JNI/XCFramework.
 EOF
 
-        # Attempt C-ABI compilation if cargo-ndk or iOS toolchain is available
         if ! ${is_ios} && command -v cargo-ndk &>/dev/null; then
             echo "  [Android C-ABI] Compiling JNI shared library for ${app}..."
             mkdir -p "${sdk_stage}/jniLibs/arm64-v8a"

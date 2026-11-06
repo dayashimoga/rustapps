@@ -6,6 +6,15 @@ authors.workspace = true
 license.workspace = true
 description = "Offline Digital Forensics & Incident Response (DFIR) Triage Kit — 100% Offline Host Forensics & Incident Analysis"
 
+[lib]
+name = "dfir_triage_kit"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "dfir-triage-kit"
+path = "src/main.rs"
+
 [dependencies]
 # Workspace crates
 platform-common.workspace = true

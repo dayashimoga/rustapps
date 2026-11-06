@@ -6,6 +6,15 @@ authors.workspace = true
 license.workspace = true
 description = "Offline Scientific Signal & Telemetry Oscilloscope — 100% Offline Digital Signal Processing, FFT & Protocol Decoding"
 
+[lib]
+name = "signal_telemetry_oscilloscope"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "signal-telemetry-oscilloscope"
+path = "src/main.rs"
+
 [dependencies]
 # Workspace crates
 platform-common.workspace = true

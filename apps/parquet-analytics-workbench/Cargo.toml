@@ -6,6 +6,15 @@ authors.workspace = true
 license.workspace = true
 description = "Local Database & Parquet Analytics Workbench — 100% Offline Multi-Gigabyte Data Query & Visualization Studio"
 
+[lib]
+name = "parquet_analytics_workbench"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "parquet-analytics-workbench"
+path = "src/main.rs"
+
 [dependencies]
 # Workspace crates
 platform-common.workspace = true

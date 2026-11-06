@@ -476,6 +476,24 @@ jobs:
           flutter-version: '3.19.x'
           channel: 'stable'
 
+      - name: Setup Android SDK & Accept Licenses
+        run: |
+          flutter config --android-sdk "$ANDROID_HOME"
+          flutter config --no-analytics
+          yes | flutter doctor --android-licenses || true
+        shell: bash
+
+      - name: Ensure Gradle Wrapper
+        run: |
+          if [ -d "apps/${{ matrix.app }}/mobile/android" ]; then
+            cd "apps/${{ matrix.app }}/mobile/android"
+            if [ ! -f "gradlew" ]; then
+              gradle wrapper --gradle-version 8.5 --distribution-type bin || true
+            fi
+            chmod +x gradlew || true
+          fi
+        shell: bash
+
       - name: Install Rust Toolchain & Android Targets
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -491,6 +509,8 @@ jobs:
           ./scripts/package-mobile.sh "0.1.0" "dist/android/${{ matrix.app }}" "${{ matrix.app }}"
           mkdir -p "dist-packages/${{ matrix.app }}"
           cp -rf dist/android/${{ matrix.app }}/. "dist-packages/${{ matrix.app }}/"
+          echo "Generated Android artifacts:"
+          ls -la "dist-packages/${{ matrix.app }}/"
         shell: bash
 
       - name: Upload ${{ matrix.app }} Android Artifact
@@ -532,6 +552,8 @@ jobs:
           ./scripts/package-mobile.sh "0.1.0" "dist/ios/${{ matrix.app }}" "${{ matrix.app }}"
           mkdir -p "dist-packages/${{ matrix.app }}"
           cp -rf dist/ios/${{ matrix.app }}/. "dist-packages/${{ matrix.app }}/"
+          echo "Generated iOS artifacts:"
+          ls -la "dist-packages/${{ matrix.app }}/"
         shell: bash
 
       - name: Upload ${{ matrix.app }} iOS Artifact
