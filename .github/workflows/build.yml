@@ -490,7 +490,7 @@ jobs:
           mkdir -p "dist/android/${{ matrix.app }}"
           ./scripts/package-mobile.sh "0.1.0" "dist/android/${{ matrix.app }}" "${{ matrix.app }}"
           mkdir -p "dist-packages/${{ matrix.app }}"
-          cp -f dist/android/${{ matrix.app }}/* "dist-packages/${{ matrix.app }}/" 2>/dev/null || true
+          cp -rf dist/android/${{ matrix.app }}/. "dist-packages/${{ matrix.app }}/"
         shell: bash
 
       - name: Upload ${{ matrix.app }} Android Artifact
@@ -531,7 +531,7 @@ jobs:
           mkdir -p "dist/ios/${{ matrix.app }}"
           ./scripts/package-mobile.sh "0.1.0" "dist/ios/${{ matrix.app }}" "${{ matrix.app }}"
           mkdir -p "dist-packages/${{ matrix.app }}"
-          cp -f dist/ios/${{ matrix.app }}/* "dist-packages/${{ matrix.app }}/" 2>/dev/null || true
+          cp -rf dist/ios/${{ matrix.app }}/. "dist-packages/${{ matrix.app }}/"
         shell: bash
 
       - name: Upload ${{ matrix.app }} iOS Artifact

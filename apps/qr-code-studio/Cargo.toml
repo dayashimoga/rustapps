@@ -6,6 +6,15 @@ authors.workspace = true
 license.workspace = true
 description = "Offline QR Code Scanner & Generator Studio — 100% Offline ISO/IEC 18004 Codec, Custom Styling, Anti-Quishing Security, Ed25519 Signing & Batch Engine"
 
+[lib]
+name = "qr_code_studio"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "qr-code-studio"
+path = "src/main.rs"
+
 [dependencies]
 # Workspace crates
 platform-common.workspace = true
