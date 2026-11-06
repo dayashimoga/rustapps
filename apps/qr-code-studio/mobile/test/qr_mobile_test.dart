@@ -8,3 +8,4 @@ void main() {
     expect(find.text('Generate ISO/IEC 18004 QR'), findsOneWidget);
   });
 }
+

@@ -136,3 +136,4 @@ class _QrStudioHomeScreenState extends State<QrStudioHomeScreen> {
     );
   }
 }
+
