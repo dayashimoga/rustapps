@@ -1465,11 +1465,104 @@ fn loopback_http_request(
     Ok((status, payload))
 }
 
+/// Seed clean, air-gapped browser preferences to strictly suppress First-Run Experience (FRE) prompts,
+/// automatic Microsoft/Google account sign-in popups, and cloud data synchronization.
+fn seed_airgapped_profile_preferences(profile_dir: &Path) {
+    let default_dir = profile_dir.join("Default");
+    let _ = std::fs::create_dir_all(&default_dir);
+
+    // 1. Sanitize Default/Preferences: purge any attached Microsoft/Google accounts
+    // and explicitly disable First-Run Experience (FRE), sync, and browser sign-in.
+    let pref_path = default_dir.join("Preferences");
+    let mut prefs: Value = if pref_path.exists() {
+        std::fs::read_to_string(&pref_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    if let Some(obj) = prefs.as_object_mut() {
+        // Strip any cached or automatically linked MSA/Azure AD account tokens
+        obj.remove("account_info");
+        obj.remove("account_tracker_service_last_update");
+
+        obj.insert("has_seen_signin_fre".to_string(), serde_json::json!(true));
+        obj.insert("sync_consent_recorded".to_string(), serde_json::json!(true));
+        obj.insert(
+            "signin".to_string(),
+            serde_json::json!({
+                "allowed": false,
+                "signin_with_explicit_browser_signin_on": false
+            }),
+        );
+        obj.insert(
+            "sync".to_string(),
+            serde_json::json!({
+                "has_setup_completed": true,
+                "has_been_enabled": false,
+                "keep_everything_synced": false,
+                "apps": false,
+                "autofill": false,
+                "bookmarks": false,
+                "history": false,
+                "passwords": false,
+                "preferences": false,
+                "tabs": false
+            }),
+        );
+        obj.insert(
+            "profile".to_string(),
+            serde_json::json!({
+                "has_seen_signin_fre": true,
+                "edge_san_is_option_explicitly_selectedby_user": true,
+                "edge_account_type": 0
+            }),
+        );
+    }
+
+    if let Ok(serialized) = serde_json::to_string_pretty(&prefs) {
+        let _ = std::fs::write(&pref_path, serialized);
+    }
+
+    // 2. Pre-seed Local State to mark initial onboarding, telemetry, and FRE as complete
+    let local_state_path = profile_dir.join("Local State");
+    let mut local_state: Value = if local_state_path.exists() {
+        std::fs::read_to_string(&local_state_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    if let Some(obj) = local_state.as_object_mut() {
+        obj.insert(
+            "fre".to_string(),
+            serde_json::json!({ "has_user_seen_fre": true }),
+        );
+        obj.insert(
+            "edge".to_string(),
+            serde_json::json!({
+                "fre": { "has_user_seen_fre": true }
+            }),
+        );
+    }
+
+    if let Ok(serialized) = serde_json::to_string_pretty(&local_state) {
+        let _ = std::fs::write(&local_state_path, serialized);
+    }
+}
+
 fn spawn_native_app_window(url: &str, bundle: &EmbeddedUiBundle) -> Option<Child> {
     let profile_dir = AppPaths::from_app_name(bundle.app_id)
         .map(|p| p.cache_dir.join("desktop_window_profile"))
         .unwrap_or_else(|_| std::env::temp_dir().join(format!("{}_window_profile", bundle.app_id)));
     let _ = std::fs::create_dir_all(&profile_dir);
+
+    // Pre-seed clean air-gapped preferences into the isolated profile
+    seed_airgapped_profile_preferences(&profile_dir);
 
     let app_arg = format!("--app={}", url);
     let size_arg = format!(
@@ -1489,14 +1582,26 @@ fn spawn_native_app_window(url: &str, bundle: &EmbeddedUiBundle) -> Option<Child
 
         for bin in candidates {
             if PathBuf::from(bin).exists() {
+                let is_edge = bin.to_ascii_lowercase().contains("edge");
+                let privacy_flag = if is_edge {
+                    "--inprivate"
+                } else {
+                    "--incognito"
+                };
+
                 if let Ok(child) = Command::new(bin)
                     .args([
                         &app_arg,
                         &size_arg,
                         &profile_arg,
+                        privacy_flag,
                         "--no-first-run",
                         "--no-default-browser-check",
-                        "--disable-features=Translate",
+                        "--disable-sync",
+                        "--disable-background-networking",
+                        "--disable-component-update",
+                        "--disable-default-apps",
+                        "--disable-features=Translate,msEdgeSync,msEdgeIdentityCredential,msEdgeAccountConsistency,EdgeAccountConsistency,EdgeFre,msEdgeFre,ImplicitSignIn",
                     ])
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
@@ -1526,13 +1631,26 @@ fn spawn_native_app_window(url: &str, bundle: &EmbeddedUiBundle) -> Option<Child
         ];
         for bin in candidates {
             if PathBuf::from(bin).exists() {
+                let is_edge = bin.to_ascii_lowercase().contains("edge");
+                let privacy_flag = if is_edge {
+                    "--inprivate"
+                } else {
+                    "--incognito"
+                };
+
                 if let Ok(child) = Command::new(bin)
                     .args([
                         &app_arg,
                         &size_arg,
                         &profile_arg,
+                        privacy_flag,
                         "--no-first-run",
                         "--no-default-browser-check",
+                        "--disable-sync",
+                        "--disable-background-networking",
+                        "--disable-component-update",
+                        "--disable-default-apps",
+                        "--disable-features=Translate,msEdgeSync,msEdgeIdentityCredential,msEdgeAccountConsistency,EdgeAccountConsistency,EdgeFre,msEdgeFre,ImplicitSignIn",
                     ])
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
@@ -1562,13 +1680,26 @@ fn spawn_native_app_window(url: &str, bundle: &EmbeddedUiBundle) -> Option<Child
             "microsoft-edge",
         ];
         for bin in candidates {
+            let is_edge = bin.to_ascii_lowercase().contains("edge");
+            let privacy_flag = if is_edge {
+                "--inprivate"
+            } else {
+                "--incognito"
+            };
+
             if let Ok(child) = Command::new(bin)
                 .args([
                     &app_arg,
                     &size_arg,
                     &profile_arg,
+                    privacy_flag,
                     "--no-first-run",
                     "--no-default-browser-check",
+                    "--disable-sync",
+                    "--disable-background-networking",
+                    "--disable-component-update",
+                    "--disable-default-apps",
+                    "--disable-features=Translate,msEdgeSync,msEdgeIdentityCredential,msEdgeAccountConsistency,EdgeAccountConsistency,EdgeFre,msEdgeFre,ImplicitSignIn",
                 ])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -1709,5 +1840,47 @@ mod tests {
         // Drop pool to join workers and verify all jobs ran
         drop(pool);
         assert_eq!(counter.load(Ordering::SeqCst), 16);
+    }
+
+    #[test]
+    fn test_seed_airgapped_profile_preferences() {
+        let temp_dir = std::env::temp_dir().join("test_airgapped_profile_prefs");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        // Pre-populate with a dirty state simulating an attached Microsoft account
+        let default_dir = temp_dir.join("Default");
+        let _ = std::fs::create_dir_all(&default_dir);
+        let dirty_prefs = serde_json::json!({
+            "account_info": [{"email": "test.user@microsoft.com", "full_name": "Test User"}],
+            "has_seen_signin_fre": false,
+            "signin": { "allowed": true }
+        });
+        let _ = std::fs::write(
+            default_dir.join("Preferences"),
+            serde_json::to_string(&dirty_prefs).unwrap(),
+        );
+
+        // Run air-gapped seed sanitizer
+        seed_airgapped_profile_preferences(&temp_dir);
+
+        // Verify Preferences sanitization
+        let cleaned_str = std::fs::read_to_string(default_dir.join("Preferences")).unwrap();
+        let cleaned: Value = serde_json::from_str(&cleaned_str).unwrap();
+        assert!(
+            cleaned.get("account_info").is_none(),
+            "Stale account_info must be purged"
+        );
+        assert_eq!(cleaned["has_seen_signin_fre"], true);
+        assert_eq!(cleaned["signin"]["allowed"], false);
+        assert_eq!(cleaned["sync"]["has_been_enabled"], false);
+
+        // Verify Local State FRE suppression
+        let local_state_str = std::fs::read_to_string(temp_dir.join("Local State")).unwrap();
+        let local_state: Value = serde_json::from_str(&local_state_str).unwrap();
+        assert_eq!(local_state["fre"]["has_user_seen_fre"], true);
+        assert_eq!(local_state["edge"]["fre"]["has_user_seen_fre"], true);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
