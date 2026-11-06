@@ -1230,6 +1230,77 @@ fn benchmark_audio_mastering_studio(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_qr_code_studio(c: &mut Criterion) {
+    use qr_code_studio::{
+        decode_png_to_rgb, decode_qr_from_rgb, generate_qr_matrix, render_png, render_svg,
+        FinderStyle, ModuleShape, QrEccLevel, QrStyleConfig, SecurityAnalyzer,
+    };
+
+    let mut group = c.benchmark_group("qr_code_studio");
+
+    let text_payload = "https://antigravity.internal/offline-qr-studio/docs/v1";
+    let style = QrStyleConfig {
+        ecc_level: QrEccLevel::Medium,
+        module_shape: ModuleShape::Rounded,
+        finder_style: FinderStyle::Rounded,
+        fg_color: "#06b6d4".to_string(),
+        fg_gradient_end: Some("#8b5cf6".to_string()),
+        bg_color: "#0a0e17".to_string(),
+        quiet_zone_modules: 4,
+        size_px: 320,
+        center_logo_text: Some("AG".to_string()),
+    };
+
+    // 1. QR Code Matrix Synthesis (< 10ms SLA)
+    group.bench_function("qrcs_matrix_synthesis", |b| {
+        b.iter(|| {
+            let res = generate_qr_matrix(
+                black_box(text_payload.as_bytes()),
+                black_box(QrEccLevel::Medium),
+            );
+            black_box(res).unwrap();
+        });
+    });
+
+    // 2. Scalable Vector SVG Rendering
+    let matrix = generate_qr_matrix(text_payload.as_bytes(), QrEccLevel::Medium).unwrap();
+    group.bench_function("qrcs_svg_rendering", |b| {
+        b.iter(|| {
+            let svg = render_svg(black_box(&matrix), black_box(&style));
+            black_box(svg);
+        });
+    });
+
+    // 3. RFC 2083 PNG Raster Compression
+    group.bench_function("qrcs_png_compression", |b| {
+        b.iter(|| {
+            let png = render_png(black_box(&matrix), black_box(&style));
+            black_box(png).unwrap();
+        });
+    });
+
+    // 4. PNG Decode & Barcode Matrix Reconstruction
+    let png_bytes = render_png(&matrix, &style).unwrap();
+    group.bench_function("qrcs_png_decode_and_scan", |b| {
+        b.iter(|| {
+            let (width, height, rgb) = decode_png_to_rgb(black_box(&png_bytes)).unwrap();
+            let payload = decode_qr_from_rgb(width, height, black_box(&rgb)).unwrap();
+            black_box(payload);
+        });
+    });
+
+    // 5. Anti-Quishing Threat Heuristics Analysis
+    let phish_url = "https://paypal.com@login-secure.phishing-gate.internal/verify?token=123";
+    group.bench_function("qrcs_security_heuristics", |b| {
+        b.iter(|| {
+            let report = SecurityAnalyzer::inspect_payload(black_box(phish_url));
+            black_box(report);
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_encryption_throughput,
@@ -1253,6 +1324,7 @@ criterion_group!(
     benchmark_dfir_triage_kit,
     benchmark_screen_recorder_studio,
     benchmark_signal_telemetry_oscilloscope,
-    benchmark_audio_mastering_studio
+    benchmark_audio_mastering_studio,
+    benchmark_qr_code_studio
 );
 criterion_main!(benches);

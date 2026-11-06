@@ -27,6 +27,7 @@ members = [
     "apps/screen-recorder-studio",
     "apps/signal-telemetry-oscilloscope",
     "apps/audio-mastering-studio",
+    "apps/qr-code-studio",
     "tests",
     "benchmarks",
 ]

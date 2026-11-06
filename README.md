@@ -6,7 +6,7 @@
 [![Verification](https://img.shields.io/badge/verification-Zero--Mock%20Certified-green.svg)](file:///h:/rustapps/AGENTS.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-lightgrey.svg)](file:///h:/rustapps/LICENSE)
 
-An enterprise-grade monorepo containing **12 standalone desktop applications** and **13 shared modular libraries** engineered in Rust and Svelte 5. Every application operates with **100% offline autonomy, zero unsolicited network egress, and zero mock/simulation fallbacks in production**.
+An enterprise-grade monorepo containing **13 standalone desktop applications** and **13 shared modular libraries** engineered in Rust and Svelte 5. Every application operates with **100% offline autonomy, zero unsolicited network egress, and zero mock/simulation fallbacks in production**.
 
 ---
 
@@ -17,7 +17,7 @@ All crates and applications strictly adhere to the mandatory engineering laws de
 1. **Zero-Mock, Evidence-Based Production Readiness:**
    No fake metrics, hardcoded buffers, synthetic character generators, or mock storage adapters are permitted in release code paths. All test doubles are strictly isolated behind `#[cfg(test)]`.
 2. **Standalone Application Independence:**
-   All 12 applications compile, run, test, package, and release independently. No application crate may depend on another application crate.
+   All 13 applications compile, run, test, package, and release independently. No application crate may depend on another application crate.
 3. **100% Offline Autonomy & Zero Unsolicited Egress:**
    Every capability—cryptography, search, OCR, neural machine translation, ASR speech recognition, audio/video compositing, and protocol decoding—operates completely offline. Network telemetry and cloud beacons are strictly forbidden.
 4. **Mandatory Embedded Desktop GUI & `--self-test`:**
@@ -27,7 +27,7 @@ All crates and applications strictly adhere to the mandatory engineering laws de
 
 ---
 
-## 📦 Monorepo Applications Portfolio (12 Standalone Apps)
+## 📦 Monorepo Applications Portfolio (13 Standalone Apps)
 
 ### Flagship Tier (Phases 1 – 3)
 
@@ -39,7 +39,7 @@ All crates and applications strictly adhere to the mandatory engineering laws de
 | **[Universal Live Translator](file:///h:/rustapps/apps/universal-live-translator)** | AI / NMT / Speech | Offline Marian NMT, n-gram LID (<500μs), formants TTS synthesis, ASR mel-spectrogram extraction | 9 / 9 PASSED | `1423` |
 | **[Pro Audio & Video Editor](file:///h:/rustapps/apps/pro-av-editor)** | Creative / Media | Multi-track timeline compositor, SMPTE timecode, 3D LUTs, EBU R128 loudness, cross-correlation audio sync | 12 / 12 PASSED | `1424` |
 
-### Next-Generation Innovation Expansion Suite (Phases 4.1 – 4.7)
+### Next-Generation Innovation Expansion Suite (Phases 4.1 – 4.8)
 
 | Application | Domain | Key Architecture & Primitives | Self-Test IPC | Port |
 | :--- | :--- | :--- | :--- | :--- |
@@ -50,6 +50,7 @@ All crates and applications strictly adhere to the mandatory engineering laws de
 | **[Offline AI Screen Recorder Studio](file:///h:/rustapps/apps/screen-recorder-studio)** | Media / EdTech | Auto-zoom keyframe generation, dead-air silence removal, tutorial step extraction, interactive HTML export | 5 / 5 PASSED | `1429` |
 | **[Scientific Signal Oscilloscope](file:///h:/rustapps/apps/signal-telemetry-oscilloscope)** | Scientific / Hardware | Radix-2 Cooley-Tukey FFT spectrum analyzer, Hann windowing, zero-crossing frequency, UART 8N1 decoding | 5 / 5 PASSED | `1430` |
 | **[Audio Mastering Studio](file:///h:/rustapps/apps/audio-mastering-studio)** | Media / Audio | 4-stem demixing (Vocals, Drums, Bass, Other), 5-band biquad parametric EQ, dynamics, EBU R128 | 5 / 5 PASSED | `1431` |
+| **[Offline QR Code Studio](file:///h:/rustapps/apps/qr-code-studio)** | Productivity / Security | Pure-Rust ISO/IEC 18004 codec, custom styling, anti-quishing threat heuristics, Ed25519 signing, AES-GCM | 6 / 6 PASSED | `1432` |
 
 ---
 
@@ -97,6 +98,7 @@ cargo run -p devops-secret-vault -- --self-test
 cargo run -p ai-file-explorer -- --self-test
 cargo run -p signal-telemetry-oscilloscope -- --self-test
 cargo run -p audio-mastering-studio -- --self-test
+cargo run -p qr-code-studio -- --self-test
 ```
 
 ### 4. Running the Verification Test Suite
@@ -107,7 +109,7 @@ cargo test --workspace --all-targets
 # Run air-gap network egress and integration tests
 cargo test -p integration-tests
 
-# Run Criterion performance benchmarks (56 benchmark cases)
+# Run Criterion performance benchmarks (61 benchmark cases)
 cargo test -p benchmarks --benches -- --test
 ```
 
@@ -125,7 +127,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 # Package a single application
 powershell -ExecutionPolicy Bypass -File scripts/package-windows.ps1 -AppName audio-mastering-studio
 
-# Package all 12 applications
+# Package all 13 applications
 powershell -ExecutionPolicy Bypass -File scripts/package-windows.ps1
 ```
 Output artifacts are saved to `dist/windows`:

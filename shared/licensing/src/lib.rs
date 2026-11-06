@@ -44,6 +44,7 @@ pub enum AppId {
     ScreenRecorderStudio,
     SignalTelemetryOscilloscope,
     AudioMasteringStudio,
+    QrCodeStudio,
     AllAppsSuite,
 }
 

@@ -1510,11 +1510,68 @@ mod integration_tests {
         assert_eq!(mastering_stats.total_projects, 1);
         assert_eq!(mastering_stats.total_stems_extracted, 4);
 
-        // 13. shared-licensing: 100% offline Ed25519 signature verification across entire suite
+        // 13. qr-code-studio: 100% offline pure-Rust QR generation, SVG/PNG rendering, anti-quishing, and decoding
+        let qr_service = qr_code_studio::QrStudioService::open_in_memory().unwrap();
+        let qr_gen = qr_service
+            .generate_qr(
+                "https://antigravity.internal/offline-qr",
+                Some("Integration Test QR"),
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        assert!(qr_gen.svg_markup.starts_with("<svg"));
+        assert_eq!(qr_gen.payload_type, qr_code_studio::QrPayloadType::Url);
+
+        // Render matrix to PNG bytes and scan it back through the offline engine
+        let matrix = qr_code_studio::generate_qr_matrix(
+            b"https://antigravity.internal/offline-qr",
+            qr_code_studio::QrEccLevel::Medium,
+        )
+        .unwrap();
+        let png_bytes =
+            qr_code_studio::render_png(&matrix, &qr_code_studio::QrStyleConfig::default()).unwrap();
+        let qr_scan = qr_service
+            .scan_qr_image(Some(&png_bytes), None, None)
+            .unwrap();
+        assert_eq!(
+            qr_scan.decoded_text,
+            "https://antigravity.internal/offline-qr"
+        );
+        assert_eq!(qr_scan.payload_type, qr_code_studio::QrPayloadType::Url);
+
+        // Cryptographic extensions: AES-256-GCM encryption & Ed25519 signatures
+        let enc_secret = "sensitive-offline-credential-2026";
+        let encrypted_payload =
+            qr_code_studio::SecurityAnalyzer::encrypt_payload(enc_secret, "TestPass123!").unwrap();
+        assert!(encrypted_payload.starts_with("AGQR-ENC:v1:"));
+        let decrypted_secret =
+            qr_code_studio::SecurityAnalyzer::decrypt_payload(&encrypted_payload, "TestPass123!")
+                .unwrap();
+        assert_eq!(decrypted_secret, enc_secret);
+
+        let signed_payload =
+            qr_code_studio::SecurityAnalyzer::sign_payload("authenticated-payload", None).unwrap();
+        assert!(signed_payload.starts_with("AGQR-SIG:v1:"));
+        let (verified_payload, _pk) =
+            qr_code_studio::SecurityAnalyzer::verify_signed_payload(&signed_payload).unwrap();
+        assert_eq!(verified_payload, "authenticated-payload");
+
+        let qr_stats = qr_service.get_stats().unwrap();
+        assert_eq!(qr_stats.total_generated, 1);
+        assert_eq!(qr_stats.total_scanned, 1);
+
+        // 14. shared-licensing: 100% offline Ed25519 signature verification across entire suite
         let verified = verifier.verify(&cert, shared_licensing::AppId::AiFileExplorer, 1700000001);
         assert!(
             verified.is_ok(),
             "Air-gapped Ed25519 signature verification must succeed offline"
+        );
+        let verified_qr = verifier.verify(&cert, shared_licensing::AppId::QrCodeStudio, 1700000001);
+        assert!(
+            verified_qr.is_ok(),
+            "Air-gapped Ed25519 signature verification for QrCodeStudio must succeed offline"
         );
 
         // 7. Network Air-Gap Assertion:
