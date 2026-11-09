@@ -21,6 +21,10 @@ pub enum ImageDecodeError {
     UnsupportedColorFormat(String),
     #[error("Corrupt BMP header or palette")]
     CorruptBmp,
+    #[error("Corrupt JPEG header or bitstream: {0}")]
+    CorruptJpeg(String),
+    #[error("Corrupt WebP header or chunk: {0}")]
+    CorruptWebp(String),
 }
 
 /// Decoded 8-bit grayscale raster image
@@ -76,14 +80,38 @@ impl DecodedImage {
 pub struct ImageDecoder;
 
 impl ImageDecoder {
-    /// Decode image data from raw file bytes, auto-detecting PNG or BMP
+    /// Decode image data from raw file bytes, auto-detecting PNG, BMP, JPEG, or WebP
     pub fn decode(bytes: &[u8]) -> Result<DecodedImage, ImageDecodeError> {
+        if bytes.is_empty() {
+            return Err(ImageDecodeError::InvalidFormat);
+        }
+
         if bytes.len() >= 8 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n" {
-            Self::decode_png(bytes)
+            if let Ok(img) = Self::decode_png(bytes) {
+                return Ok(img);
+            }
         } else if bytes.len() >= 2 && &bytes[0..2] == b"BM" {
-            Self::decode_bmp(bytes)
-        } else {
-            Err(ImageDecodeError::InvalidFormat)
+            if let Ok(img) = Self::decode_bmp(bytes) {
+                return Ok(img);
+            }
+        }
+
+        match image::load_from_memory(bytes) {
+            Ok(dyn_img) => {
+                let gray = dyn_img.to_luma8();
+                let (width, height) = gray.dimensions();
+                Ok(DecodedImage::new(width, height, gray.into_raw()))
+            }
+            Err(e) => {
+                let s = e.to_string();
+                if bytes.len() >= 3 && &bytes[0..3] == b"\xFF\xD8\xFF" {
+                    Err(ImageDecodeError::CorruptJpeg(s))
+                } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+                    Err(ImageDecodeError::CorruptWebp(s))
+                } else {
+                    Err(ImageDecodeError::InvalidFormat)
+                }
+            }
         }
     }
 
@@ -306,15 +334,87 @@ impl ImageDecoder {
         Ok(DecodedImage::new(width, height, pixels))
     }
 
-    /// Decode PNG or BMP file bytes into full-color RGBA8888 `(width, height, rgba_bytes)`
+    /// Decode PNG, BMP, JPEG, or WebP file bytes into full-color RGBA8888 `(width, height, rgba_bytes)`
     pub fn decode_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageDecodeError> {
-        if bytes.len() >= 8 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n" {
-            Self::decode_png_rgba(bytes)
-        } else if bytes.len() >= 2 && &bytes[0..2] == b"BM" {
-            Self::decode_bmp_rgba(bytes)
-        } else {
-            Err(ImageDecodeError::InvalidFormat)
+        if bytes.is_empty() {
+            return Err(ImageDecodeError::InvalidFormat);
         }
+
+        if bytes.len() >= 8 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n" {
+            if let Ok(res) = Self::decode_png_rgba(bytes) {
+                return Ok(res);
+            }
+        } else if bytes.len() >= 2 && &bytes[0..2] == b"BM" {
+            if let Ok(res) = Self::decode_bmp_rgba(bytes) {
+                return Ok(res);
+            }
+        }
+
+        match image::load_from_memory(bytes) {
+            Ok(dyn_img) => {
+                let rgba = dyn_img.to_rgba8();
+                let (width, height) = rgba.dimensions();
+                Ok((width, height, rgba.into_raw()))
+            }
+            Err(e) => {
+                let s = e.to_string();
+                if bytes.len() >= 3 && &bytes[0..3] == b"\xFF\xD8\xFF" {
+                    Err(ImageDecodeError::CorruptJpeg(s))
+                } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+                    Err(ImageDecodeError::CorruptWebp(s))
+                } else {
+                    Err(ImageDecodeError::InvalidFormat)
+                }
+            }
+        }
+    }
+
+    /// Decode JPEG file bytes into grayscale `DecodedImage`
+    pub fn decode_jpeg(bytes: &[u8]) -> Result<DecodedImage, ImageDecodeError> {
+        if bytes.len() < 3 || &bytes[0..3] != b"\xFF\xD8\xFF" {
+            return Err(ImageDecodeError::InvalidFormat);
+        }
+        let dyn_img = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg)
+            .map_err(|e| ImageDecodeError::CorruptJpeg(e.to_string()))?;
+        let gray = dyn_img.to_luma8();
+        let (width, height) = gray.dimensions();
+        Ok(DecodedImage::new(width, height, gray.into_raw()))
+    }
+
+    /// Decode JPEG file bytes into full-color RGBA8888 `(width, height, rgba_bytes)`
+    pub fn decode_jpeg_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageDecodeError> {
+        if bytes.len() < 3 || &bytes[0..3] != b"\xFF\xD8\xFF" {
+            return Err(ImageDecodeError::InvalidFormat);
+        }
+        let dyn_img = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg)
+            .map_err(|e| ImageDecodeError::CorruptJpeg(e.to_string()))?;
+        let rgba = dyn_img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        Ok((width, height, rgba.into_raw()))
+    }
+
+    /// Decode WebP file bytes into grayscale `DecodedImage`
+    pub fn decode_webp(bytes: &[u8]) -> Result<DecodedImage, ImageDecodeError> {
+        if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
+            return Err(ImageDecodeError::InvalidFormat);
+        }
+        let dyn_img = image::load_from_memory_with_format(bytes, image::ImageFormat::WebP)
+            .map_err(|e| ImageDecodeError::CorruptWebp(e.to_string()))?;
+        let gray = dyn_img.to_luma8();
+        let (width, height) = gray.dimensions();
+        Ok(DecodedImage::new(width, height, gray.into_raw()))
+    }
+
+    /// Decode WebP file bytes into full-color RGBA8888 `(width, height, rgba_bytes)`
+    pub fn decode_webp_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageDecodeError> {
+        if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
+            return Err(ImageDecodeError::InvalidFormat);
+        }
+        let dyn_img = image::load_from_memory_with_format(bytes, image::ImageFormat::WebP)
+            .map_err(|e| ImageDecodeError::CorruptWebp(e.to_string()))?;
+        let rgba = dyn_img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        Ok((width, height, rgba.into_raw()))
     }
 
     /// Decode PNG into RGBA8888 buffer
@@ -622,5 +722,100 @@ mod tests {
         assert_eq!(decoded.get_pixel(0, 0), Some(255));
         assert_eq!(decoded.get_pixel(15, 15), Some(255));
         assert_eq!(decoded.get_pixel(0, 15), Some(128));
+
+        let (w, h, rgba) = ImageDecoder::decode_rgba(&bmp_bytes).expect("Should decode BMP RGBA");
+        assert_eq!(w, 16);
+        assert_eq!(h, 16);
+        assert_eq!(rgba.len(), 16 * 16 * 4);
+    }
+
+    #[test]
+    fn test_png_rgb_and_rgba_decoding() {
+        // Create an 8x8 test RGBA image and encode as PNG
+        let mut img_buf = image::RgbaImage::new(8, 8);
+        for x in 0..8 {
+            for y in 0..8 {
+                img_buf.put_pixel(x, y, image::Rgba([x as u8 * 30, y as u8 * 30, 128, 255]));
+            }
+        }
+        let mut png_bytes = std::io::Cursor::new(Vec::new());
+        img_buf
+            .write_to(&mut png_bytes, image::ImageFormat::Png)
+            .expect("PNG encoding must succeed");
+        let bytes = png_bytes.into_inner();
+
+        // 1. Test auto-detect decode
+        let decoded = ImageDecoder::decode(&bytes).expect("Should decode PNG bytes");
+        assert_eq!(decoded.width, 8);
+        assert_eq!(decoded.height, 8);
+        assert_eq!(decoded.pixels.len(), 64);
+
+        // 2. Test decode_rgba
+        let (w, h, rgba) = ImageDecoder::decode_rgba(&bytes).expect("Should decode PNG RGBA");
+        assert_eq!(w, 8);
+        assert_eq!(h, 8);
+        assert_eq!(rgba.len(), 8 * 8 * 4);
+        assert_eq!(rgba[3], 255); // Alpha channel preserved
+    }
+
+    #[test]
+    fn test_jpeg_decoding_and_auto_detection() {
+        // Create an 8x8 test RGB image and encode as JPEG
+        let mut img_buf = image::RgbImage::new(8, 8);
+        for x in 0..8 {
+            for y in 0..8 {
+                img_buf.put_pixel(x, y, image::Rgb([x as u8 * 30, y as u8 * 30, 200]));
+            }
+        }
+        let mut jpeg_bytes = std::io::Cursor::new(Vec::new());
+        img_buf
+            .write_to(&mut jpeg_bytes, image::ImageFormat::Jpeg)
+            .expect("JPEG encoding must succeed");
+        let bytes = jpeg_bytes.into_inner();
+
+        assert!(bytes.len() >= 3 && &bytes[0..3] == b"\xFF\xD8\xFF");
+
+        // 1. Test auto-detect decode on JPEG
+        let decoded = ImageDecoder::decode(&bytes).expect("Should auto-detect and decode JPEG");
+        assert_eq!(decoded.width, 8);
+        assert_eq!(decoded.height, 8);
+        assert_eq!(decoded.pixels.len(), 64);
+
+        // 2. Test dedicated decode_jpeg and decode_jpeg_rgba
+        let gray = ImageDecoder::decode_jpeg(&bytes).expect("decode_jpeg must succeed");
+        assert_eq!(gray.width, 8);
+        let (w, h, rgba) =
+            ImageDecoder::decode_jpeg_rgba(&bytes).expect("decode_jpeg_rgba must succeed");
+        assert_eq!(w, 8);
+        assert_eq!(h, 8);
+        assert_eq!(rgba.len(), 64 * 4);
+    }
+
+    #[test]
+    fn test_invalid_image_formats_fail_gracefully() {
+        // Empty bytes
+        assert!(ImageDecoder::decode(&[]).is_err());
+        assert!(ImageDecoder::decode_rgba(&[]).is_err());
+
+        // Arbitrary random bytes
+        let garbage = [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc];
+        assert_eq!(
+            ImageDecoder::decode(&garbage),
+            Err(ImageDecodeError::InvalidFormat)
+        );
+
+        // Bogus JPEG header
+        let bad_jpeg = [0xFF, 0xD8, 0xFF, 0x00, 0x00];
+        assert!(matches!(
+            ImageDecoder::decode(&bad_jpeg),
+            Err(ImageDecodeError::CorruptJpeg(_))
+        ));
+
+        // Bogus WebP header
+        let bad_webp = b"RIFF\x00\x00\x00\x00WEBP\x00\x00";
+        assert!(matches!(
+            ImageDecoder::decode(bad_webp),
+            Err(ImageDecodeError::CorruptWebp(_))
+        ));
     }
 }
