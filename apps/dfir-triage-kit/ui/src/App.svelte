@@ -8,6 +8,7 @@
   import FileIntegrityViewer, { type FileIntegrityRecord } from './components/FileIntegrityViewer.svelte';
   import EventLogTimeline, { type LogEventRecord } from './components/EventLogTimeline.svelte';
   import CertViewer, { type CertArtifact } from './components/CertViewer.svelte';
+  import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
 
   interface TriagePackage {
     summary: TriageSummary;
@@ -41,6 +42,96 @@
 
   let licenseTier: 'Free' | 'Premium' | 'Business' = 'Free';
   let isLicenseActive = false;
+
+  let isCommandPaletteOpen = false;
+
+  $: commandActions = [
+    {
+      id: 'run-sweep',
+      title: 'Run Live Host Triage Sweep',
+      subtitle: 'Enumerate processes, network sockets, suspicious entropy & hashes',
+      category: 'Forensics',
+      icon: '⚡',
+      shortcut: '⌘R',
+      run: () => executeTriage(),
+    },
+    {
+      id: 'tab-overview',
+      title: 'Overview & Threat Score',
+      subtitle: 'View overall threat posture and anomaly counts',
+      category: 'Navigation',
+      icon: '📊',
+      shortcut: '1',
+      run: () => { currentTab = 'overview'; },
+    },
+    {
+      id: 'tab-procs',
+      title: 'Running Processes & Memory',
+      subtitle: 'Inspect loaded modules, memory RSS, PID, and parent lineage',
+      category: 'Navigation',
+      icon: '⚙️',
+      shortcut: '2',
+      run: () => { currentTab = 'processes'; },
+    },
+    {
+      id: 'tab-sockets',
+      title: 'Active Network Sockets',
+      subtitle: 'Inspect local/remote IP, ports, listening states, and owning PID',
+      category: 'Navigation',
+      icon: '🌐',
+      shortcut: '3',
+      run: () => { currentTab = 'sockets'; },
+    },
+    {
+      id: 'tab-files',
+      title: 'File Integrity & Shannon Entropy',
+      subtitle: 'Detect packed binaries, high entropy (>7.2), and hash anomalies',
+      category: 'Navigation',
+      icon: '📁',
+      shortcut: '4',
+      run: () => { currentTab = 'files'; },
+    },
+    {
+      id: 'tab-logs',
+      title: 'Event Log Timeline',
+      subtitle: 'Correlated security events, auth failures, and audit entries',
+      category: 'Navigation',
+      icon: '📜',
+      shortcut: '5',
+      run: () => { currentTab = 'logs'; },
+    },
+    {
+      id: 'tab-certs',
+      title: 'Root Certificate Authority Store',
+      subtitle: 'Verify installed trust roots and untrusted certificates',
+      category: 'Navigation',
+      icon: '🔒',
+      shortcut: '6',
+      run: () => { currentTab = 'certs'; },
+    },
+    {
+      id: 'manage-license',
+      title: 'Manage Offline Ed25519 License',
+      subtitle: `Current tier: ${licenseTier.toUpperCase()}`,
+      category: 'System',
+      icon: '🔑',
+      shortcut: 'L',
+      run: () => { isLicenseModalOpen = true; },
+    },
+  ] as CommandAction[];
+
+  function handleGlobalKeyDown(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      isCommandPaletteOpen = !isCommandPaletteOpen;
+    } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'r') {
+      e.preventDefault();
+      executeTriage();
+    } else if (e.key === 'Escape' && isCommandPaletteOpen) {
+      e.preventDefault();
+      isCommandPaletteOpen = false;
+    }
+  }
 
   onMount(async () => {
     await refreshData();
@@ -114,6 +205,8 @@
   }
 </script>
 
+<svelte:window on:keydown={handleGlobalKeyDown} />
+
 <div class="app-layout">
   <!-- Top App Bar -->
   <header class="app-header">
@@ -130,6 +223,12 @@
     </div>
 
     <div class="header-actions">
+      <button class="cmd-palette-btn" on:click={() => (isCommandPaletteOpen = true)} title="Commands (⌘K)">
+        <span class="cmd-icon">⌘</span>
+        <span>Commands</span>
+        <kbd>⌘K</kbd>
+      </button>
+
       {#if triageRuns.length > 0}
         <div class="run-selector-wrap">
           <label for="run-select">Run:</label>
@@ -286,6 +385,13 @@
     </div>
   </footer>
 
+  <!-- Command Palette -->
+  <CommandPalette
+    isOpen={isCommandPaletteOpen}
+    actions={commandActions}
+    onClose={() => (isCommandPaletteOpen = false)}
+  />
+
   <!-- Licensing Modal -->
   <LicenseModal
     isOpen={isLicenseModalOpen}
@@ -367,6 +473,42 @@
     display: flex;
     align-items: center;
     gap: 12px;
+  }
+
+  .cmd-palette-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .cmd-palette-btn:hover {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: #ef4444;
+    color: var(--text-main);
+  }
+
+  .cmd-icon {
+    color: #ef4444;
+    font-weight: 700;
+  }
+
+  .cmd-palette-btn kbd {
+    background: #0f172a;
+    border: 1px solid #334155;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-family: inherit;
   }
 
   .run-selector-wrap {

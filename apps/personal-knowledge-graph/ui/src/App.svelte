@@ -3,6 +3,7 @@
   import { invokeIpc } from './lib/ipc';
   import GraphCanvas from './components/GraphCanvas.svelte';
   import LicenseModal from './components/LicenseModal.svelte';
+  import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
 
   // State
   let nodes: any[] = [];
@@ -151,10 +152,63 @@
     }
   }
 
+  let isCommandPaletteOpen = false;
+
+  $: commandActions = [
+    {
+      id: 'new-note',
+      title: 'Create New Research Note',
+      subtitle: 'Add a new node to the knowledge graph with [[WikiLinks]]',
+      category: 'Knowledge',
+      icon: '✚',
+      shortcut: '⌘N',
+      run: () => createNewNote(),
+    },
+    {
+      id: 'toggle-vector',
+      title: 'Toggle Concept Semantic Vector Search',
+      subtitle: isSemanticSearch ? 'Switch to keyword BM25 mode' : 'Switch to dense concept embedding mode',
+      category: 'Search',
+      icon: '🧠',
+      shortcut: 'V',
+      run: () => {
+        isSemanticSearch = !isSemanticSearch;
+        handleSearch();
+      },
+    },
+    {
+      id: 'reload-graph',
+      title: 'Refresh Graph Topology & Stats',
+      subtitle: 'Re-compute force-directed node positions and edge layout',
+      category: 'Graph',
+      icon: '🔄',
+      shortcut: 'R',
+      run: () => loadGraph(),
+    },
+    {
+      id: 'manage-license',
+      title: 'Manage Offline Ed25519 License',
+      subtitle: `Current tier: ${currentTier}`,
+      category: 'System',
+      icon: '🔑',
+      shortcut: 'L',
+      run: () => { isLicenseModalOpen = true; },
+    },
+  ] as CommandAction[];
+
   function handleKeydown(e: KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      isCommandPaletteOpen = !isCommandPaletteOpen;
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
+      e.preventDefault();
+      createNewNote();
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
       e.preventDefault();
       isLicenseModalOpen = !isLicenseModalOpen;
+    } else if (e.key === 'Escape' && isCommandPaletteOpen) {
+      e.preventDefault();
+      isCommandPaletteOpen = false;
     }
   }
 
@@ -205,6 +259,16 @@
 
     <!-- Right Controls -->
     <div class="flex items-center gap-3">
+      <button
+        class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 border border-slate-700 shadow-sm"
+        on:click={() => (isCommandPaletteOpen = true)}
+        title="Open Command Palette (⌘K)"
+      >
+        <span class="text-indigo-400 font-bold">⌘</span>
+        <span>Commands</span>
+        <kbd class="bg-slate-950 px-1 py-0.5 rounded text-[10px] text-slate-400">⌘K</kbd>
+      </button>
+
       <div class="text-xs text-slate-400 flex items-center gap-2 pr-2 border-r border-slate-800">
         <span>Nodes: <strong class="text-slate-200">{stats.total_nodes}</strong></span>
         <span>Edges: <strong class="text-slate-200">{stats.total_edges}</strong></span>
@@ -403,6 +467,13 @@
       {/if}
     </aside>
   </main>
+
+  <!-- Command Palette -->
+  <CommandPalette
+    isOpen={isCommandPaletteOpen}
+    actions={commandActions}
+    onClose={() => (isCommandPaletteOpen = false)}
+  />
 
   <!-- Offline Licensing Modal -->
   <LicenseModal

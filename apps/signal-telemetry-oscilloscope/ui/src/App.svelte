@@ -6,6 +6,7 @@
   import ProtocolDecoderTable from './components/ProtocolDecoderTable.svelte';
   import ChannelControls from './components/ChannelControls.svelte';
   import LicenseModal from './components/LicenseModal.svelte';
+  import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
 
   interface OscilloscopeStats {
     total_captures: number;
@@ -70,6 +71,65 @@
   let licenseTier: string = 'Free';
   let isRunning: boolean = true;
   let intervalTimer: any = null;
+  let isCommandPaletteOpen: boolean = false;
+
+  $: commandActions = [
+    {
+      id: 'toggle-run',
+      title: isRunning ? 'Pause Acquisition (HOLD)' : 'Resume Acquisition (RUN)',
+      subtitle: isRunning ? 'Freeze waveform display and analysis' : 'Stream continuous synthetic acquisition frames',
+      category: 'Acquisition',
+      icon: isRunning ? '⏸️' : '▶️',
+      shortcut: 'Space',
+      run: () => { toggleRunStop(); },
+    },
+    {
+      id: 'tab-fft',
+      title: 'FFT Spectrum Decomposition View',
+      subtitle: 'Analyze spectral power density, SNR (dB), and THD%',
+      category: 'Analysis',
+      icon: '📊',
+      shortcut: '1',
+      run: () => { activeTab = 'spectrum'; },
+    },
+    {
+      id: 'tab-bus',
+      title: 'Protocol Bus Decoder View',
+      subtitle: 'Inspect UART, SPI, and I2C hex frame payloads',
+      category: 'Analysis',
+      icon: '⚡',
+      shortcut: '2',
+      run: () => { activeTab = 'decoder'; },
+    },
+    {
+      id: 'single-sweep',
+      title: 'Trigger Single Shot Sweep',
+      subtitle: 'Execute immediate single acquisition pass',
+      category: 'Acquisition',
+      icon: '🎯',
+      shortcut: 'S',
+      run: () => { triggerSweep(); },
+    },
+    {
+      id: 'manage-license',
+      title: 'Manage Offline Ed25519 License',
+      subtitle: `Current tier: ${licenseTier.toUpperCase()}`,
+      category: 'System',
+      icon: '🔑',
+      shortcut: 'L',
+      run: () => { isLicenseModalOpen = true; },
+    },
+  ] as CommandAction[];
+
+  function handleGlobalKeyDown(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      isCommandPaletteOpen = !isCommandPaletteOpen;
+    } else if (e.key === 'Escape' && isCommandPaletteOpen) {
+      e.preventDefault();
+      isCommandPaletteOpen = false;
+    }
+  }
 
   // Acquisition params
   let ch1Type = 'Sine';
@@ -175,6 +235,8 @@
   });
 </script>
 
+<svelte:window on:keydown={handleGlobalKeyDown} />
+
 <div class="oscilloscope-app">
   <!-- Top Navigation Bar -->
   <header class="app-header">
@@ -187,6 +249,12 @@
     </div>
 
     <div class="header-stats">
+      <button class="cmd-palette-btn" on:click={() => (isCommandPaletteOpen = true)} title="Commands (⌘K)">
+        <span class="cmd-icon">⌘</span>
+        <span>Commands</span>
+        <kbd>⌘K</kbd>
+      </button>
+
       <div class="stat-pill">
         <span class="stat-label">CAPTURES:</span>
         <span class="stat-value">{stats.total_captures}</span>
@@ -305,6 +373,13 @@
     <span class="status-item version">v{0.1}</span>
   </footer>
 
+  <!-- Command Palette -->
+  <CommandPalette
+    isOpen={isCommandPaletteOpen}
+    actions={commandActions}
+    onClose={() => (isCommandPaletteOpen = false)}
+  />
+
   <!-- Offline Licensing Modal -->
   <LicenseModal
     isOpen={isLicenseModalOpen}
@@ -361,6 +436,42 @@
     gap: 10px;
     font-family: var(--font-mono);
     font-size: 11px;
+  }
+
+  .cmd-palette-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #16202c;
+    border: 1px solid #243347;
+    color: #cbd5e1;
+    font-size: 0.78rem;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .cmd-palette-btn:hover {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: #10b981;
+    color: #f8fafc;
+  }
+
+  .cmd-icon {
+    color: #34d399;
+    font-weight: 700;
+  }
+
+  .cmd-palette-btn kbd {
+    background: #0a0e14;
+    border: 1px solid #334155;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 0.68rem;
+    color: #94a3b8;
+    font-family: inherit;
   }
 
   .stat-pill {

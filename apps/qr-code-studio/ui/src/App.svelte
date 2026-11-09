@@ -5,12 +5,81 @@
   import BatchProcessor from './components/BatchProcessor.svelte';
   import HistoryAnalytics from './components/HistoryAnalytics.svelte';
   import LicenseModal from './components/LicenseModal.svelte';
+  import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
 
   type NavView = 'generator' | 'scanner' | 'security' | 'batch' | 'history';
   let activeView: NavView = 'generator';
 
   let inspectTargetPayload = '';
   let isLicenseModalOpen = false;
+  let isCommandPaletteOpen = false;
+
+  const commandActions: CommandAction[] = [
+    {
+      id: 'nav-gen',
+      title: 'Generator Studio',
+      subtitle: 'Create micro & standard QR codes, SVG/PNG export, color customizer',
+      category: 'Navigation',
+      icon: '✨',
+      shortcut: '1',
+      run: () => { activeView = 'generator'; },
+    },
+    {
+      id: 'nav-scan',
+      title: 'Live Scanner & Decoder',
+      subtitle: 'Scan camera feeds or decode local image files offline',
+      category: 'Navigation',
+      icon: '📷',
+      shortcut: '2',
+      run: () => { activeView = 'scanner'; },
+    },
+    {
+      id: 'nav-security',
+      title: 'Anti-Quishing Threat Inspector',
+      subtitle: 'Inspect URLs, verify homoglyphs, IP obfuscation & phishing heuristics',
+      category: 'Security',
+      icon: '🛡️',
+      shortcut: '3',
+      run: () => { activeView = 'security'; },
+    },
+    {
+      id: 'nav-batch',
+      title: 'Batch Generation Engine',
+      subtitle: 'High-throughput parallel matrix synthesis & ZIP bundle export',
+      category: 'Actions',
+      icon: '⚡',
+      shortcut: '4',
+      run: () => { activeView = 'batch'; },
+    },
+    {
+      id: 'nav-history',
+      title: 'History & Local Telemetry',
+      subtitle: 'Review tamper-evident scan audit logs and generation metrics',
+      category: 'Actions',
+      icon: '📊',
+      shortcut: '5',
+      run: () => { activeView = 'history'; },
+    },
+    {
+      id: 'manage-license',
+      title: 'Manage Offline Ed25519 License',
+      subtitle: 'View active tier entitlements or activate offline air-gap license',
+      category: 'System',
+      icon: '🔑',
+      shortcut: 'L',
+      run: () => { isLicenseModalOpen = true; },
+    },
+  ];
+
+  function handleGlobalKeyDown(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      isCommandPaletteOpen = !isCommandPaletteOpen;
+    } else if (e.key === 'Escape' && isCommandPaletteOpen) {
+      e.preventDefault();
+      isCommandPaletteOpen = false;
+    }
+  }
 
   function navigateToSecurity(payload: string) {
     inspectTargetPayload = payload;
@@ -22,6 +91,8 @@
     activeView = 'security';
   }
 </script>
+
+<svelte:window on:keydown={handleGlobalKeyDown} />
 
 <div class="app-layout">
   <!-- Top App Header -->
@@ -84,6 +155,12 @@
 
     <!-- Header Actions -->
     <div class="header-actions">
+      <button class="cmd-palette-btn" on:click={() => (isCommandPaletteOpen = true)} title="Command Palette (⌘K)">
+        <span class="cmd-icon">⌘</span>
+        <span>Commands</span>
+        <kbd>⌘K</kbd>
+      </button>
+
       <div class="airgap-badge">
         <span class="dot"></span>
         <span>Air-Gap Active</span>
@@ -115,6 +192,13 @@
       />
     {/if}
   </main>
+
+  <!-- Command Palette -->
+  <CommandPalette
+    isOpen={isCommandPaletteOpen}
+    actions={commandActions}
+    onClose={() => (isCommandPaletteOpen = false)}
+  />
 
   <!-- Offline License Modal -->
   <LicenseModal
@@ -220,7 +304,43 @@
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: 0.75rem;
+  }
+
+  .cmd-palette-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 0.35rem 0.75rem;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .cmd-palette-btn:hover {
+    background: rgba(6, 182, 212, 0.12);
+    border-color: var(--accent-cyan);
+    color: var(--text-primary);
+  }
+
+  .cmd-icon {
+    color: var(--accent-cyan);
+    font-weight: 700;
+  }
+
+  .cmd-palette-btn kbd {
+    background: #0a0e17;
+    border: 1px solid #334155;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-family: inherit;
   }
 
   .airgap-badge {

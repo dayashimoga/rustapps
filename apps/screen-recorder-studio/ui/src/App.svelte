@@ -7,6 +7,7 @@
   import TutorialStepList from './components/TutorialStepList.svelte';
   import SubtitleEditor from './components/SubtitleEditor.svelte';
   import ExportModal from './components/ExportModal.svelte';
+  import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
 
   export interface CursorEvent {
     timestamp_ms: number;
@@ -85,10 +86,84 @@
   let activeRightTab: 'steps' | 'subtitles' | 'stats' = 'steps';
   let isLicenseModalOpen: boolean = false;
   let isExportModalOpen: boolean = false;
+  let isCommandPaletteOpen: boolean = false;
   let errorMessage: string = '';
 
   let licenseTier: 'Free' | 'Premium' | 'Business' = 'Free';
   let isLicenseActive: boolean = false;
+
+  $: commandActions = [
+    {
+      id: 'toggle-play',
+      title: isPlaying ? 'Pause Walkthrough Preview' : 'Play Walkthrough Preview',
+      subtitle: isPlaying ? 'Freeze playback at current timeline position' : 'Simulate cursor trajectories and auto-zooms',
+      category: 'Playback',
+      icon: isPlaying ? '⏸️' : '▶️',
+      shortcut: 'Space',
+      run: () => {
+        if (isPlaying) pause();
+        else play();
+      },
+    },
+    {
+      id: 'tab-steps',
+      title: 'Tutorial Steps & Milestones',
+      subtitle: 'View generated Markdown SOP instructions and click coordinates',
+      category: 'Tutorial',
+      icon: '📝',
+      shortcut: '1',
+      run: () => { activeRightTab = 'steps'; },
+    },
+    {
+      id: 'tab-subtitles',
+      title: 'Speech Subtitles & SRT Cues',
+      subtitle: 'Inspect timestamped transcription cues',
+      category: 'Tutorial',
+      icon: '💬',
+      shortcut: '2',
+      run: () => { activeRightTab = 'subtitles'; },
+    },
+    {
+      id: 'tab-stats',
+      title: 'Studio Synthesis Metrics',
+      subtitle: 'Review silence trimming and keyframe compression ratio',
+      category: 'Tutorial',
+      icon: '📊',
+      shortcut: '3',
+      run: () => { activeRightTab = 'stats'; },
+    },
+    {
+      id: 'export-sop',
+      title: 'Export Tutorial SOP & Bundle',
+      subtitle: 'Export interactive HTML/Markdown guide with screenshot assets',
+      category: 'Export',
+      icon: '🚀',
+      shortcut: '⌘E',
+      run: () => { isExportModalOpen = true; },
+    },
+    {
+      id: 'manage-license',
+      title: 'Manage Offline Ed25519 License',
+      subtitle: `Current tier: ${licenseTier.toUpperCase()}`,
+      category: 'System',
+      icon: '🔑',
+      shortcut: 'L',
+      run: () => { isLicenseModalOpen = true; },
+    },
+  ] as CommandAction[];
+
+  function handleGlobalKeyDown(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      isCommandPaletteOpen = !isCommandPaletteOpen;
+    } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'e') {
+      e.preventDefault();
+      isExportModalOpen = true;
+    } else if (e.key === 'Escape' && isCommandPaletteOpen) {
+      e.preventDefault();
+      isCommandPaletteOpen = false;
+    }
+  }
 
   onMount(async () => {
     await refreshSessions();
@@ -188,6 +263,8 @@
   }
 </script>
 
+<svelte:window on:keydown={handleGlobalKeyDown} />
+
 <div class="studio-layout">
   <!-- Top Application Bar -->
   <header class="app-header">
@@ -206,6 +283,12 @@
     </div>
 
     <div class="header-right">
+      <button class="cmd-palette-btn" on:click={() => (isCommandPaletteOpen = true)} title="Commands (⌘K)">
+        <span class="cmd-icon">⌘</span>
+        <span>Commands</span>
+        <kbd>⌘K</kbd>
+      </button>
+
       {#if sessions.length > 0}
         <div class="session-picker">
           <label for="session-select">Session:</label>
@@ -355,6 +438,13 @@
     </div>
   </footer>
 
+  <!-- Command Palette -->
+  <CommandPalette
+    isOpen={isCommandPaletteOpen}
+    actions={commandActions}
+    onClose={() => (isCommandPaletteOpen = false)}
+  />
+
   <!-- Export Dialog -->
   <ExportModal
     isOpen={isExportModalOpen}
@@ -443,6 +533,42 @@
     display: flex;
     align-items: center;
     gap: 12px;
+  }
+
+  .cmd-palette-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 5px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .cmd-palette-btn:hover {
+    background: rgba(244, 63, 94, 0.15);
+    border-color: #f43f5e;
+    color: var(--text-main);
+  }
+
+  .cmd-icon {
+    color: #fb7185;
+    font-weight: 700;
+  }
+
+  .cmd-palette-btn kbd {
+    background: #0f172a;
+    border: 1px solid #334155;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-family: inherit;
   }
 
   .session-picker {

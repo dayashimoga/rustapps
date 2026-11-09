@@ -6,6 +6,7 @@
   import MasteringControls from './components/MasteringControls.svelte';
   import LoudnessMeter from './components/LoudnessMeter.svelte';
   import LicenseModal from './components/LicenseModal.svelte';
+  import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
 
   interface StudioStats {
     total_projects: number;
@@ -38,6 +39,89 @@
   let isLicenseModalOpen: boolean = false;
   let licenseTier: string = 'Free';
   let isProcessing: boolean = false;
+  let isCommandPaletteOpen: boolean = false;
+
+  $: commandActions = [
+    {
+      id: 'remaster-now',
+      title: 'Render Audio Remaster',
+      subtitle: 'Apply 5-band biquad EQ, dynamics compressor, and true-peak limiter',
+      category: 'Mastering',
+      icon: '⚡',
+      shortcut: '⌘R',
+      run: () => {
+        if (currentProject) {
+          handleRemaster(new CustomEvent('remaster', { detail: {
+            compressorThresholdDb: currentProject.mastering_config.compressor_threshold_db,
+            compressorRatio: currentProject.mastering_config.compressor_ratio,
+            compressorAttackMs: currentProject.mastering_config.compressor_attack_ms,
+            compressorReleaseMs: currentProject.mastering_config.compressor_release_ms,
+            deReverbAmount: currentProject.mastering_config.de_reverb_amount,
+            targetLufs: currentProject.mastering_config.target_lufs,
+            limiterCeilingDb: currentProject.mastering_config.limiter_ceiling_db,
+          }}));
+        }
+      },
+    },
+    {
+      id: 'target-spotify',
+      title: 'Target Spotify / Streaming (-14.0 LUFS)',
+      subtitle: 'Standard loudness compliance for modern streaming services',
+      category: 'Mastering',
+      icon: '🎯',
+      shortcut: '1',
+      run: () => {
+        if (currentProject) {
+          currentProject.mastering_config.target_lufs = -14.0;
+        }
+      },
+    },
+    {
+      id: 'target-cd',
+      title: 'Target Club / CD Master (-9.0 LUFS)',
+      subtitle: 'High perceived loudness with controlled inter-sample peaks',
+      category: 'Mastering',
+      icon: '🔊',
+      shortcut: '2',
+      run: () => {
+        if (currentProject) {
+          currentProject.mastering_config.target_lufs = -9.0;
+        }
+      },
+    },
+    {
+      id: 'reset-eq',
+      title: 'Flat Frequency Response (Reset EQ)',
+      subtitle: 'Reset all 5 biquad parametric EQ bands to 0 dB gain',
+      category: 'DSP',
+      icon: '〰️',
+      shortcut: '0',
+      run: () => {
+        if (currentProject) {
+          currentProject.mastering_config.bands.forEach((b: any) => b.gain_db = 0.0);
+        }
+      },
+    },
+    {
+      id: 'manage-license',
+      title: 'Manage Offline Ed25519 License',
+      subtitle: `Current tier: ${licenseTier.toUpperCase()}`,
+      category: 'System',
+      icon: '🔑',
+      shortcut: 'L',
+      run: () => { isLicenseModalOpen = true; },
+    },
+  ] as CommandAction[];
+
+  function handleGlobalKeyDown(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      isCommandPaletteOpen = !isCommandPaletteOpen;
+    } else if (e.key === 'Escape' && isCommandPaletteOpen) {
+      e.preventDefault();
+      isCommandPaletteOpen = false;
+    }
+  }
 
   async function loadInitialData() {
     try {
@@ -92,6 +176,8 @@
   });
 </script>
 
+<svelte:window on:keydown={handleGlobalKeyDown} />
+
 <div class="audio-studio-app">
   <!-- Top Bar -->
   <header class="app-header">
@@ -104,6 +190,12 @@
     </div>
 
     <div class="header-stats">
+      <button class="cmd-palette-btn" on:click={() => (isCommandPaletteOpen = true)} title="Commands (⌘K)">
+        <span class="cmd-icon">⌘</span>
+        <span>Commands</span>
+        <kbd>⌘K</kbd>
+      </button>
+
       <div class="stat-pill">
         <span class="stat-label">PROJECTS:</span>
         <span class="stat-value">{stats.total_projects}</span>
@@ -193,6 +285,13 @@
     <span class="status-item version">v{0.1}</span>
   </footer>
 
+  <!-- Command Palette -->
+  <CommandPalette
+    isOpen={isCommandPaletteOpen}
+    actions={commandActions}
+    onClose={() => (isCommandPaletteOpen = false)}
+  />
+
   <!-- Licensing Modal -->
   <LicenseModal
     isOpen={isLicenseModalOpen}
@@ -249,6 +348,42 @@
     gap: 10px;
     font-family: var(--font-mono);
     font-size: 11px;
+  }
+
+  .cmd-palette-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #1b222d;
+    border: 1px solid #283547;
+    color: #cbd5e1;
+    font-size: 0.78rem;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .cmd-palette-btn:hover {
+    background: rgba(139, 92, 246, 0.15);
+    border-color: #8b5cf6;
+    color: #f8fafc;
+  }
+
+  .cmd-icon {
+    color: #a78bfa;
+    font-weight: 700;
+  }
+
+  .cmd-palette-btn kbd {
+    background: #0e1117;
+    border: 1px solid #334155;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 0.68rem;
+    color: #94a3b8;
+    font-family: inherit;
   }
 
   .stat-pill {

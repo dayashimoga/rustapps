@@ -5,6 +5,7 @@
   import DataTable from './components/DataTable.svelte';
   import DataChart, { type ChartDataPoint } from './components/DataChart.svelte';
   import ColumnInspector, { type ColumnStatistics } from './components/ColumnInspector.svelte';
+  import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
 
   interface ColumnMetadata {
     name: string;
@@ -93,6 +94,67 @@
   // Column Inspector State
   let activeColStats: ColumnStatistics | null = null;
   let isInspectorOpen: boolean = false;
+
+  // Command Palette State (Linear/Raycast UX)
+  let isCommandPaletteOpen: boolean = false;
+
+  $: commandActions = [
+    {
+      id: 'open-demo',
+      title: 'Load Demo Sales Dataset',
+      subtitle: 'Instantly populate workbench with 1,000 synthetic transaction records',
+      category: 'Dataset',
+      icon: '⚡',
+      shortcut: '⌘D',
+      run: () => handleSeedDemo(),
+    },
+    {
+      id: 'open-file',
+      title: 'Open Local Parquet / Arrow File',
+      subtitle: 'Browse local filesystem using native dialog',
+      category: 'File',
+      icon: '📂',
+      shortcut: '⌘O',
+      run: () => handleOpenDataset(),
+    },
+    {
+      id: 'view-table',
+      title: 'Switch to Data Grid View',
+      subtitle: 'Examine rows, paginate, and apply column filters',
+      category: 'View',
+      icon: '📊',
+      shortcut: 'T',
+      run: () => { handleViewToggle('table'); },
+    },
+    {
+      id: 'view-chart',
+      title: 'Switch to Chart Analytics View',
+      subtitle: 'Aggregate metrics and render bar, line, and scatter plots',
+      category: 'View',
+      icon: '📈',
+      shortcut: 'C',
+      run: () => { handleViewToggle('chart'); },
+    },
+    {
+      id: 'open-license',
+      title: 'Manage Offline License & Entitlements',
+      subtitle: `Current tier: ${licenseTier}`,
+      category: 'System',
+      icon: '🔑',
+      shortcut: 'L',
+      run: () => { isLicenseModalOpen = true; },
+    },
+  ] as CommandAction[];
+
+  function handleGlobalKeyDown(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      isCommandPaletteOpen = !isCommandPaletteOpen;
+    } else if (e.key === 'Escape' && isCommandPaletteOpen) {
+      e.preventDefault();
+      isCommandPaletteOpen = false;
+    }
+  }
 
   onMount(async () => {
     await loadInitialData();
@@ -434,6 +496,11 @@
           />
         </div>
 
+        <button class="cmd-palette-btn" on:click={() => (isCommandPaletteOpen = true)} title="Command Palette (⌘K)">
+          <span>Commands</span>
+          <kbd>⌘K</kbd>
+        </button>
+
         <div class="view-switch-tabs">
           <button
             class="vtab-btn"
@@ -562,6 +629,15 @@
     isInspectorOpen = false;
     executeChart();
   }}
+/>
+
+<svelte:window on:keydown={handleGlobalKeyDown} />
+
+<!-- Raycast / Linear Command Palette -->
+<CommandPalette
+  isOpen={isCommandPaletteOpen}
+  actions={commandActions}
+  on:close={() => (isCommandPaletteOpen = false)}
 />
 
 <style>
@@ -858,6 +934,32 @@
     border-radius: 6px;
     padding: 6px 12px;
     width: 380px;
+  }
+  .cmd-palette-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #94a3b8;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.15s ease;
+  }
+  .cmd-palette-btn:hover {
+    background: rgba(99, 102, 241, 0.15);
+    border-color: rgba(99, 102, 241, 0.4);
+    color: #e2e8f0;
+  }
+  .cmd-palette-btn kbd {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    color: #a5b4fc;
   }
   .search-icon {
     font-size: 0.85rem;

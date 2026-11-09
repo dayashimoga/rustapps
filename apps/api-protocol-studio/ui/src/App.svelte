@@ -5,6 +5,7 @@
   import RequestComposer, { type ApiRequestItem, type KeyValuePair } from './components/RequestComposer.svelte';
   import ResponseInspector, { type ApiResponseSnapshot } from './components/ResponseInspector.svelte';
   import FuzzerRunner from './components/FuzzerRunner.svelte';
+  import CommandPalette, { type CommandAction } from './components/CommandPalette.svelte';
 
   interface ApiCollection {
     id: string;
@@ -41,6 +42,74 @@
 
   let newCollName: string = '';
   let showNewCollInput: boolean = false;
+
+  // Command Palette State
+  let isCommandPaletteOpen: boolean = false;
+
+  $: commandActions = [
+    {
+      id: 'execute-req',
+      title: 'Execute Active Request',
+      subtitle: activeRequest ? `${activeRequest.method} ${activeRequest.url}` : 'No active request',
+      category: 'Runner',
+      icon: '▶',
+      shortcut: '⌘↵',
+      run: () => {
+        if (activeRequest) {
+          handleExecuteRequest(new CustomEvent('execute', { detail: { requestId: activeRequest.id } }));
+        }
+      },
+    },
+    {
+      id: 'switch-composer',
+      title: 'Switch to Request Composer',
+      subtitle: 'Edit headers, query parameters, authorization, and body payload',
+      category: 'View',
+      icon: '📡',
+      shortcut: '1',
+      run: () => { activeView = 'composer'; },
+    },
+    {
+      id: 'switch-fuzzer',
+      title: 'Switch to Security Fuzzer',
+      subtitle: 'Run offline SQLi, XSS, and boundary mutation suites',
+      category: 'View',
+      icon: '⚡',
+      shortcut: '2',
+      run: () => { activeView = 'fuzzer'; },
+    },
+    {
+      id: 'new-request',
+      title: 'Create New Request in Collection',
+      subtitle: 'Add a new endpoint item to current collection',
+      category: 'Collection',
+      icon: '✚',
+      shortcut: '⌘N',
+      run: () => createNewRequest(),
+    },
+    {
+      id: 'manage-license',
+      title: 'Manage Offline License & Entitlements',
+      subtitle: `Current tier: ${licenseTier}`,
+      category: 'System',
+      icon: '🔑',
+      shortcut: 'L',
+      run: () => { isLicenseModalOpen = true; },
+    },
+  ] as CommandAction[];
+
+  function handleGlobalKeyDown(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      isCommandPaletteOpen = !isCommandPaletteOpen;
+    } else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && activeRequest) {
+      e.preventDefault();
+      handleExecuteRequest(new CustomEvent('execute', { detail: { requestId: activeRequest.id } }));
+    } else if (e.key === 'Escape' && isCommandPaletteOpen) {
+      e.preventDefault();
+      isCommandPaletteOpen = false;
+    }
+  }
 
   onMount(async () => {
     await loadInitialData();
@@ -242,6 +311,8 @@
   }
 </script>
 
+<svelte:window on:keydown={handleGlobalKeyDown} />
+
 <div class="app-layout">
   <!-- Left Sidebar -->
   <aside class="sidebar">
@@ -371,21 +442,29 @@
           />
         </div>
 
-        <div class="view-switch-tabs">
-          <button
-            class="vtab-btn"
-            class:active={activeView === 'composer'}
-            on:click={() => (activeView = 'composer')}
-          >
-            📡 Composer
+        <div class="header-right-actions">
+          <button class="cmd-palette-btn" on:click={() => (isCommandPaletteOpen = true)} title="Open Command Palette (⌘K)">
+            <span class="cmd-icon">⌘</span>
+            <span>Commands</span>
+            <kbd>⌘K</kbd>
           </button>
-          <button
-            class="vtab-btn"
-            class:active={activeView === 'fuzzer'}
-            on:click={() => (activeView = 'fuzzer')}
-          >
-            ⚡ Security Fuzzer
-          </button>
+
+          <div class="view-switch-tabs">
+            <button
+              class="vtab-btn"
+              class:active={activeView === 'composer'}
+              on:click={() => (activeView = 'composer')}
+            >
+              📡 Composer
+            </button>
+            <button
+              class="vtab-btn"
+              class:active={activeView === 'fuzzer'}
+              on:click={() => (activeView = 'fuzzer')}
+            >
+              ⚡ Security Fuzzer
+            </button>
+          </div>
         </div>
       </header>
 
@@ -413,11 +492,26 @@
       <div class="no-req-view">
         <div class="no-req-icon">⚡</div>
         <h2>Air-Gapped API & Protocol Studio</h2>
-        <p>Select a request from the sidebar or click + to compose a new offline endpoint test.</p>
+        <p>Select a request from the sidebar or press <strong>⌘K</strong> to trigger commands.</p>
+        <div class="empty-actions">
+          <button class="primary-btn" on:click={createNewRequest}>＋ Create New Request</button>
+          <button class="cmd-palette-btn" on:click={() => (isCommandPaletteOpen = true)}>
+            <span class="cmd-icon">⌘</span>
+            <span>Command Palette</span>
+            <kbd>⌘K</kbd>
+          </button>
+        </div>
       </div>
     {/if}
   </main>
 </div>
+
+<!-- Command Palette -->
+<CommandPalette
+  isOpen={isCommandPaletteOpen}
+  actions={commandActions}
+  on:close={() => (isCommandPaletteOpen = false)}
+/>
 
 <!-- Offline Ed25519 Licensing Modal -->
 <LicenseModal
@@ -724,5 +818,61 @@
   }
   .no-req-view h2 {
     color: #e2e8f0;
+  }
+  .header-right-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .cmd-palette-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(30, 41, 59, 0.7);
+    border: 1px solid rgba(75, 85, 99, 0.5);
+    color: #cbd5e1;
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .cmd-palette-btn:hover {
+    background: rgba(56, 189, 248, 0.15);
+    border-color: #38bdf8;
+    color: #f8fafc;
+  }
+  .cmd-icon {
+    color: #38bdf8;
+    font-weight: 700;
+  }
+  .cmd-palette-btn kbd {
+    background: #0f172a;
+    border: 1px solid #334155;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    color: #94a3b8;
+    font-family: inherit;
+  }
+  .empty-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+  }
+  .primary-btn {
+    background: #0284c7;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .primary-btn:hover {
+    background: #0369a1;
   }
 </style>
