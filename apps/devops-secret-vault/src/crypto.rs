@@ -2,6 +2,7 @@
 //! DevOps Secret Vault - Cryptographic Operations & Key Lifecycle Management
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use shared_encryption::{
     decrypt_aes_gcm, derive_key_argon2id, encrypt_aes_gcm, generate_salt, Argon2Params,
     EncryptionError,
@@ -23,6 +24,68 @@ impl VaultMasterKey {
     pub fn lock_in_memory(&self) -> shared_encryption::LockedKey<32> {
         shared_encryption::LockedKey::new(self.0)
     }
+
+    /// Derive an isolated 256-bit key used exclusively for blind-indexing metadata at rest
+    pub fn derive_blind_index_key(&self) -> [u8; 32] {
+        hmac_sha256(&self.0, b"VAULT_BLIND_INDEX_DERIVATION_KEY_V1")
+    }
+}
+
+/// Constant-time RFC 2104 compliant HMAC-SHA256 implementation
+pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
+    let mut k_padded = [0u8; 64];
+    if key.len() > 64 {
+        let hash = Sha256::digest(key);
+        k_padded[..32].copy_from_slice(&hash);
+    } else {
+        k_padded[..key.len()].copy_from_slice(key);
+    }
+
+    let mut ipad = [0x36u8; 64];
+    let mut opad = [0x5cu8; 64];
+    for i in 0..64 {
+        ipad[i] ^= k_padded[i];
+        opad[i] ^= k_padded[i];
+    }
+
+    let mut inner = Sha256::new();
+    inner.update(ipad);
+    inner.update(data);
+    let inner_hash = inner.finalize();
+
+    let mut outer = Sha256::new();
+    outer.update(opad);
+    outer.update(inner_hash);
+    let result = outer.finalize();
+
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&result);
+    out
+}
+
+/// Compute a deterministic HMAC-SHA256 blind index token for searching metadata at rest
+pub fn compute_blind_index(blind_key: &[u8; 32], term: &str) -> String {
+    let normalized = term.trim().to_lowercase();
+    let hash = hmac_sha256(blind_key, normalized.as_bytes());
+    hash.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Encrypt secret title using AES-256-GCM and the master key
+pub fn encrypt_title(master_key: &VaultMasterKey, title: &str) -> Result<Vec<u8>, VaultError> {
+    let ciphertext =
+        encrypt_aes_gcm(&master_key.0, title.as_bytes()).map_err(VaultError::Crypto)?;
+    Ok(ciphertext)
+}
+
+/// Decrypt secret title using AES-256-GCM and the master key
+pub fn decrypt_title(master_key: &VaultMasterKey, encrypted: &[u8]) -> Result<String, VaultError> {
+    let decrypted = decrypt_aes_gcm(&master_key.0, encrypted).map_err(|e| match e {
+        EncryptionError::DecryptionFailed => VaultError::Crypto(EncryptionError::DecryptionFailed),
+        other => VaultError::Crypto(other),
+    })?;
+    let title = String::from_utf8(decrypted.as_slice().to_vec())
+        .map_err(|e| VaultError::ValidationError(format!("Invalid UTF-8 in title: {}", e)))?;
+    Ok(title)
 }
 
 impl std::fmt::Debug for VaultMasterKey {
@@ -205,5 +268,46 @@ mod tests {
         let master_key = VaultMasterKey([0x99u8; 32]);
         let locked = master_key.lock_in_memory();
         assert_eq!(locked.as_bytes(), &master_key.0);
+    }
+    #[test]
+    fn test_rfc2202_hmac_sha256_known_vector_1() {
+        let key = [0x0bu8; 20];
+        let data = b"Hi There";
+        let hmac = hmac_sha256(&key, data);
+        let hex: String = hmac.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(
+            hex,
+            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+    }
+
+    #[test]
+    fn test_blind_index_consistency_and_case_insensitivity() {
+        let master_key = VaultMasterKey([0x42u8; 32]);
+        let blind_key = master_key.derive_blind_index_key();
+
+        let index1 = compute_blind_index(&blind_key, "AWS_PROD_ROOT_KEY");
+        let index2 = compute_blind_index(&blind_key, "aws_prod_root_key ");
+        assert_eq!(
+            index1, index2,
+            "Blind indices must be case and whitespace normalized"
+        );
+
+        let index_diff = compute_blind_index(&blind_key, "GCP_PROD_ROOT_KEY");
+        assert_ne!(
+            index1, index_diff,
+            "Different terms must have different blind indices"
+        );
+    }
+
+    #[test]
+    fn test_title_encryption_roundtrip() {
+        let master_key = VaultMasterKey([0x33u8; 32]);
+        let original_title = "Production Kubernetes Cluster CA";
+        let encrypted = encrypt_title(&master_key, original_title).unwrap();
+        assert_ne!(encrypted.as_slice(), original_title.as_bytes());
+
+        let decrypted = decrypt_title(&master_key, &encrypted).unwrap();
+        assert_eq!(original_title, decrypted);
     }
 }

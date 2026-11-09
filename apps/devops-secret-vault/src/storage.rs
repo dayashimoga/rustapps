@@ -5,7 +5,8 @@ use shared_storage::{Database, Migration, MigrationRunner};
 use std::path::Path;
 
 use crate::crypto::{
-    decrypt_metadata_fields, encrypt_metadata_fields, VaultKeyDerivationMetadata, VaultMasterKey,
+    compute_blind_index, decrypt_metadata_fields, decrypt_title, encrypt_metadata_fields,
+    encrypt_title, VaultKeyDerivationMetadata, VaultMasterKey,
 };
 use crate::error::VaultError;
 use crate::models::{
@@ -87,6 +88,23 @@ impl VaultStorage {
                     ALTER TABLE audit_logs ADD COLUMN entry_hash TEXT NOT NULL DEFAULT '';
                 ",
             },
+            Migration {
+                version: 3,
+                description: "Add encrypted_title and blind index columns and secret_blind_indices table (SEC-01)",
+                sql: "
+                    ALTER TABLE secrets ADD COLUMN encrypted_title BLOB;
+                    ALTER TABLE secrets ADD COLUMN blind_index_title TEXT;
+                    CREATE INDEX IF NOT EXISTS idx_secrets_blind_index_title ON secrets(blind_index_title);
+
+                    CREATE TABLE IF NOT EXISTS secret_blind_indices (
+                        secret_id TEXT NOT NULL,
+                        field_type TEXT NOT NULL,
+                        blind_hash TEXT NOT NULL,
+                        PRIMARY KEY (secret_id, field_type, blind_hash)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_blind_hash ON secret_blind_indices(blind_hash);
+                ",
+            },
         ];
 
         MigrationRunner::apply_migrations(db, &migrations)?;
@@ -132,6 +150,7 @@ impl VaultStorage {
             .with_connection(|conn| {
                 conn.execute_batch(
                     "DELETE FROM secrets;
+                     DELETE FROM secret_blind_indices;
                      DELETE FROM audit_logs;
                      DELETE FROM vault_metadata;",
                 )?;
@@ -153,18 +172,29 @@ impl VaultStorage {
             notes: record.metadata.notes.clone(),
         };
         let encrypted_meta = encrypt_metadata_fields(master_key, &meta_fields)?;
+        let encrypted_title = encrypt_title(master_key, &record.metadata.title)?;
+        let blind_key = master_key.derive_blind_index_key();
+        let blind_index_title = compute_blind_index(&blind_key, &record.metadata.title);
         let secret_type_str = record.metadata.secret_type.as_str();
+
+        let tag_blind_hashes: Vec<String> = record
+            .metadata
+            .tags
+            .iter()
+            .map(|t| compute_blind_index(&blind_key, t))
+            .collect();
 
         self.db
             .with_connection(|conn| {
                 conn.execute(
                     "INSERT INTO secrets (
                     id, title, secret_type, tags, username, url, notes,
-                    encrypted_payload, version, created_at, updated_at, encrypted_metadata
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                    encrypted_payload, version, created_at, updated_at, encrypted_metadata,
+                    encrypted_title, blind_index_title
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                     rusqlite::params![
                         record.metadata.id,
-                        record.metadata.title,
+                        "[ENCRYPTED]", // Masked plaintext so zero cleartext titles persist to disk
                         secret_type_str,
                         "",
                         None::<String>,
@@ -175,8 +205,18 @@ impl VaultStorage {
                         record.metadata.created_at,
                         record.metadata.updated_at,
                         Some(encrypted_meta),
+                        Some(encrypted_title),
+                        Some(&blind_index_title),
                     ],
                 )?;
+
+                let mut blind_stmt = conn.prepare(
+                    "INSERT OR IGNORE INTO secret_blind_indices (secret_id, field_type, blind_hash) VALUES (?1, ?2, ?3)",
+                )?;
+                for hash in tag_blind_hashes {
+                    blind_stmt.execute(rusqlite::params![record.metadata.id, "tag", hash])?;
+                }
+
                 Ok(())
             })
             .map_err(VaultError::Storage)
@@ -192,8 +232,9 @@ impl VaultStorage {
                 conn.execute(
                     "INSERT INTO secrets (
                     id, title, secret_type, tags, username, url, notes,
-                    encrypted_payload, version, created_at, updated_at, encrypted_metadata
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL)",
+                    encrypted_payload, version, created_at, updated_at, encrypted_metadata,
+                    encrypted_title, blind_index_title
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, NULL, NULL)",
                     rusqlite::params![
                         record.metadata.id,
                         record.metadata.title,
@@ -223,14 +264,15 @@ impl VaultStorage {
             .with_connection(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, title, secret_type, tags, username, url, notes,
-                        encrypted_payload, version, created_at, updated_at, encrypted_metadata
+                        encrypted_payload, version, created_at, updated_at, encrypted_metadata,
+                        encrypted_title
                  FROM secrets WHERE id = ?1",
                 )?;
 
                 let mut rows = stmt.query([id])?;
                 if let Some(row) = rows.next()? {
                     let id: String = row.get(0)?;
-                    let title: String = row.get(1)?;
+                    let raw_title: String = row.get(1)?;
                     let secret_type_str: String = row.get(2)?;
                     let tags_json: String = row.get(3)?;
                     let username: Option<String> = row.get(4)?;
@@ -241,6 +283,17 @@ impl VaultStorage {
                     let created_at: i64 = row.get(9)?;
                     let updated_at: i64 = row.get(10)?;
                     let encrypted_meta: Option<Vec<u8>> = row.get(11).unwrap_or(None);
+                    let encrypted_title: Option<Vec<u8>> = row.get(12).unwrap_or(None);
+
+                    let title = if let Some(ref cipher) = encrypted_title {
+                        if !cipher.is_empty() {
+                            decrypt_title(master_key, cipher).unwrap_or(raw_title)
+                        } else {
+                            raw_title
+                        }
+                    } else {
+                        raw_title
+                    };
 
                     let (tags, username, url, notes) = if let Some(ref cipher) = encrypted_meta {
                         if !cipher.is_empty() {
@@ -354,13 +407,13 @@ impl VaultStorage {
             .with_connection(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, title, secret_type, tags, username, url, notes,
-                        version, created_at, updated_at, encrypted_metadata
+                        version, created_at, updated_at, encrypted_metadata, encrypted_title
                  FROM secrets ORDER BY updated_at DESC",
                 )?;
 
                 let rows = stmt.query_map([], |row| {
                     let id: String = row.get(0)?;
-                    let title: String = row.get(1)?;
+                    let raw_title: String = row.get(1)?;
                     let secret_type_str: String = row.get(2)?;
                     let tags_json: String = row.get(3)?;
                     let username: Option<String> = row.get(4)?;
@@ -370,6 +423,17 @@ impl VaultStorage {
                     let created_at: i64 = row.get(8)?;
                     let updated_at: i64 = row.get(9)?;
                     let encrypted_meta: Option<Vec<u8>> = row.get(10).unwrap_or(None);
+                    let encrypted_title: Option<Vec<u8>> = row.get(11).unwrap_or(None);
+
+                    let title = if let Some(ref cipher) = encrypted_title {
+                        if !cipher.is_empty() {
+                            decrypt_title(master_key, cipher).unwrap_or(raw_title)
+                        } else {
+                            raw_title
+                        }
+                    } else {
+                        raw_title
+                    };
 
                     let (tags, username, url, notes) = if let Some(ref cipher) = encrypted_meta {
                         if !cipher.is_empty() {
@@ -483,13 +547,14 @@ impl VaultStorage {
             .with_connection(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, title, secret_type, tags, username, url, notes,
-                        encrypted_payload, version, created_at, updated_at, encrypted_metadata
+                        encrypted_payload, version, created_at, updated_at, encrypted_metadata,
+                        encrypted_title
                  FROM secrets ORDER BY updated_at DESC",
                 )?;
 
                 let rows = stmt.query_map([], |row| {
                     let id: String = row.get(0)?;
-                    let title: String = row.get(1)?;
+                    let raw_title: String = row.get(1)?;
                     let secret_type_str: String = row.get(2)?;
                     let tags_json: String = row.get(3)?;
                     let username: Option<String> = row.get(4)?;
@@ -500,6 +565,17 @@ impl VaultStorage {
                     let created_at: i64 = row.get(9)?;
                     let updated_at: i64 = row.get(10)?;
                     let encrypted_meta: Option<Vec<u8>> = row.get(11).unwrap_or(None);
+                    let encrypted_title: Option<Vec<u8>> = row.get(12).unwrap_or(None);
+
+                    let title = if let Some(ref cipher) = encrypted_title {
+                        if !cipher.is_empty() {
+                            decrypt_title(master_key, cipher).unwrap_or(raw_title)
+                        } else {
+                            raw_title
+                        }
+                    } else {
+                        raw_title
+                    };
 
                     let (tags, username, url, notes) = if let Some(ref cipher) = encrypted_meta {
                         if !cipher.is_empty() {
@@ -624,7 +700,17 @@ impl VaultStorage {
             notes: record.metadata.notes.clone(),
         };
         let encrypted_meta = encrypt_metadata_fields(master_key, &meta_fields)?;
+        let encrypted_title = encrypt_title(master_key, &record.metadata.title)?;
+        let blind_key = master_key.derive_blind_index_key();
+        let blind_index_title = compute_blind_index(&blind_key, &record.metadata.title);
         let secret_type_str = record.metadata.secret_type.as_str();
+
+        let tag_blind_hashes: Vec<String> = record
+            .metadata
+            .tags
+            .iter()
+            .map(|t| compute_blind_index(&blind_key, t))
+            .collect();
 
         self.db
             .with_connection(|conn| {
@@ -639,10 +725,12 @@ impl VaultStorage {
                     encrypted_payload = ?7,
                     version = ?8,
                     updated_at = ?9,
-                    encrypted_metadata = ?10
-                 WHERE id = ?11",
+                    encrypted_metadata = ?10,
+                    encrypted_title = ?11,
+                    blind_index_title = ?12
+                 WHERE id = ?13",
                     rusqlite::params![
-                        record.metadata.title,
+                        "[ENCRYPTED]",
                         secret_type_str,
                         "",
                         None::<String>,
@@ -652,6 +740,8 @@ impl VaultStorage {
                         record.metadata.version,
                         record.metadata.updated_at,
                         Some(encrypted_meta),
+                        Some(encrypted_title),
+                        Some(&blind_index_title),
                         record.metadata.id,
                     ],
                 )?;
@@ -659,6 +749,19 @@ impl VaultStorage {
                 if updated == 0 {
                     return Err(rusqlite::Error::QueryReturnedNoRows);
                 }
+
+                // Refresh tag blind indices
+                conn.execute(
+                    "DELETE FROM secret_blind_indices WHERE secret_id = ?1",
+                    rusqlite::params![record.metadata.id],
+                )?;
+                let mut blind_stmt = conn.prepare(
+                    "INSERT OR IGNORE INTO secret_blind_indices (secret_id, field_type, blind_hash) VALUES (?1, ?2, ?3)",
+                )?;
+                for hash in tag_blind_hashes {
+                    blind_stmt.execute(rusqlite::params![record.metadata.id, "tag", hash])?;
+                }
+
                 Ok(())
             })
             .map_err(|e| match e {
@@ -719,6 +822,10 @@ impl VaultStorage {
     pub fn delete_secret(&self, id: &str) -> Result<bool, VaultError> {
         self.db
             .with_connection(|conn| {
+                let _ = conn.execute(
+                    "DELETE FROM secret_blind_indices WHERE secret_id = ?1",
+                    [id],
+                );
                 let count = conn.execute("DELETE FROM secrets WHERE id = ?1", [id])?;
                 Ok(count > 0)
             })
@@ -860,6 +967,66 @@ impl VaultStorage {
                 Ok(true)
             })
             .map_err(VaultError::Storage)
+    }
+
+    /// Fast exact-match lookup of a secret by title using HMAC-SHA256 blind indexing in SQLite
+    pub fn find_by_blind_title(
+        &self,
+        title: &str,
+        master_key: &VaultMasterKey,
+    ) -> Result<Option<EncryptedSecretRecord>, VaultError> {
+        let blind_key = master_key.derive_blind_index_key();
+        let target_hash = compute_blind_index(&blind_key, title);
+
+        let matching_id: Option<String> = self
+            .db
+            .with_connection(|conn| {
+                let mut stmt =
+                    conn.prepare("SELECT id FROM secrets WHERE blind_index_title = ?1 LIMIT 1")?;
+                let mut rows = stmt.query([&target_hash])?;
+                if let Some(row) = rows.next()? {
+                    Ok(Some(row.get(0)?))
+                } else {
+                    Ok(None)
+                }
+            })
+            .map_err(VaultError::Storage)?;
+
+        if let Some(id) = matching_id {
+            self.get_secret_decrypted(&id, master_key)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Fast lookup of secrets by tag using HMAC-SHA256 blind indexing in SQLite
+    pub fn find_by_blind_tag(
+        &self,
+        tag: &str,
+        master_key: &VaultMasterKey,
+    ) -> Result<Vec<SecretMetadata>, VaultError> {
+        let blind_key = master_key.derive_blind_index_key();
+        let target_hash = compute_blind_index(&blind_key, tag);
+
+        let matching_ids: Vec<String> = self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT secret_id FROM secret_blind_indices WHERE field_type = 'tag' AND blind_hash = ?1",
+            )?;
+            let rows = stmt.query_map([&target_hash], |row| row.get(0))?;
+            let mut ids = Vec::new();
+            for r in rows {
+                ids.push(r?);
+            }
+            Ok(ids)
+        }).map_err(VaultError::Storage)?;
+
+        let mut results = Vec::new();
+        for id in matching_ids {
+            if let Some(secret) = self.get_secret_decrypted(&id, master_key)? {
+                results.push(secret.metadata);
+            }
+        }
+        Ok(results)
     }
 
     fn map_audit_row(row: &rusqlite::Row<'_>) -> Result<SecretAuditEntry, rusqlite::Error> {
@@ -1085,5 +1252,88 @@ mod tests {
             verify_result.is_err(),
             "Tampered audit log entry must fail verification"
         );
+    }
+    #[test]
+    fn test_blind_index_search_and_metadata_encryption() {
+        let storage = VaultStorage::open_in_memory().unwrap();
+        let master_key = VaultMasterKey([0x99u8; 32]);
+        let secret_id = generate_uuid();
+
+        let record = EncryptedSecretRecord {
+            metadata: SecretMetadata {
+                id: secret_id.clone(),
+                title: "AWS Root Production Credentials".to_string(),
+                secret_type: SecretType::ApiKey,
+                tags: vec![
+                    "cloud".to_string(),
+                    "prod".to_string(),
+                    "critical".to_string(),
+                ],
+                username: Some("root_admin".to_string()),
+                url: Some("https://aws.amazon.com".to_string()),
+                notes: Some("Break-glass root key".to_string()),
+                version: 1,
+                created_at: 1000,
+                updated_at: 1000,
+            },
+            encrypted_payload: vec![10, 20, 30],
+        };
+
+        storage
+            .insert_secret_encrypted(&record, &master_key)
+            .unwrap();
+
+        // 1. Direct database verification: raw table has masked title and zero cleartext tags
+        storage.db.with_connection(|conn| {
+            let mut stmt = conn.prepare("SELECT title, tags, encrypted_title, blind_index_title FROM secrets WHERE id = ?1").unwrap();
+            let mut rows = stmt.query([&secret_id]).unwrap();
+            let row = rows.next().unwrap().unwrap();
+
+            let raw_title: String = row.get(0).unwrap();
+            let raw_tags: String = row.get(1).unwrap();
+            let enc_title: Option<Vec<u8>> = row.get(2).unwrap();
+            let blind_title: Option<String> = row.get(3).unwrap();
+
+            assert_eq!(raw_title, "[ENCRYPTED]", "Raw title column must be masked in SQLite table");
+            assert!(raw_tags.is_empty(), "Raw tags must be empty in SQLite table");
+            assert!(enc_title.is_some(), "encrypted_title BLOB must be present");
+            assert!(blind_title.is_some(), "blind_index_title must be present");
+            Ok(())
+        }).unwrap();
+
+        // 2. Query by blind index title
+        let found_by_title = storage
+            .find_by_blind_title("AWS Root Production Credentials", &master_key)
+            .unwrap();
+        assert!(found_by_title.is_some());
+        assert_eq!(
+            found_by_title.unwrap().metadata.title,
+            "AWS Root Production Credentials"
+        );
+
+        // Case-insensitive query by blind index title
+        let found_case = storage
+            .find_by_blind_title("  aws root production credentials  ", &master_key)
+            .unwrap();
+        assert!(found_case.is_some());
+
+        // Negative search
+        let not_found = storage
+            .find_by_blind_title("Non Existent Secret", &master_key)
+            .unwrap();
+        assert!(not_found.is_none());
+
+        // 3. Query by blind index tag
+        let cloud_secrets = storage.find_by_blind_tag("cloud", &master_key).unwrap();
+        assert_eq!(cloud_secrets.len(), 1);
+        assert_eq!(cloud_secrets[0].id, secret_id);
+
+        let prod_secrets = storage.find_by_blind_tag("prod", &master_key).unwrap();
+        assert_eq!(prod_secrets.len(), 1);
+
+        let non_tag = storage
+            .find_by_blind_tag("non_existent_tag", &master_key)
+            .unwrap();
+        assert!(non_tag.is_empty());
     }
 }
