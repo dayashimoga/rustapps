@@ -1011,22 +1011,8 @@ fn handle_http_connection(
                 .and_then(|v| v.as_str())
                 .unwrap_or(if is_dir { "Select Folder" } else { "Open File" });
 
-            let selected = invoke_native_open_dialog(title, is_dir, multiple, &opts);
-            if let Some(p_str) = selected.as_str() {
-                let p = PathBuf::from(p_str);
-                if is_dir {
-                    scoped_registry.allow_root(&p);
-                } else {
-                    scoped_registry.allow_path(&p);
-                }
-            } else if let Some(arr) = selected.as_array() {
-                for item in arr {
-                    if let Some(p_str) = item.as_str() {
-                        let p = PathBuf::from(p_str);
-                        scoped_registry.allow_path(&p);
-                    }
-                }
-            }
+            let selected =
+                invoke_native_open_dialog(title, is_dir, multiple, &opts, scoped_registry);
             let payload = serde_json::json!({ "path": selected });
             let bytes = serde_json::to_vec(&payload).unwrap_or_default();
             let _ = write_http_response(
@@ -1061,10 +1047,7 @@ fn handle_http_connection(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            let selected = invoke_native_save_dialog(title, default_path, &opts);
-            if let Some(p_str) = selected.as_str() {
-                scoped_registry.allow_path(&PathBuf::from(p_str));
-            }
+            let selected = invoke_native_save_dialog(title, default_path, &opts, scoped_registry);
             let payload = serde_json::json!({ "path": selected });
             let bytes = serde_json::to_vec(&payload).unwrap_or_default();
             let _ = write_http_response(
@@ -1474,242 +1457,149 @@ fn parse_byte_range(range_header: &str, total_size: u64) -> Option<Result<(u64, 
     }
 }
 
-#[cfg(target_os = "windows")]
-fn build_windows_filter_string(opts: &Value) -> String {
-    let mut parts = Vec::new();
+fn apply_dialog_filters(mut dialog: rfd::FileDialog, opts: &Value) -> rfd::FileDialog {
+    // If starting directory or defaultPath is specified
+    if let Some(default_path) = opts
+        .get("defaultPath")
+        .or_else(|| opts.get("default_path"))
+        .and_then(|v| v.as_str())
+    {
+        let p = Path::new(default_path);
+        if p.is_dir() {
+            dialog = dialog.set_directory(p);
+        } else if let Some(parent) = p.parent() {
+            if !parent.as_os_str().is_empty() {
+                dialog = dialog.set_directory(parent);
+            }
+            if let Some(file_name) = p.file_name().and_then(|f| f.to_str()) {
+                dialog = dialog.set_file_name(file_name);
+            }
+        }
+    }
+
+    // Single filter string: e.g. "png,jpg,webp" or "*.log;*.txt"
     if let Some(f_str) = opts.get("filter").and_then(|v| v.as_str()) {
         let clean = f_str.trim();
-        if !clean.is_empty() {
-            parts.push(format!("Supported Files ({})|{}", clean, clean));
+        if !clean.is_empty() && clean != "*.*" && clean != "*" {
+            let exts: Vec<&str> = clean
+                .split([';', ',', '|'])
+                .map(|s| s.trim().trim_start_matches('*').trim_start_matches('.'))
+                .filter(|s| !s.is_empty() && *s != "*")
+                .collect();
+            if !exts.is_empty() {
+                dialog = dialog.add_filter("Supported Files", &exts);
+            }
         }
     }
+
+    // Structured filters array: e.g. [{ name: "Images", extensions: ["png", "jpg"] }]
     if let Some(filters) = opts.get("filters").and_then(|v| v.as_array()) {
         for f in filters {
-            let name = f
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Files")
-                .replace('|', " ");
-            if let Some(exts) = f.get("extensions").and_then(|v| v.as_array()) {
-                let patterns: Vec<String> = exts
+            let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("Files");
+            if let Some(exts_arr) = f.get("extensions").and_then(|v| v.as_array()) {
+                let exts: Vec<&str> = exts_arr
                     .iter()
                     .filter_map(|e| e.as_str())
-                    .map(|e| {
-                        let clean = e.trim_start_matches('.');
-                        if clean == "*" {
-                            "*.*".to_string()
-                        } else {
-                            format!("*.{}", clean)
-                        }
-                    })
+                    .map(|e| e.trim().trim_start_matches('*').trim_start_matches('.'))
+                    .filter(|e| !e.is_empty() && *e != "*")
                     .collect();
-                if !patterns.is_empty() {
-                    let joined = patterns.join(";");
-                    parts.push(format!("{} ({})|{}", name, joined, joined));
+                if !exts.is_empty() {
+                    dialog = dialog.add_filter(name, &exts);
                 }
             }
         }
     }
-    parts.push("All Files (*.*)|*.*".to_string());
-    parts.join("|")
+
+    dialog
 }
 
-fn invoke_native_open_dialog(title: &str, is_dir: bool, multiple: bool, opts: &Value) -> Value {
-    let safe_title = title.replace('\'', "''").replace('"', "");
-    let _ = &safe_title;
+fn invoke_native_open_dialog(
+    title: &str,
+    is_dir: bool,
+    multiple: bool,
+    opts: &Value,
+    scoped_registry: &ScopedFileRegistry,
+) -> Value {
+    let mut dialog = rfd::FileDialog::new().set_title(title);
+    dialog = apply_dialog_filters(dialog, opts);
 
-    #[cfg(target_os = "windows")]
-    {
-        let script = if is_dir {
-            format!(
-                "Add-Type -AssemblyName System.Windows.Forms; \
-                 $f = New-Object System.Windows.Forms.FolderBrowserDialog; \
-                 $f.Description = '{}'; \
-                 $f.ShowNewFolderButton = $true; \
-                 if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ [Console]::Out.Write($f.SelectedPath) }}",
-                safe_title
-            )
-        } else {
-            let filter = build_windows_filter_string(opts).replace('\'', "''");
-            let multi_flag = if multiple { "$true" } else { "$false" };
-            format!(
-                "Add-Type -AssemblyName System.Windows.Forms; \
-                 $f = New-Object System.Windows.Forms.OpenFileDialog; \
-                 $f.Title = '{}'; \
-                 $f.Filter = '{}'; \
-                 $f.Multiselect = {}; \
-                 if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ \
-                   if ($f.Multiselect) {{ [Console]::Out.Write(($f.FileNames -join \"`n\")) }} \
-                   else {{ [Console]::Out.Write($f.FileName) }} \
-                 }}",
-                safe_title, filter, multi_flag
-            )
-        };
-
-        if let Ok(output) = Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-STA",
-                "-WindowStyle",
-                "Hidden",
-                "-Command",
-                &script,
-            ])
-            .stdin(Stdio::null())
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !stdout.is_empty() {
-                if multiple && !is_dir {
-                    let list: Vec<Value> = stdout
-                        .lines()
-                        .map(|l| Value::String(normalize_display_path(l.trim())))
-                        .filter(|v| v.as_str().map(|s| !s.is_empty()).unwrap_or(false))
-                        .collect();
-                    return Value::Array(list);
+    if is_dir {
+        if multiple {
+            match dialog.pick_folders() {
+                Some(paths) => {
+                    let mut arr = Vec::with_capacity(paths.len());
+                    for p in paths {
+                        scoped_registry.allow_root(&p);
+                        let clean = normalize_display_path(&p.to_string_lossy());
+                        arr.push(Value::String(clean));
+                    }
+                    Value::Array(arr)
                 }
-                return Value::String(normalize_display_path(&stdout));
+                None => Value::Null,
             }
-        }
-        Value::Null
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let _ = (multiple, opts);
-        let script = if is_dir {
-            format!(
-                "POSIX path of (choose folder with prompt \"{}\")",
-                safe_title
-            )
         } else {
-            format!("POSIX path of (choose file with prompt \"{}\")", safe_title)
-        };
-        if let Ok(output) = Command::new("osascript")
-            .args(["-e", &script])
-            .stdin(Stdio::null())
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if output.status.success() && !stdout.is_empty() {
-                return Value::String(stdout);
+            match dialog.pick_folder() {
+                Some(p) => {
+                    scoped_registry.allow_root(&p);
+                    let clean = normalize_display_path(&p.to_string_lossy());
+                    Value::String(clean)
+                }
+                None => Value::Null,
             }
         }
-        Value::Null
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let _ = (multiple, opts);
-        let mut args = vec!["--file-selection", "--title", title];
-        if is_dir {
-            args.push("--directory");
-        }
-        if let Ok(output) = Command::new("zenity")
-            .args(&args)
-            .stdin(Stdio::null())
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if output.status.success() && !stdout.is_empty() {
-                return Value::String(stdout);
+    } else if multiple {
+        match dialog.pick_files() {
+            Some(paths) => {
+                let mut arr = Vec::with_capacity(paths.len());
+                for p in paths {
+                    scoped_registry.allow_path(&p);
+                    let clean = normalize_display_path(&p.to_string_lossy());
+                    arr.push(Value::String(clean));
+                }
+                Value::Array(arr)
             }
+            None => Value::Null,
         }
-        Value::Null
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        let _ = (safe_title, is_dir, multiple, opts);
-        Value::Null
+    } else {
+        match dialog.pick_file() {
+            Some(p) => {
+                scoped_registry.allow_path(&p);
+                let clean = normalize_display_path(&p.to_string_lossy());
+                Value::String(clean)
+            }
+            None => Value::Null,
+        }
     }
 }
 
-fn invoke_native_save_dialog(title: &str, default_path: &str, opts: &Value) -> Value {
-    let safe_title = title.replace('\'', "''").replace('"', "");
-    let safe_default = default_path.replace('\'', "''").replace('"', "");
-    let _ = (&safe_title, &safe_default);
+fn invoke_native_save_dialog(
+    title: &str,
+    default_path: &str,
+    opts: &Value,
+    scoped_registry: &ScopedFileRegistry,
+) -> Value {
+    let mut dialog = rfd::FileDialog::new().set_title(title);
+    dialog = apply_dialog_filters(dialog, opts);
 
-    #[cfg(target_os = "windows")]
-    {
-        let filter = build_windows_filter_string(opts).replace('\'', "''");
-        let script = format!(
-            "Add-Type -AssemblyName System.Windows.Forms; \
-             $f = New-Object System.Windows.Forms.SaveFileDialog; \
-             $f.Title = '{}'; \
-             $f.Filter = '{}'; \
-             $f.FileName = '{}'; \
-             if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ [Console]::Out.Write($f.FileName) }}",
-            safe_title, filter, safe_default
-        );
-        if let Ok(output) = Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-STA",
-                "-WindowStyle",
-                "Hidden",
-                "-Command",
-                &script,
-            ])
-            .stdin(Stdio::null())
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !stdout.is_empty() {
-                return Value::String(normalize_display_path(&stdout));
+    if !default_path.is_empty() {
+        let p = Path::new(default_path);
+        if let Some(parent) = p.parent() {
+            if !parent.as_os_str().is_empty() {
+                dialog = dialog.set_directory(parent);
             }
         }
-        Value::Null
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let _ = opts;
-        let script = format!(
-            "POSIX path of (choose file name with prompt \"{}\" default name \"{}\")",
-            safe_title, safe_default
-        );
-        if let Ok(output) = Command::new("osascript")
-            .args(["-e", &script])
-            .stdin(Stdio::null())
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if output.status.success() && !stdout.is_empty() {
-                return Value::String(stdout);
-            }
+        if let Some(file_name) = p.file_name().and_then(|f| f.to_str()) {
+            dialog = dialog.set_file_name(file_name);
         }
-        Value::Null
     }
 
-    #[cfg(target_os = "linux")]
-    {
-        let _ = opts;
-        if let Ok(output) = Command::new("zenity")
-            .args([
-                "--file-selection",
-                "--save",
-                "--confirm-overwrite",
-                "--title",
-                title,
-                "--filename",
-                default_path,
-            ])
-            .stdin(Stdio::null())
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if output.status.success() && !stdout.is_empty() {
-                return Value::String(stdout);
-            }
+    match dialog.save_file() {
+        Some(p) => {
+            scoped_registry.allow_path(&p);
+            let clean = normalize_display_path(&p.to_string_lossy());
+            Value::String(clean)
         }
-        Value::Null
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        let _ = (safe_title, safe_default, opts);
-        Value::Null
+        None => Value::Null,
     }
 }
 
@@ -1717,28 +1607,27 @@ fn mime_type_for_path(path: &Path) -> &'static str {
     match path
         .extension()
         .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase()
-        .as_str()
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
     {
-        "mp4" | "m4v" => "video/mp4",
-        "webm" => "video/webm",
-        "mov" => "video/quicktime",
-        "mkv" => "video/x-matroska",
-        "avi" => "video/x-msvideo",
-        "wav" => "audio/wav",
-        "mp3" => "audio/mpeg",
-        "ogg" => "audio/ogg",
-        "flac" => "audio/flac",
-        "aac" | "m4a" => "audio/mp4",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "bmp" => "image/bmp",
-        "svg" => "image/svg+xml",
-        "json" => "application/json",
-        "txt" | "log" | "md" | "csv" | "edl" | "cube" => "text/plain; charset=utf-8",
+        Some("html") | Some("htm") => "text/html; charset=utf-8",
+        Some("js") | Some("mjs") => "application/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        Some("ico") => "image/x-icon",
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("ogg") => "audio/ogg",
+        Some("mp4") => "video/mp4",
+        Some("webm") => "video/webm",
+        Some("wasm") => "application/wasm",
+        Some("pdf") => "application/pdf",
+        Some("txt") | Some("log") => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
 }
@@ -3038,5 +2927,44 @@ mod tests {
 
         shutdown.store(true, Ordering::SeqCst);
         let _ = server_handle.join();
+    }
+    #[test]
+    fn test_apply_dialog_filters_configures_extensions_and_directory() {
+        let opts = serde_json::json!({
+            "defaultPath": "C:\\temp\\subfolder\\sample.txt",
+            "filters": [
+                { "name": "Text Documents", "extensions": ["txt", ".md"] },
+                { "name": "All Media", "extensions": ["mp4", "png", "*"] }
+            ]
+        });
+        let dialog = rfd::FileDialog::new();
+        let _configured = apply_dialog_filters(dialog, &opts);
+    }
+
+    #[test]
+    fn test_scoped_file_registry_allow_and_isolation() {
+        let registry = ScopedFileRegistry::new();
+        let temp_dir = std::env::temp_dir();
+        let allowed_folder = temp_dir.join("ag_scoped_test_folder");
+        let allowed_file = allowed_folder.join("allowed.txt");
+        let foreign_folder = temp_dir.join("ag_foreign_folder");
+        let foreign_file = foreign_folder.join("forbidden.txt");
+
+        let _ = std::fs::create_dir_all(&allowed_folder);
+        let _ = std::fs::create_dir_all(&foreign_folder);
+        let _ = std::fs::write(&allowed_file, b"ok");
+        let _ = std::fs::write(&foreign_file, b"forbidden");
+
+        registry.allow_root(&allowed_folder);
+
+        assert!(registry.is_allowed(&allowed_folder));
+        assert!(registry.is_allowed(&allowed_file));
+        assert!(!registry.is_allowed(&foreign_file));
+
+        registry.allow_path(&foreign_file);
+        assert!(registry.is_allowed(&foreign_file));
+
+        let _ = std::fs::remove_dir_all(&allowed_folder);
+        let _ = std::fs::remove_dir_all(&foreign_folder);
     }
 }
