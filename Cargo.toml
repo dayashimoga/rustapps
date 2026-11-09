@@ -31,6 +31,7 @@ members = [
     "apps/clean-room-redactor",
     "apps/local-data-synthesizer",
     "apps/sbom-supply-chain-auditor",
+    "apps/offline-pcap-workbench",
     "tools/license-signer",
     "tests",
     "benchmarks",

@@ -1,0 +1,22 @@
+name: offline_pcap_workbench_mobile
+description: "High-Performance Air-Gapped Network Packet Analyzer Mobile - Zero-Copy Decoding, Stream Reassembly & JA3/JA4 TLS Fingerprinting via Flutter C-ABI FFI."
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.0
+  cupertino_icons: ^1.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

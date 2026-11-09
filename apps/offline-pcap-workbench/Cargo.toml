@@ -1,0 +1,29 @@
+[package]
+name = "offline-pcap-workbench"
+version = "0.1.0"
+edition = "2021"
+authors = ["Offline Apps Team"]
+description = "High-Performance Air-Gapped Network Packet Analyzer with Zero-Copy Decoding, Stream Reassembly & JA3/JA4 TLS Fingerprinting"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+blake3 = "1.5"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
+hex = "0.4"
+memmap2 = "0.9"
+
+shared-licensing = { path = "../../shared/licensing" }
+platform-common = { path = "../../platform" }
+
+[lib]
+name = "offline_pcap_workbench"
+path = "src/lib.rs"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "offline-pcap-workbench"
+path = "src/main.rs"

@@ -50,6 +50,7 @@ pub enum AppId {
     CleanRoomRedactor,
     LocalDataSynthesizer,
     SbomSupplyChainAuditor,
+    OfflinePcapWorkbench,
     AllAppsSuite,
 }
 
@@ -78,6 +79,7 @@ impl AppId {
             AppId::CleanRoomRedactor => "clean-room-redactor",
             AppId::LocalDataSynthesizer => "local-data-synthesizer",
             AppId::SbomSupplyChainAuditor => "sbom-supply-chain-auditor",
+            AppId::OfflinePcapWorkbench => "offline-pcap-workbench",
             AppId::AllAppsSuite => "all-apps-suite",
         }
     }
@@ -125,6 +127,9 @@ impl AppId {
             }
             "sbom-supply-chain-auditor" | "sbomauditor" | "sbom" => {
                 Some(AppId::SbomSupplyChainAuditor)
+            }
+            "offline-pcap-workbench" | "pcapworkbench" | "pcap" | "wireshark-lite" => {
+                Some(AppId::OfflinePcapWorkbench)
             }
             "all" | "all-apps" | "suite" | "all-apps-suite" | "allappssuite" => {
                 Some(AppId::AllAppsSuite)
