@@ -14,6 +14,18 @@ echo "=========================================================="
 mkdir -p "${RAW_OUTPUT_DIR}"
 OUTPUT_DIR="$(cd "${RAW_OUTPUT_DIR}" && pwd)"
 
+# Auto-detect ANDROID_HOME if not explicitly set
+if [ -z "${ANDROID_HOME:-}" ] && [ -d "/usr/local/lib/android/sdk" ]; then
+    export ANDROID_HOME="/usr/local/lib/android/sdk"
+fi
+
+# Auto-detect FLUTTER_ROOT if not set
+if [ -z "${FLUTTER_ROOT:-}" ] && command -v flutter &>/dev/null; then
+    FLUTTER_ROOT="$(dirname "$(dirname "$(command -v flutter)")")"
+    export FLUTTER_ROOT
+    echo "Auto-detected FLUTTER_ROOT: ${FLUTTER_ROOT}"
+fi
+
 # Auto-detect ANDROID_NDK_HOME in CI environments if not explicitly set
 if [ -z "${ANDROID_NDK_HOME:-}" ] && [ -n "${ANDROID_HOME:-}" ] && [ -d "${ANDROID_HOME}/ndk" ]; then
     latest_ndk=$(ls -1d "${ANDROID_HOME}/ndk/"* 2>/dev/null | sort -V | tail -n1 || true)
@@ -22,6 +34,16 @@ if [ -z "${ANDROID_NDK_HOME:-}" ] && [ -n "${ANDROID_HOME:-}" ] && [ -d "${ANDRO
         export ANDROID_NDK_ROOT="${latest_ndk}"
         echo "Auto-detected ANDROID_NDK_HOME: ${ANDROID_NDK_HOME}"
     fi
+fi
+
+# Pre-generate standard debug.keystore if missing to ensure all APK release builds are properly signed
+if [ ! -f "${HOME}/.android/debug.keystore" ] && command -v keytool &>/dev/null; then
+    echo "Pre-generating standard debug.keystore for offline standalone APK signing..."
+    mkdir -p "${HOME}/.android"
+    keytool -genkey -v -keystore "${HOME}/.android/debug.keystore" \
+        -storepass android -alias androiddebugkey -keypass android \
+        -keyalg RSA -keysize 2048 -validity 10000 \
+        -dname "CN=Android Debug,O=Android,C=US" || true
 fi
 
 if [ -n "${FILTER_APP}" ]; then
@@ -164,6 +186,12 @@ EOF
                     fi
                     cp /tmp/flutter_tmpl_wrapper/android/gradlew "${mobile_dir}/android/"
                     cp /tmp/flutter_tmpl_wrapper/android/gradlew.bat "${mobile_dir}/android/"
+                elif [ -n "${FLUTTER_ROOT:-}" ] && [ -d "${FLUTTER_ROOT}/bin/cache/artifacts/gradle_wrapper" ]; then
+                    echo "  -> Copying Gradle wrapper from Flutter SDK cache..."
+                    mkdir -p "${mobile_dir}/android/gradle/wrapper"
+                    cp -f "${FLUTTER_ROOT}/bin/cache/artifacts/gradle_wrapper/gradle/wrapper/gradle-wrapper.jar" "${mobile_dir}/android/gradle/wrapper/" 2>/dev/null || true
+                    cp "${FLUTTER_ROOT}/bin/cache/artifacts/gradle_wrapper/gradlew" "${mobile_dir}/android/" 2>/dev/null || true
+                    cp "${FLUTTER_ROOT}/bin/cache/artifacts/gradle_wrapper/gradlew.bat" "${mobile_dir}/android/" 2>/dev/null || true
                 elif command -v flutter &>/dev/null; then
                     echo "  -> Unpacking Flutter Gradle wrapper template..."
                     flutter create --platforms=android --org com.offlineapps --project-name tmpl_wrapper /tmp/flutter_tmpl_wrapper >/dev/null 2>&1 || true
@@ -199,6 +227,7 @@ WRAPPER_EOF
 
         # D. Flutter Compilation & Standalone APK Assembly
         apk_target="${OUTPUT_DIR}/${app}-${VERSION}.apk"
+        apk_target_simple="${OUTPUT_DIR}/${app}.apk"
         apk_found=""
 
         if command -v flutter &>/dev/null; then
@@ -206,6 +235,9 @@ WRAPPER_EOF
             (
                 cd "${mobile_dir}"
                 flutter config --no-analytics || true
+                if [ -n "${JAVA_HOME:-}" ]; then
+                    flutter config --jdk-dir="${JAVA_HOME}" 2>/dev/null || true
+                fi
                 flutter pub get
                 if ! ${is_ios}; then
                     echo "  [Flutter] Building Standalone Android Release APK..."
@@ -222,7 +254,7 @@ WRAPPER_EOF
                 "${mobile_dir}/build/app/outputs/apk/debug/app-debug.apk"; do
                 if [ -f "${candidate}" ]; then
                     cand_size=$(stat -c%s "${candidate}" 2>/dev/null || stat -f%z "${candidate}" 2>/dev/null || echo 0)
-                    if [ "${cand_size}" -gt 100000 ]; then
+                    if [ "${cand_size}" -gt 500000 ]; then
                         apk_found="${candidate}"
                         break
                     fi
@@ -244,7 +276,7 @@ WRAPPER_EOF
                 "${mobile_dir}/build/app/outputs/flutter-apk/app-release.apk"; do
                 if [ -f "${candidate}" ]; then
                     cand_size=$(stat -c%s "${candidate}" 2>/dev/null || stat -f%z "${candidate}" 2>/dev/null || echo 0)
-                    if [ "${cand_size}" -gt 100000 ]; then
+                    if [ "${cand_size}" -gt 500000 ]; then
                         apk_found="${candidate}"
                         break
                     fi
@@ -254,35 +286,60 @@ WRAPPER_EOF
 
         # Copy verified APK to target output directory
         if [ -n "${apk_found}" ]; then
-            cp "${apk_found}" "${apk_target}"
+            cp -f "${apk_found}" "${apk_target}"
+            cp -f "${apk_found}" "${apk_target_simple}"
             echo "  -> Verified and staged standalone APK: ${apk_target} ($(ls -lh "${apk_target}" | awk '{print $5}'))"
+
+            # Auto-detect apksigner to verify and sign APK if unsigned (prevents package parse errors on Android)
+            apksigner_bin=""
+            if [ -n "${ANDROID_HOME:-}" ] && [ -d "${ANDROID_HOME}/build-tools" ]; then
+                latest_bt=$(ls -1d "${ANDROID_HOME}/build-tools/"* 2>/dev/null | sort -V | tail -n1 || true)
+                [ -n "${latest_bt}" ] && [ -x "${latest_bt}/apksigner" ] && apksigner_bin="${latest_bt}/apksigner"
+            fi
+            if [ -n "${apksigner_bin}" ] && [ -f "${HOME}/.android/debug.keystore" ]; then
+                if ! "${apksigner_bin}" verify "${apk_target}" &>/dev/null; then
+                    echo "  [apksigner] Signing APK with standard debug keystore..."
+                    "${apksigner_bin}" sign --ks "${HOME}/.android/debug.keystore" --ks-pass pass:android --key-pass pass:android "${apk_target}" || true
+                    "${apksigner_bin}" sign --ks "${HOME}/.android/debug.keystore" --ks-pass pass:android --key-pass pass:android "${apk_target_simple}" || true
+                fi
+                echo "  [apksigner] Verifying APK signature..."
+                "${apksigner_bin}" verify --verbose "${apk_target}" || true
+            fi
         elif ! ${is_ios}; then
             echo "ERROR: Standalone Android APK could not be produced for ${app}!" >&2
             exit 1
         fi
 
-        # F. Create Standalone Flutter Platform Bundle ZIP
-        echo "  Creating standalone ${platform_tag} bundle: ${OUTPUT_DIR}/${bundle_name}..."
-        create_bundle_zip "${mobile_dir}" "${OUTPUT_DIR}/${bundle_name}"
+        # F. Create Standalone Release Distribution Package (NO source code!)
+        echo "  Creating standalone ${platform_tag} release bundle: ${OUTPUT_DIR}/${bundle_name}..."
+        stage_dist="${OUTPUT_DIR}/stage_${app}_${platform_tag}"
+        rm -rf "${stage_dist}"
+        mkdir -p "${stage_dist}"
 
-        # Ensure the verified .apk is also included inside the bundle zip archive
         if [ -f "${apk_target}" ]; then
-            if command -v zip >/dev/null 2>&1; then
-                (
-                    cd "${OUTPUT_DIR}"
-                    zip -u "${bundle_name}" "${app}-${VERSION}.apk" || true
-                )
-            elif command -v python3 >/dev/null 2>&1; then
-                python3 -c "
-import os, zipfile
-bundle = '${OUTPUT_DIR}/${bundle_name}'
-apk = '${apk_target}'
-if os.path.exists(bundle) and os.path.exists(apk):
-    with zipfile.ZipFile(bundle, 'a', zipfile.ZIP_DEFLATED) as z:
-        z.write(apk, '${app}-${VERSION}.apk')
-"
-            fi
+            cp -f "${apk_target}" "${stage_dist}/${app}-${VERSION}.apk"
+            cp -f "${apk_target_simple}" "${stage_dist}/${app}.apk" 2>/dev/null || true
         fi
+        [ -f "${OUTPUT_DIR}/metadata.json" ] && cp -f "${OUTPUT_DIR}/metadata.json" "${stage_dist}/"
+        [ -f "${OUTPUT_DIR}/${app}-sbom.json" ] && cp -f "${OUTPUT_DIR}/${app}-sbom.json" "${stage_dist}/"
+
+        cat <<EOF > "${stage_dist}/README.md"
+# ${app} Mobile (${platform_tag})
+Version: ${VERSION}
+Platform: ${platform_tag}
+Offline Autonomous: true
+Zero Telemetry / Air-Gapped: true
+
+## Quick Sideload & Installation Guide
+1. Copy \`${app}-${VERSION}.apk\` (or \`${app}.apk\`) to your Android device via USB, ADB, or file transfer.
+2. In your device Settings -> Apps & Notifications / Security, enable "Install unknown apps" for your file manager or browser.
+3. Tap the .apk file on your phone to install.
+4. Launch the application. The entire app runs 100% locally with zero internet access required.
+EOF
+
+        rm -f "${OUTPUT_DIR}/${bundle_name}"
+        create_bundle_zip "${stage_dist}" "${OUTPUT_DIR}/${bundle_name}"
+        rm -rf "${stage_dist}"
 
     else
         echo "  [C-ABI SDK] No Flutter directory found for ${app}; packaging Standalone Mobile C-ABI SDK..."
