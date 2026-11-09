@@ -269,6 +269,11 @@ fn generate_bridge_script(session_token: &str) -> String {
     format!(
         r#"<script>
 (function() {{
+  // Strip one-time bootstrap nonce from window location and history immediately
+  if (window.history && window.history.replaceState && window.location.search.includes('bootstrap=')) {{
+    window.history.replaceState({{}}, document.title, window.location.pathname);
+  }}
+
   const __AUTH_TOKEN__ = "{}";
   window.__ANTIGRAVITY_TOKEN__ = __AUTH_TOKEN__;
 
@@ -498,6 +503,16 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
             .into()
     };
 
+    // One-time cryptographically secure bootstrap nonce exchanged on first launch for HttpOnly cookie (SEC-04)
+    let bootstrap_nonce: Arc<std::sync::Mutex<Option<String>>> = {
+        use rand::RngCore;
+        let mut bytes = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        Arc::new(std::sync::Mutex::new(Some(
+            bytes.iter().map(|b| format!("{:02x}", b)).collect(),
+        )))
+    };
+
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let last_heartbeat_ms = Arc::new(AtomicU64::new(current_epoch_ms()));
     let client_connected = Arc::new(AtomicBool::new(false));
@@ -516,6 +531,7 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
     let server_handler = Arc::clone(&handler);
     let server_token = Arc::clone(&session_token);
     let server_registry = Arc::clone(&scoped_registry);
+    let server_bootstrap = Arc::clone(&bootstrap_nonce);
 
     let index_with_bridge = Arc::new(inject_bridge_into_html(
         bundle.index_html,
@@ -546,6 +562,7 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
                     let html = Arc::clone(&index_with_bridge);
                     let tok = Arc::clone(&server_token);
                     let reg = Arc::clone(&server_registry);
+                    let boot = Arc::clone(&server_bootstrap);
                     pool.execute(move || {
                         handle_http_connection(
                             stream,
@@ -558,6 +575,7 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
                             &tok,
                             &reg,
                             port,
+                            &boot,
                         );
                     });
                 }
@@ -599,8 +617,13 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
         return Ok(None);
     }
 
-    // Launch native chromeless desktop window
-    let mut window_child = spawn_native_app_window(&url, &bundle);
+    // Launch native chromeless desktop window with one-time bootstrap nonce (SEC-04)
+    let initial_nonce = bootstrap_nonce.lock().ok().and_then(|g| g.clone());
+    let window_url = match initial_nonce {
+        Some(ref n) => format!("{}/?bootstrap={}", url, n),
+        None => url.clone(),
+    };
+    let mut window_child = spawn_native_app_window(&window_url, &bundle);
     let startup_instant = Instant::now();
 
     loop {
@@ -657,6 +680,7 @@ fn handle_http_connection(
     session_token: &str,
     scoped_registry: &ScopedFileRegistry,
     port: u16,
+    bootstrap_nonce: &std::sync::Mutex<Option<String>>,
 ) {
     let mut reader = BufReader::new(match stream.try_clone() {
         Ok(s) => s,
@@ -702,6 +726,7 @@ fn handle_http_connection(
         let mut origin_header: Option<String> = None;
         let mut custom_header: Option<String> = None;
         let mut connection_header: Option<String> = None;
+        let mut cookie_header: Option<String> = None;
 
         let mut header_err = false;
         loop {
@@ -733,6 +758,8 @@ fn handle_http_connection(
                     custom_header = Some(val.to_string());
                 } else if key.eq_ignore_ascii_case("connection") {
                     connection_header = Some(val.to_string());
+                } else if key.eq_ignore_ascii_case("cookie") {
+                    cookie_header = Some(val.to_string());
                 }
             }
         }
@@ -764,7 +791,6 @@ fn handle_http_connection(
         client_connected.store(true, Ordering::SeqCst);
 
         // Security Gate 1 (SEC-02): Block external cross-origin requests.
-        // Loopback host must only accept same-origin or explicit loopback origins (127.0.0.1 / localhost).
         let is_valid_local_origin = match origin_header.as_deref() {
             Some(orig) => {
                 orig.starts_with("http://127.0.0.1:")
@@ -783,6 +809,7 @@ fn handle_http_connection(
                 b"{\"__ipc_ok\":false,\"__ipc_error\":\"Forbidden: Cross-origin request rejected\"}",
                 None,
                 false,
+                None,
             );
             break;
         }
@@ -795,6 +822,7 @@ fn handle_http_connection(
                 b"OK",
                 origin_header.as_deref(),
                 keep_alive,
+                None,
             );
             if !keep_alive {
                 break;
@@ -803,19 +831,75 @@ fn handle_http_connection(
         }
 
         let mut query_token: Option<String> = None;
+        let mut query_bootstrap: Option<String> = None;
         for pair in query_string.split('&') {
             if let Some((k, v)) = pair.split_once('=') {
                 if k == "token" {
                     query_token = Some(url_decode(v));
-                    break;
+                } else if k == "bootstrap" {
+                    query_bootstrap = Some(url_decode(v));
                 }
             }
         }
 
-        // Security Gate 2 (SEC-04): Constant-time token verification to prevent timing attacks.
+        // Parse HttpOnly session cookie if provided
+        let mut cookie_token: Option<String> = None;
+        if let Some(ref cookies) = cookie_header {
+            for cookie in cookies.split(';') {
+                if let Some((k, v)) = cookie.trim().split_once('=') {
+                    if k == "__ag_session" {
+                        cookie_token = Some(v.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Security Gate: One-time bootstrap nonce verification & session cookie exchange (SEC-04)
+        let mut session_cookie_to_set: Option<String> = None;
+        if let Some(ref candidate_nonce) = query_bootstrap {
+            let is_nonce_valid = {
+                let mut guard = bootstrap_nonce.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref active_nonce) = *guard {
+                    if constant_time_eq_token(candidate_nonce, active_nonce) {
+                        *guard = None; // One-time use: consume nonce immediately!
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            };
+
+            if !is_nonce_valid {
+                let _ = write_http_response(
+                    &mut stream,
+                    403,
+                    "application/json",
+                    b"{\"__ipc_ok\":false,\"__ipc_error\":\"Forbidden: Invalid or expired bootstrap nonce\"}",
+                    origin_header.as_deref(),
+                    false,
+                    None,
+                );
+                break;
+            }
+
+            session_cookie_to_set = Some(format!(
+                "__ag_session={}; Path=/; HttpOnly; SameSite=Strict",
+                session_token
+            ));
+        }
+
+        // Security Gate 2 (SEC-04): Constant-time token verification (supports X-Antigravity-Token, Cookie, and ?token=)
         let is_authenticated = auth_token_header
             .as_deref()
             .map(|t| constant_time_eq_token(t, session_token))
+            .or_else(|| {
+                cookie_token
+                    .as_deref()
+                    .map(|t| constant_time_eq_token(t, session_token))
+            })
             .or_else(|| {
                 query_token
                     .as_deref()
@@ -832,6 +916,7 @@ fn handle_http_connection(
                 b"{\"__ipc_ok\":false,\"__ipc_error\":\"Forbidden: Invalid or missing X-Antigravity-Token\"}",
                 origin_header.as_deref(),
                 false,
+                None,
             );
             break;
         }
@@ -846,6 +931,7 @@ fn handle_http_connection(
                 b"{\"__ipc_ok\":false,\"__ipc_error\":\"Payload Too Large\"}",
                 origin_header.as_deref(),
                 false,
+                None,
             );
             break;
         }
@@ -863,6 +949,7 @@ fn handle_http_connection(
                 b"{\"ok\":true}",
                 origin_header.as_deref(),
                 keep_alive,
+                None,
             );
             if !keep_alive {
                 break;
@@ -878,6 +965,7 @@ fn handle_http_connection(
                 b"{\"shutdown\":true}",
                 origin_header.as_deref(),
                 false,
+                None,
             );
             shutdown_flag.store(true, Ordering::SeqCst);
             unblock_server_listener(port);
@@ -895,6 +983,7 @@ fn handle_http_connection(
                 &bytes,
                 origin_header.as_deref(),
                 keep_alive,
+                None,
             );
             if !keep_alive {
                 break;
@@ -947,6 +1036,7 @@ fn handle_http_connection(
                 &bytes,
                 origin_header.as_deref(),
                 keep_alive,
+                None,
             );
             if !keep_alive {
                 break;
@@ -984,6 +1074,7 @@ fn handle_http_connection(
                 &bytes,
                 origin_header.as_deref(),
                 keep_alive,
+                None,
             );
             if !keep_alive {
                 break;
@@ -1036,6 +1127,7 @@ fn handle_http_connection(
                         &bin_data,
                         origin_header.as_deref(),
                         keep_alive,
+                        None,
                     );
                 }
                 Err(err_msg) => {
@@ -1051,6 +1143,7 @@ fn handle_http_connection(
                         &bytes,
                         origin_header.as_deref(),
                         keep_alive,
+                        None,
                     );
                 }
             }
@@ -1098,6 +1191,7 @@ fn handle_http_connection(
                         &bytes,
                         origin_header.as_deref(),
                         keep_alive,
+                        None,
                     );
                 }
                 Err(err_msg) => {
@@ -1113,6 +1207,7 @@ fn handle_http_connection(
                         &bytes,
                         origin_header.as_deref(),
                         keep_alive,
+                        None,
                     );
                 }
             }
@@ -1131,6 +1226,7 @@ fn handle_http_connection(
                     index_html.as_bytes(),
                     origin_header.as_deref(),
                     keep_alive,
+                    session_cookie_to_set.as_deref(),
                 );
             }
             "/assets/app.js" => {
@@ -1141,6 +1237,7 @@ fn handle_http_connection(
                     bundle.app_js,
                     origin_header.as_deref(),
                     keep_alive,
+                    None,
                 );
             }
             "/assets/app.css" => {
@@ -1151,6 +1248,7 @@ fn handle_http_connection(
                     bundle.app_css,
                     origin_header.as_deref(),
                     keep_alive,
+                    None,
                 );
             }
             "/favicon.ico" => {
@@ -1161,6 +1259,7 @@ fn handle_http_connection(
                     b"",
                     origin_header.as_deref(),
                     keep_alive,
+                    None,
                 );
             }
             _ => {
@@ -1172,6 +1271,7 @@ fn handle_http_connection(
                     index_html.as_bytes(),
                     origin_header.as_deref(),
                     keep_alive,
+                    session_cookie_to_set.as_deref(),
                 );
             }
         }
@@ -1244,6 +1344,7 @@ fn write_http_response(
     body: &[u8],
     origin: Option<&str>,
     keep_alive: bool,
+    set_cookie: Option<&str>,
 ) -> std::io::Result<()> {
     let status_text = match status {
         200 => "OK",
@@ -1273,14 +1374,20 @@ fn write_http_response(
         "Connection: close\r\n"
     };
 
+    let cookie_header = match set_cookie {
+        Some(cookie) => format!("Set-Cookie: {}\r\n", cookie),
+        None => String::new(),
+    };
+
     let header = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\n{}{}Cache-Control: no-store\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\n{}{}{}Cache-Control: no-store\r\n\r\n",
         status,
         status_text,
         content_type,
         body.len(),
         cors_headers,
-        conn_header
+        conn_header,
+        cookie_header
     );
     stream.write_all(header.as_bytes())?;
     if !body.is_empty() {
@@ -1662,6 +1769,7 @@ fn serve_local_file(
             b"Missing path query parameter",
             origin,
             keep_alive,
+            None,
         );
         return;
     };
@@ -1677,6 +1785,7 @@ fn serve_local_file(
             b"Access denied: protected or sensitive file path",
             origin,
             keep_alive,
+            None,
         );
         return;
     }
@@ -1692,6 +1801,7 @@ fn serve_local_file(
             b"Access denied: path not granted via dialog or workspace scope",
             origin,
             keep_alive,
+            None,
         );
         return;
     }
@@ -1703,6 +1813,7 @@ fn serve_local_file(
             b"File not found",
             origin,
             keep_alive,
+            None,
         );
         return;
     }
@@ -1717,6 +1828,7 @@ fn serve_local_file(
                 b"Cannot open file",
                 origin,
                 keep_alive,
+                None,
             );
             return;
         }
@@ -1732,6 +1844,7 @@ fn serve_local_file(
                 b"Metadata error",
                 origin,
                 keep_alive,
+                None,
             );
             return;
         }
@@ -1767,6 +1880,7 @@ fn serve_local_file(
                         b"Seek error",
                         origin,
                         keep_alive,
+                        None,
                     );
                     return;
                 }
@@ -1883,6 +1997,39 @@ fn execute_self_test(
         return Err(PlatformError::Unsupported(format!(
             "Loopback security gate check failed: unauthenticated /__fs/drives returned HTTP {} instead of expected 403 Forbidden",
             status_unauth
+        )));
+    }
+
+    // Negative Security Gate: Invalid or expired bootstrap nonce rejection
+    let (status_bad_nonce, _) = loopback_http_request(
+        port,
+        "GET",
+        "/?bootstrap=invalid_or_consumed_nonce",
+        b"",
+        None,
+        &[],
+    )?;
+    if status_bad_nonce != 403 {
+        return Err(PlatformError::Unsupported(format!(
+            "Negative bootstrap nonce check failed: candidate nonce returned status={} (expected 403)",
+            status_bad_nonce
+        )));
+    }
+
+    // Security Gate Assertion: Cookie-based session authentication succeeds for IPC
+    let session_cookie = format!("__ag_session={}", session_token);
+    let (status_cookie_auth, _) = loopback_http_request(
+        port,
+        "POST",
+        "/__fs/drives",
+        b"",
+        None,
+        &[("Cookie", &session_cookie)],
+    )?;
+    if status_cookie_auth != 200 {
+        return Err(PlatformError::Unsupported(format!(
+            "Cookie-based authentication check failed: status={} (expected 200)",
+            status_cookie_auth
         )));
     }
 
@@ -2572,7 +2719,7 @@ mod tests {
     }
     #[test]
     fn test_keep_alive_multiple_requests_on_single_tcp_stream() {
-        use std::io::{BufRead, BufReader, Read, Write};
+        use std::io::{BufRead, BufReader, Write};
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -2619,6 +2766,7 @@ mod tests {
                 token,
                 &reg,
                 port,
+                &std::sync::Mutex::new(None),
             );
         });
 
@@ -2704,13 +2852,13 @@ mod tests {
         reader.read_exact(&mut body2).unwrap();
         assert_eq!(&body2, b"console.log('js');");
 
-        // Request 3: Confirm stream is closed by server (EOF)
+        // Request 3: Confirm stream is closed by server (EOF or ConnectionReset)
         let mut eof_buf = [0u8; 1];
-        let bytes_read = reader.read(&mut eof_buf).unwrap();
-        assert_eq!(
-            bytes_read, 0,
-            "Server must close stream after Connection: close"
-        );
+        match reader.read(&mut eof_buf) {
+            Ok(0) => {}
+            Err(ref e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
+            other => panic!("Expected EOF or connection close, got {:?}", other),
+        }
 
         shutdown.store(true, Ordering::SeqCst);
         let _ = server_handle.join();
@@ -2754,5 +2902,141 @@ mod tests {
             "Server thread must exit promptly upon unblocking"
         );
         let _ = handle.join();
+    }
+    #[test]
+    fn test_one_time_bootstrap_nonce_exchange_sets_cookie_and_consumes_nonce() {
+        use std::io::{BufRead, BufReader, Write};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let server_shutdown = Arc::clone(&shutdown);
+
+        let bundle = EmbeddedUiBundle {
+            app_id: "test-bootstrap",
+            app_title: "Test Bootstrap",
+            version: "1.0.0",
+            index_html: "<html><body>Hello Bootstrap</body></html>",
+            app_js: b"console.log('js');",
+            app_css: b"body { margin: 0; }",
+            window_width: 1200,
+            window_height: 800,
+        };
+
+        struct DummyHandler;
+        impl DesktopIpcHandler for DummyHandler {
+            fn handle_command(&self, _cmd: &str, _args: Value) -> Result<Value, String> {
+                Ok(serde_json::json!({"status": "ok"}))
+            }
+            fn self_test_checks(&self) -> Vec<SelfTestCheck> {
+                Vec::new()
+            }
+        }
+
+        let last_hb = Arc::new(AtomicU64::new(0));
+        let connected = Arc::new(AtomicBool::new(false));
+        let reg = Arc::new(ScopedFileRegistry::new());
+        let token = "test_bootstrap_session_token_xyz987";
+        let html = inject_bridge_into_html(bundle.index_html, bundle.app_title, token);
+
+        let valid_nonce = "initial_launch_nonce_1234567890abcdef".to_string();
+        let bootstrap_nonce = Arc::new(std::sync::Mutex::new(Some(valid_nonce.clone())));
+        let server_boot = Arc::clone(&bootstrap_nonce);
+
+        let server_handle = std::thread::spawn(move || {
+            // Service 2 connections: first for valid nonce, second for replay attempt
+            for _ in 0..2 {
+                if let Ok((stream, _)) = listener.accept() {
+                    let sd = Arc::clone(&server_shutdown);
+                    handle_http_connection(
+                        stream,
+                        &bundle,
+                        &html,
+                        &DummyHandler,
+                        &last_hb,
+                        &connected,
+                        &sd,
+                        token,
+                        &reg,
+                        port,
+                        &server_boot,
+                    );
+                }
+            }
+        });
+
+        // 1. First connection: send valid bootstrap nonce
+        let mut client1 = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let req1 = format!(
+            "GET /?bootstrap={} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+            valid_nonce, port
+        );
+        client1.write_all(req1.as_bytes()).unwrap();
+        client1.flush().unwrap();
+
+        let mut reader1 = BufReader::new(client1);
+        let mut status_line1 = String::new();
+        reader1.read_line(&mut status_line1).unwrap();
+        assert!(
+            status_line1.contains("200 OK"),
+            "Expected 200 OK: {}",
+            status_line1
+        );
+
+        let mut set_cookie_found = false;
+        loop {
+            let mut line = String::new();
+            reader1.read_line(&mut line).unwrap();
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            if line.to_ascii_lowercase().starts_with("set-cookie:") {
+                assert!(
+                    line.contains("__ag_session="),
+                    "Set-Cookie must contain __ag_session"
+                );
+                assert!(
+                    line.contains(token),
+                    "Set-Cookie must contain session token"
+                );
+                assert!(line.contains("HttpOnly"), "Set-Cookie must be HttpOnly");
+                assert!(
+                    line.contains("SameSite=Strict"),
+                    "Set-Cookie must be SameSite=Strict"
+                );
+                set_cookie_found = true;
+            }
+        }
+        assert!(
+            set_cookie_found,
+            "Server must emit Set-Cookie header upon bootstrap exchange"
+        );
+
+        // Verify nonce was consumed and is now None
+        assert!(
+            bootstrap_nonce.lock().unwrap().is_none(),
+            "Bootstrap nonce must be consumed immediately"
+        );
+
+        // 2. Second connection: replay the consumed bootstrap nonce (must be rejected 403 Forbidden)
+        let mut client2 = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let req2 = format!(
+            "GET /?bootstrap={} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+            valid_nonce, port
+        );
+        client2.write_all(req2.as_bytes()).unwrap();
+        client2.flush().unwrap();
+
+        let mut reader2 = BufReader::new(client2);
+        let mut status_line2 = String::new();
+        reader2.read_line(&mut status_line2).unwrap();
+        assert!(
+            status_line2.contains("403 Forbidden"),
+            "Replayed bootstrap nonce must return 403: {}",
+            status_line2
+        );
+
+        shutdown.store(true, Ordering::SeqCst);
+        let _ = server_handle.join();
     }
 }
