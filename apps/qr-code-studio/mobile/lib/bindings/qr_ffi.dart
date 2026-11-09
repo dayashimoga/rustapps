@@ -12,17 +12,27 @@ typedef _c_qr_free = Void Function(Pointer<Utf8> ptr);
 typedef _dart_qr_free = void Function(Pointer<Utf8> ptr);
 
 class QrStudioFfiBindings {
-  late final DynamicLibrary _lib;
-  late final _dart_qr_dispatch _dispatch;
-  late final _dart_qr_free _freeString;
+  DynamicLibrary? _lib;
+  _dart_qr_dispatch? _dispatch;
+  _dart_qr_free? _freeString;
+  bool _isAvailable = false;
+  String? _initError;
+
+  bool get isAvailable => _isAvailable;
+  String? get initError => _initError;
 
   QrStudioFfiBindings() {
-    _lib = _loadLibrary();
-    _dispatch = _lib
-        .lookupFunction<_c_qr_dispatch, _dart_qr_dispatch>(
-            'qr_code_studio_ffi_dispatch_json');
-    _freeString = _lib.lookupFunction<_c_qr_free, _dart_qr_free>(
-        'qr_code_studio_free_string');
+    try {
+      _lib = _loadLibrary();
+      _dispatch = _lib!.lookupFunction<_c_qr_dispatch, _dart_qr_dispatch>(
+          'qr_code_studio_ffi_dispatch_json');
+      _freeString = _lib!.lookupFunction<_c_qr_free, _dart_qr_free>(
+          'qr_code_studio_free_string');
+      _isAvailable = true;
+    } catch (e) {
+      _isAvailable = false;
+      _initError = e.toString();
+    }
   }
 
   static DynamicLibrary _loadLibrary() {
@@ -31,7 +41,15 @@ class QrStudioFfiBindings {
     } else if (Platform.isIOS) {
       return DynamicLibrary.process();
     } else if (Platform.isWindows) {
-      return DynamicLibrary.open('qr_code_studio.dll');
+      try {
+        return DynamicLibrary.open('qr_code_studio.dll');
+      } catch (_) {
+        try {
+          return DynamicLibrary.open('target/release/qr_code_studio.dll');
+        } catch (_) {
+          return DynamicLibrary.open('target/debug/qr_code_studio.dll');
+        }
+      }
     } else if (Platform.isMacOS) {
       return DynamicLibrary.open('libqr_code_studio.dylib');
     } else {
@@ -40,25 +58,32 @@ class QrStudioFfiBindings {
   }
 
   Map<String, dynamic> dispatch(String command, Map<String, dynamic> payload) {
+    if (!_isAvailable || _dispatch == null || _freeString == null) {
+      return {
+        'error': 'Native QR Studio FFI library unavailable: ${_initError ?? "unknown"}'
+      };
+    }
+
     final cmdPtr = command.toNativeUtf8();
     final payloadJson = jsonEncode(payload);
     final payloadPtr = payloadJson.toNativeUtf8();
 
     try {
-      final resPtr = _dispatch(cmdPtr, payloadPtr);
+      final resPtr = _dispatch!(cmdPtr, payloadPtr);
       if (resPtr == nullptr) {
-        return {'success': false, 'error': 'Null pointer returned from FFI'};
+        return {'error': 'Null pointer returned from native FFI boundary'};
       }
       try {
         final resStr = resPtr.toDartString();
         return jsonDecode(resStr) as Map<String, dynamic>;
       } finally {
-        _freeString(resPtr);
+        _freeString!(resPtr);
       }
+    } catch (e) {
+      return {'error': 'FFI dispatch failure: $e'};
     } finally {
       calloc.free(cmdPtr);
       calloc.free(payloadPtr);
     }
   }
 }
-
