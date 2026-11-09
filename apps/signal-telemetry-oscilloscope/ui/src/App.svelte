@@ -25,6 +25,7 @@
     time_per_div_ms: number;
     ch1_samples: number[];
     ch2_samples: number[];
+    math_samples: number[];
     digital_samples: number[];
     stats_ch1: {
       vpp: number;
@@ -55,6 +56,15 @@
       thd_percent: number;
     };
     decoded_packets: any[];
+    cursors?: {
+      x1_time_ms: number;
+      x2_time_ms: number;
+      delta_t_ms: number;
+      frequency_hz: number;
+      y1_volts: number;
+      y2_volts: number;
+      delta_v_volts: number;
+    };
   }
 
   let stats: OscilloscopeStats = {
@@ -72,6 +82,15 @@
   let isRunning: boolean = true;
   let intervalTimer: any = null;
   let isCommandPaletteOpen: boolean = false;
+  let fileInput: HTMLInputElement;
+  let statusBanner: string = '';
+
+  // Math Channel State
+  let showMath: boolean = true;
+  let mathOperation: 'Add' | 'Subtract' | 'Multiply' | 'InvertCh1' = 'Add';
+
+  // Cursors State
+  let showCursors: boolean = true;
 
   $: commandActions = [
     {
@@ -102,6 +121,33 @@
       run: () => { activeTab = 'decoder'; },
     },
     {
+      id: 'toggle-cursors',
+      title: showCursors ? 'Hide Measurement Cursors' : 'Show Measurement Cursors',
+      subtitle: 'Toggle interactive ΔT and ΔV measurement cursors',
+      category: 'Measurement',
+      icon: '📏',
+      shortcut: 'C',
+      run: () => { showCursors = !showCursors; },
+    },
+    {
+      id: 'math-op',
+      title: `Cycle Channel Math (${mathOperation})`,
+      subtitle: 'Compute realtime A+B, A-B, A*B, or -A',
+      category: 'Math',
+      icon: '∑',
+      shortcut: 'M',
+      run: () => { cycleMathOp(); },
+    },
+    {
+      id: 'import-file',
+      title: 'Import Signal File (.csv, .wav, .vcd)',
+      subtitle: 'Load laboratory telemetry or audio oscilloscope traces',
+      category: 'Import',
+      icon: '📥',
+      shortcut: '⌘O',
+      run: () => { fileInput?.click(); },
+    },
+    {
       id: 'single-sweep',
       title: 'Trigger Single Shot Sweep',
       subtitle: 'Execute immediate single acquisition pass',
@@ -125,6 +171,9 @@
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       isCommandPaletteOpen = !isCommandPaletteOpen;
+    } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') {
+      e.preventDefault();
+      fileInput?.click();
     } else if (e.key === 'Escape' && isCommandPaletteOpen) {
       e.preventDefault();
       isCommandPaletteOpen = false;
@@ -194,15 +243,100 @@
         },
       });
 
-      currentSession = session;
+      if (showMath) {
+        const mathSession = await invokeIpc<CaptureSession>('compute_channel_math', {
+          session_id: session.session_id,
+          operation: mathOperation,
+        });
+        currentSession = mathSession;
+      } else {
+        currentSession = session;
+      }
+
       stats = await invokeIpc<OscilloscopeStats>('get_oscilloscope_stats');
     } catch (err) {
       console.error('Sweep acquisition failed:', err);
     }
   }
 
+  async function cycleMathOp() {
+    const ops: ('Add' | 'Subtract' | 'Multiply' | 'InvertCh1')[] = ['Add', 'Subtract', 'Multiply', 'InvertCh1'];
+    const idx = ops.indexOf(mathOperation);
+    mathOperation = ops[(idx + 1) % ops.length];
+    if (currentSession) {
+      try {
+        const updated = await invokeIpc<CaptureSession>('compute_channel_math', {
+          session_id: currentSession.session_id,
+          operation: mathOperation,
+        });
+        currentSession = updated;
+        statusBanner = `Computed Math Channel: ${mathOperation}`;
+        setTimeout(() => { statusBanner = ''; }, 3000);
+      } catch (e) {
+        console.error('Math compute error:', e);
+      }
+    }
+  }
+
+  async function handleCursorUpdate(e: CustomEvent<{ x1: number; x2: number; y1: number; y2: number }>) {
+    if (!currentSession) return;
+    try {
+      const updated = await invokeIpc<CaptureSession>('update_measurement_cursors', {
+        session_id: currentSession.session_id,
+        cursors: {
+          x1_time_ms: e.detail.x1,
+          x2_time_ms: e.detail.x2,
+          y1_volts: e.detail.y1,
+          y2_volts: e.detail.y2,
+          delta_t_ms: Math.abs(e.detail.x2 - e.detail.x1),
+          frequency_hz: Math.abs(e.detail.x2 - e.detail.x1) > 0.001 ? 1000.0 / Math.abs(e.detail.x2 - e.detail.x1) : 0,
+          delta_v_volts: Math.abs(e.detail.y2 - e.detail.y1),
+        },
+      });
+      currentSession.cursors = updated.cursors;
+    } catch (err) {
+      console.error('Cursor update failed:', err);
+    }
+  }
+
+  async function handleFileImport(e: Event) {
+    const target = e.target as HTMLInputElement;
+    if (!target.files || target.files.length === 0) return;
+    const file = target.files[0];
+    const name = file.name;
+    const ext = name.split('.').pop()?.toLowerCase() || 'csv';
+
+    try {
+      let format = 'csv';
+      if (ext === 'wav') format = 'wav';
+      else if (ext === 'vcd') format = 'vcd';
+
+      const text = await file.text();
+      const session = await invokeIpc<CaptureSession>('import_signal_file', {
+        title: `Import: ${name}`,
+        format,
+        content: text,
+      });
+
+      currentSession = session;
+      statusBanner = `Successfully imported ${session.total_samples} samples from ${name}`;
+      setTimeout(() => { statusBanner = ''; }, 4000);
+    } catch (err: any) {
+      alert(`Import error: ${err?.message || err}`);
+    }
+  }
+
   function handleToggleRun(e: CustomEvent) {
     isRunning = e.detail.isRunning;
+    if (isRunning) {
+      startAutoRefresh();
+    } else {
+      stopAutoRefresh();
+    }
+  }
+
+  function toggleRunStop() {
+    isRunning = !isRunning;
     if (isRunning) {
       startAutoRefresh();
     } else {
@@ -237,6 +371,15 @@
 
 <svelte:window on:keydown={handleGlobalKeyDown} />
 
+<!-- Hidden File Import Input -->
+<input
+  type="file"
+  accept=".csv,.txt,.wav,.vcd"
+  bind:this={fileInput}
+  on:change={handleFileImport}
+  style="display: none;"
+/>
+
 <div class="oscilloscope-app">
   <!-- Top Navigation Bar -->
   <header class="app-header">
@@ -253,6 +396,28 @@
         <span class="cmd-icon">⌘</span>
         <span>Commands</span>
         <kbd>⌘K</kbd>
+      </button>
+
+      <button class="action-top-btn" on:click={() => fileInput?.click()} title="Import signal file">
+        📥 Import
+      </button>
+
+      <button
+        class="action-top-btn"
+        class:active={showCursors}
+        on:click={() => (showCursors = !showCursors)}
+        title="Toggle ΔT / ΔV cursors"
+      >
+        📏 Cursors
+      </button>
+
+      <button
+        class="action-top-btn math"
+        class:active={showMath}
+        on:click={cycleMathOp}
+        title="Cycle Channel Math (A+B, A-B, A*B, -A)"
+      >
+        ∑ Math: {mathOperation}
       </button>
 
       <div class="stat-pill">
@@ -277,6 +442,12 @@
     </div>
   </header>
 
+  {#if statusBanner}
+    <div class="status-banner">
+      <span>✨ {statusBanner}</span>
+    </div>
+  {/if}
+
   <!-- Workspace Body -->
   <main class="app-body">
     <!-- Left / Center Primary Analysis Workspace -->
@@ -287,6 +458,7 @@
           <OscilloscopeDisplay
             ch1Samples={currentSession.ch1_samples}
             ch2Samples={currentSession.ch2_samples}
+            mathSamples={currentSession.math_samples || []}
             triggerLevel={triggerLevel}
             timePerDivMs={timePerDivMs}
             ch1VoltsPerDiv={ch1VoltsPerDiv}
@@ -294,6 +466,11 @@
             vppCh1={currentSession.stats_ch1.vpp}
             freqCh1={currentSession.stats_ch1.frequency_hz}
             vppCh2={currentSession.stats_ch2.vpp}
+            mathOperation={mathOperation}
+            showMath={showMath}
+            showCursors={showCursors}
+            cursors={currentSession.cursors || null}
+            on:updateCursors={handleCursorUpdate}
           />
         {:else}
           <div class="loading-screen">Acquiring initial oscilloscope sweep...</div>
@@ -349,43 +526,43 @@
         bind:timePerDivMs
         bind:triggerLevel
         bind:triggerEdge
-        bind:isRunning
-        on:acquire={triggerSweep}
+        on:sweep={triggerSweep}
         on:toggleRun={handleToggleRun}
       />
     </aside>
   </main>
 
-  <!-- Status Bar Footer -->
+  <!-- Bottom Laboratory Status Bar -->
   <footer class="app-footer">
-    <span class="status-item">
-      SESSION: {currentSession ? currentSession.session_id : 'Initializing'}
-    </span>
-    <span class="status-item">
-      SAMPLE RATE: {currentSession ? (currentSession.sample_rate_hz / 1000).toFixed(1) + ' kSa/s' : '50.0 kSa/s'}
-    </span>
-    <span class="status-item">
-      DOMINANT FREQ: {currentSession ? currentSession.spectrum.dominant_freq_hz.toFixed(1) + ' Hz' : '0.0 Hz'}
-    </span>
-    <span class="status-item security">
-      OFFLINE AIR-GAP: ZERO NETWORK EGRESS ASSURED
-    </span>
-    <span class="status-item version">v{0.1}</span>
+    <div class="footer-left">
+      <span class="status-indicator live"></span>
+      <span class="status-text">{isRunning ? 'ACQUIRING (RUN)' : 'ACQUISITION PAUSED (HOLD)'}</span>
+      <span class="divider">|</span>
+      <span class="status-text">SQLite WAL: <code>oscilloscope.db</code></span>
+    </div>
+
+    <div class="footer-right">
+      <span>Zero Unsolicited Network Egress Guaranteed</span>
+      <span class="divider">|</span>
+      <span>Session: <code>{currentSession?.session_id || 'IDLE'}</code></span>
+    </div>
   </footer>
 
-  <!-- Command Palette -->
+  <!-- Command Palette Modal -->
   <CommandPalette
     isOpen={isCommandPaletteOpen}
     actions={commandActions}
     onClose={() => (isCommandPaletteOpen = false)}
   />
 
-  <!-- Offline Licensing Modal -->
+  <!-- Offline License Verification Modal -->
   <LicenseModal
     isOpen={isLicenseModalOpen}
-    appName="Scientific Signal & Telemetry Oscilloscope"
+    appName="Scientific Signal Oscilloscope"
     on:close={() => (isLicenseModalOpen = false)}
-    on:statusChange={(e) => (licenseTier = e.detail.tier)}
+    on:statusChange={(e) => {
+      licenseTier = e.detail.tier;
+    }}
   />
 </div>
 
@@ -394,16 +571,17 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
-    background: #0a0e14;
+    background: #06090e;
     color: #e6edf3;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   }
 
   .app-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 8px 18px;
-    background: #121820;
+    padding: 10px 18px;
+    background: #0d131a;
     border-bottom: 1px solid #1e2c3d;
   }
 
@@ -418,15 +596,14 @@
   }
 
   .brand-text h1 {
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 700;
-    letter-spacing: 0.8px;
+    letter-spacing: 0.5px;
     color: #58a6ff;
-    font-family: var(--font-mono);
   }
 
   .subtitle {
-    font-size: 10px;
+    font-size: 11px;
     color: #8b949e;
   }
 
@@ -434,53 +611,81 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    font-family: var(--font-mono);
-    font-size: 11px;
   }
 
   .cmd-palette-btn {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    background: #16202c;
-    border: 1px solid #243347;
-    color: #cbd5e1;
-    font-size: 0.78rem;
+    background: #161b22;
+    border: 1px solid #30363d;
+    color: #8b949e;
+    font-size: 0.8rem;
     font-weight: 500;
-    padding: 3px 8px;
-    border-radius: 4px;
+    padding: 4px 9px;
+    border-radius: 6px;
     cursor: pointer;
     transition: all 0.15s ease;
   }
 
   .cmd-palette-btn:hover {
-    background: rgba(16, 185, 129, 0.15);
-    border-color: #10b981;
-    color: #f8fafc;
+    background: rgba(244, 63, 94, 0.15);
+    border-color: #f43f5e;
+    color: #f0f6fc;
   }
 
   .cmd-icon {
-    color: #34d399;
+    color: #fb7185;
     font-weight: 700;
   }
 
   .cmd-palette-btn kbd {
-    background: #0a0e14;
-    border: 1px solid #334155;
-    padding: 1px 4px;
-    border-radius: 3px;
-    font-size: 0.68rem;
-    color: #94a3b8;
+    background: #0d1117;
+    border: 1px solid #21262d;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    color: #8b949e;
     font-family: inherit;
+  }
+
+  .action-top-btn {
+    background: #161b22;
+    border: 1px solid #30363d;
+    color: #c9d1d9;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .action-top-btn:hover {
+    background: #21262d;
+    border-color: #58a6ff;
+  }
+
+  .action-top-btn.active {
+    background: rgba(56, 189, 248, 0.15);
+    border-color: #38bdf8;
+    color: #38bdf8;
+  }
+
+  .action-top-btn.math.active {
+    background: rgba(217, 70, 239, 0.15);
+    border-color: #d946ef;
+    color: #d946ef;
   }
 
   .stat-pill {
     display: flex;
-    gap: 6px;
-    background: #16202c;
-    border: 1px solid #243347;
-    padding: 4px 8px;
+    gap: 5px;
+    padding: 4px 10px;
+    background: #141c26;
+    border: 1px solid #1e2c3d;
     border-radius: 4px;
+    font-size: 11px;
+    font-family: var(--font-mono);
   }
 
   .stat-label {
@@ -489,15 +694,15 @@
 
   .stat-value {
     color: #58a6ff;
-    font-weight: 600;
+    font-weight: bold;
   }
 
   .air-gap {
-    background: #23863622;
-    border-color: #2ea04366;
-    color: #3fb950;
-    font-weight: 600;
     align-items: center;
+    background: #0f241a;
+    border-color: #1a422d;
+    color: #3fb950;
+    font-weight: bold;
   }
 
   .dot {
@@ -508,45 +713,51 @@
   }
 
   .license-btn {
-    background: #1f2d3d;
-    border: 1px solid #388bfd66;
-    color: #79c0ff;
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #e6edf3;
     padding: 4px 10px;
     border-radius: 4px;
     font-size: 11px;
-    font-weight: 700;
     font-family: var(--font-mono);
+    font-weight: bold;
+    cursor: pointer;
   }
 
-  .license-btn:hover {
-    background: #27394d;
+  .status-banner {
+    background: rgba(16, 185, 129, 0.15);
+    border-bottom: 1px solid var(--accent-green);
+    padding: 6px 18px;
+    font-size: 0.8rem;
+    color: #6ee7b7;
+    font-weight: 600;
   }
 
   .app-body {
-    flex: 1;
     display: flex;
+    flex: 1;
     overflow: hidden;
-    padding: 10px;
-    gap: 10px;
+    padding: 12px 16px;
+    gap: 16px;
   }
 
   .main-workspace {
-    flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    flex: 1;
+    gap: 12px;
     overflow: hidden;
   }
 
   .screen-box {
-    flex: 1.2;
-    min-height: 300px;
+    flex: 6;
+    min-height: 0;
   }
 
   .loading-screen {
     display: flex;
-    justify-content: center;
     align-items: center;
+    justify-content: center;
     height: 100%;
     background: #0d131a;
     border: 1px solid #1e2c3d;
@@ -556,64 +767,89 @@
   }
 
   .analysis-deck {
-    flex: 0.9;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    flex: 4;
+    background: #0d131a;
+    border: 1px solid #1e2c3d;
+    border-radius: 8px;
+    overflow: hidden;
+    min-height: 0;
   }
 
   .deck-tabs {
     display: flex;
-    gap: 8px;
+    background: #141c26;
+    border-bottom: 1px solid #1e2c3d;
   }
 
   .tab-btn {
-    background: #121820;
-    border: 1px solid #1e2c3d;
+    padding: 8px 16px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
     color: #8b949e;
-    padding: 5px 12px;
-    border-radius: 4px;
     font-size: 11px;
+    font-weight: bold;
     font-family: var(--font-mono);
-    font-weight: 600;
+    cursor: pointer;
   }
 
   .tab-btn.active {
-    background: #1e2c3d;
-    color: #e6edf3;
-    border-color: #388bfd;
+    color: #58a6ff;
+    border-bottom-color: #58a6ff;
+    background: #0d131a;
   }
 
   .deck-content {
     flex: 1;
+    overflow: hidden;
   }
 
   .side-rack {
     width: 320px;
-    display: flex;
-    flex-direction: column;
+    overflow-y: auto;
   }
 
   .app-footer {
     display: flex;
+    justify-content: space-between;
     align-items: center;
-    gap: 16px;
-    padding: 4px 16px;
-    background: #101620;
+    padding: 6px 18px;
+    background: #0d131a;
     border-top: 1px solid #1e2c3d;
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-mono);
     color: #8b949e;
   }
 
-  .status-item.security {
-    margin-left: auto;
-    color: #3fb950;
-    font-weight: 600;
+  .footer-left, .footer-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
 
-  .status-item.version {
+  .status-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
+  .status-indicator.live {
+    background: #3fb950;
+    box-shadow: 0 0 6px #3fb95088;
+  }
+
+  .status-text {
+    font-weight: bold;
+    color: #e6edf3;
+  }
+
+  .divider {
+    color: #30363d;
+  }
+
+  code {
     color: #58a6ff;
   }
 </style>
-

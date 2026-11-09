@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { onMount, afterUpdate } from 'svelte';
+  import { onMount, afterUpdate, createEventDispatcher } from 'svelte';
 
   export let ch1Samples: number[] = [];
   export let ch2Samples: number[] = [];
+  export let mathSamples: number[] = [];
   export let triggerLevel: number = 0.0;
   export let timePerDivMs: number = 1.0;
   export let ch1VoltsPerDiv: number = 1.0;
@@ -10,10 +11,29 @@
   export let vppCh1: number = 0.0;
   export let freqCh1: number = 0.0;
   export let vppCh2: number = 0.0;
+  export let mathOperation: string = 'Add';
+  export let showMath: boolean = false;
+  export let showCursors: boolean = true;
+  export let cursors: {
+    x1_time_ms: number;
+    x2_time_ms: number;
+    delta_t_ms: number;
+    frequency_hz: number;
+    y1_volts: number;
+    y2_volts: number;
+    delta_v_volts: number;
+  } | null = null;
+
+  const dispatch = createEventDispatcher<{
+    updateCursors: { x1: number; x2: number; y1: number; y2: number };
+  }>();
 
   let canvas: HTMLCanvasElement;
   let cursorX: number | null = null;
   let cursorY: number | null = null;
+
+  // Active dragging state for measurement cursors
+  let draggingCursor: 'x1' | 'x2' | 'y1' | 'y2' | null = null;
 
   function renderGrid(ctx: CanvasRenderingContext2D, width: number, height: number) {
     ctx.fillStyle = '#0a1017';
@@ -114,6 +134,74 @@
     ctx.restore();
   }
 
+  function renderMeasurementCursors(ctx: CanvasRenderingContext2D, width: number, height: number) {
+    if (!showCursors || !cursors) return;
+
+    const totalTimeMs = timePerDivMs * 10;
+    const pixelsPerMs = width / totalTimeMs;
+    const centerY = height / 2;
+    const pixelsPerVolt = (height / 8) / ch1VoltsPerDiv;
+
+    const x1Px = cursors.x1_time_ms * pixelsPerMs;
+    const x2Px = cursors.x2_time_ms * pixelsPerMs;
+    const y1Px = centerY - (cursors.y1_volts * pixelsPerVolt);
+    const y2Px = centerY - (cursors.y2_volts * pixelsPerVolt);
+
+    ctx.save();
+
+    // X Cursors (Vertical Cyan Dashed)
+    ctx.strokeStyle = '#38bdf8';
+    ctx.setLineDash([6, 3]);
+    ctx.lineWidth = 1.5;
+
+    ctx.beginPath();
+    ctx.moveTo(x1Px, 0);
+    ctx.lineTo(x1Px, height);
+    ctx.moveTo(x2Px, 0);
+    ctx.lineTo(x2Px, height);
+    ctx.stroke();
+
+    // X Cursor labels
+    ctx.fillStyle = '#38bdf8';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText(`X1: ${cursors.x1_time_ms.toFixed(2)}ms`, Math.max(4, x1Px + 4), 16);
+    ctx.fillText(`X2: ${cursors.x2_time_ms.toFixed(2)}ms`, Math.max(4, x2Px + 4), 30);
+
+    // Y Cursors (Horizontal Yellow Dashed)
+    ctx.strokeStyle = '#facc15';
+    ctx.beginPath();
+    ctx.moveTo(0, y1Px);
+    ctx.lineTo(width, y1Px);
+    ctx.moveTo(0, y2Px);
+    ctx.lineTo(width, y2Px);
+    ctx.stroke();
+
+    // Y Cursor labels
+    ctx.fillStyle = '#facc15';
+    ctx.fillText(`Y1: ${cursors.y1_volts.toFixed(2)}V`, 10, Math.max(14, y1Px - 4));
+    ctx.fillText(`Y2: ${cursors.y2_volts.toFixed(2)}V`, 10, Math.max(14, y2Px - 4));
+
+    // Cursor Delta Readout Pill
+    const dt = Math.abs(cursors.x2_time_ms - cursors.x1_time_ms);
+    const dv = Math.abs(cursors.y2_volts - cursors.y1_volts);
+    const freq = dt > 0.001 ? 1000.0 / dt : 0;
+    const freqStr = freq >= 1000 ? `${(freq / 1000).toFixed(2)} kHz` : `${freq.toFixed(1)} Hz`;
+
+    const hudText = `ΔT: ${dt.toFixed(2)} ms | 1/ΔT: ${freqStr} | ΔV: ${dv.toFixed(2)} V`;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.fillRect(width - 320, height - 36, 310, 26);
+    ctx.strokeRect(width - 320, height - 36, 310, 26);
+
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText(hudText, width - 310, height - 19);
+
+    ctx.restore();
+  }
+
   function draw() {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -127,16 +215,24 @@
     // Draw Channel 2 trace first (cyan)
     renderTrace(ctx, ch2Samples, ch2VoltsPerDiv, '#00d4ff', width, height);
 
+    // Draw Math trace if active (magenta)
+    if (showMath && mathSamples.length > 0) {
+      renderTrace(ctx, mathSamples, ch1VoltsPerDiv, '#d946ef', width, height);
+    }
+
     // Draw Channel 1 trace on top (phosphor green)
     renderTrace(ctx, ch1Samples, ch1VoltsPerDiv, '#00ff66', width, height);
 
     // Render Trigger Line
     renderTriggerLine(ctx, width, height);
 
+    // Render Time & Voltage Cursors
+    renderMeasurementCursors(ctx, width, height);
+
     // Render Cursor Crosshair
     if (cursorX !== null && cursorY !== null) {
       ctx.save();
-      ctx.strokeStyle = '#ffffff66';
+      ctx.strokeStyle = '#ffffff44';
       ctx.setLineDash([2, 2]);
       ctx.beginPath();
       ctx.moveTo(cursorX, 0);
@@ -152,12 +248,61 @@
     const rect = canvas.getBoundingClientRect();
     cursorX = (e.clientX - rect.left) * (canvas.width / rect.width);
     cursorY = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+    if (draggingCursor && cursors) {
+      const totalTimeMs = timePerDivMs * 10;
+      const centerY = canvas.height / 2;
+      const pixelsPerVolt = (canvas.height / 8) / ch1VoltsPerDiv;
+
+      let { x1_time_ms, x2_time_ms, y1_volts, y2_volts } = cursors;
+
+      if (draggingCursor === 'x1') {
+        x1_time_ms = (cursorX / canvas.width) * totalTimeMs;
+      } else if (draggingCursor === 'x2') {
+        x2_time_ms = (cursorX / canvas.width) * totalTimeMs;
+      } else if (draggingCursor === 'y1') {
+        y1_volts = (centerY - cursorY) / pixelsPerVolt;
+      } else if (draggingCursor === 'y2') {
+        y2_volts = (centerY - cursorY) / pixelsPerVolt;
+      }
+
+      dispatch('updateCursors', { x1: x1_time_ms, x2: x2_time_ms, y1: y1_volts, y2: y2_volts });
+    }
+
     draw();
+  }
+
+  function handleMouseDown(e: MouseEvent) {
+    if (!cursors || !showCursors) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+    const totalTimeMs = timePerDivMs * 10;
+    const pixelsPerMs = canvas.width / totalTimeMs;
+    const centerY = canvas.height / 2;
+    const pixelsPerVolt = (canvas.height / 8) / ch1VoltsPerDiv;
+
+    const x1Px = cursors.x1_time_ms * pixelsPerMs;
+    const x2Px = cursors.x2_time_ms * pixelsPerMs;
+    const y1Px = centerY - (cursors.y1_volts * pixelsPerVolt);
+    const y2Px = centerY - (cursors.y2_volts * pixelsPerVolt);
+
+    const hitDist = 12;
+    if (Math.abs(x - x1Px) < hitDist) draggingCursor = 'x1';
+    else if (Math.abs(x - x2Px) < hitDist) draggingCursor = 'x2';
+    else if (Math.abs(y - y1Px) < hitDist) draggingCursor = 'y1';
+    else if (Math.abs(y - y2Px) < hitDist) draggingCursor = 'y2';
+  }
+
+  function handleMouseUp() {
+    draggingCursor = null;
   }
 
   function handleMouseLeave() {
     cursorX = null;
     cursorY = null;
+    draggingCursor = null;
     draw();
   }
 
@@ -185,6 +330,13 @@
       <span class="hud-sub">Vpp: {vppCh2.toFixed(2)}V</span>
     </div>
 
+    {#if showMath && mathSamples.length > 0}
+      <div class="hud-item math">
+        <span class="badge math-badge">MATH ({mathOperation})</span>
+        <span class="hud-sub">{mathSamples.length} pts</span>
+      </div>
+    {/if}
+
     <div class="hud-item timebase">
       <span class="badge tb-badge">TB</span>
       <span class="hud-val">{timePerDivMs} ms/div</span>
@@ -197,6 +349,8 @@
       width={1000}
       height={520}
       on:mousemove={handleMouseMove}
+      on:mousedown={handleMouseDown}
+      on:mouseup={handleMouseUp}
       on:mouseleave={handleMouseLeave}
     ></canvas>
   </div>
@@ -249,6 +403,12 @@
     border: 1px solid #00d4ff66;
   }
 
+  .math-badge {
+    background: rgba(217, 70, 239, 0.2);
+    color: #d946ef;
+    border: 1px solid #d946ef;
+  }
+
   .tb-badge {
     background: #ffaa0022;
     color: #ffaa00;
@@ -281,4 +441,3 @@
     cursor: crosshair;
   }
 </style>
-

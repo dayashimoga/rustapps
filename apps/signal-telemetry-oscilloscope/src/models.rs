@@ -9,6 +9,7 @@ pub enum SignalChannel {
     #[default]
     Ch1,
     Ch2,
+    Math,
     DigitalD0,
     DigitalD1,
 }
@@ -23,6 +24,17 @@ pub enum WaveformType {
     Sawtooth,
     Noise,
     UartStream,
+}
+
+/// Channel mathematical operation types
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum MathOperation {
+    #[default]
+    Add, // CH1 + CH2
+    Subtract,  // CH1 - CH2
+    Multiply,  // CH1 * CH2
+    InvertCh1, // -CH1
+    InvertCh2, // -CH2
 }
 
 /// Comprehensive waveform statistical measurements
@@ -103,6 +115,27 @@ impl Default for TriggerConfig {
     }
 }
 
+/// Time and voltage measurement cursors
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct MeasurementCursors {
+    pub x1_time_ms: f32,
+    pub x2_time_ms: f32,
+    pub delta_t_ms: f32,
+    pub frequency_hz: f32, // 1 / delta_t
+    pub y1_volts: f32,
+    pub y2_volts: f32,
+    pub delta_v_volts: f32,
+}
+
+/// Supported signal file import formats
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum SignalFileFormat {
+    #[default]
+    Csv,
+    Wav,
+    Vcd,
+}
+
 /// Per-channel visual and acquisition configuration
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChannelConfig {
@@ -125,11 +158,15 @@ pub struct CaptureSession {
     pub time_per_div_ms: f32,
     pub ch1_samples: Vec<f32>,
     pub ch2_samples: Vec<f32>,
+    #[serde(default)]
+    pub math_samples: Vec<f32>,
     pub digital_samples: Vec<u8>,
     pub stats_ch1: SignalStatistics,
     pub stats_ch2: SignalStatistics,
     pub spectrum: FftSpectrum,
     pub decoded_packets: Vec<DecodedPacket>,
+    #[serde(default)]
+    pub cursors: Option<MeasurementCursors>,
 }
 
 /// Aggregated oscilloscope engine metrics

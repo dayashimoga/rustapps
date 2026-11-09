@@ -2,8 +2,8 @@
 //! High-Performance Offline Digital Signal Processing (DSP) & Protocol Decoder Engine
 
 use crate::models::{
-    DecodedPacket, FftSpectrum, ProtocolType, SignalStatistics, TriggerConfig, TriggerEdge,
-    WaveformType,
+    DecodedPacket, FftSpectrum, MathOperation, ProtocolType, SignalStatistics, TriggerConfig,
+    TriggerEdge, WaveformType,
 };
 use std::f32::consts::PI;
 
@@ -223,6 +223,30 @@ impl SignalDspEngine {
         }
     }
 
+    /// Computes sample-wise channel mathematical operations ($A+B, A-B, A*B, -A, -B$)
+    pub fn compute_channel_math(ch1: &[f32], ch2: &[f32], op: MathOperation) -> Vec<f32> {
+        let len = match op {
+            MathOperation::InvertCh1 => ch1.len(),
+            MathOperation::InvertCh2 => ch2.len(),
+            _ => ch1.len().min(ch2.len()),
+        };
+
+        let mut out = Vec::with_capacity(len);
+
+        for i in 0..len {
+            let val = match op {
+                MathOperation::Add => ch1[i] + ch2[i],
+                MathOperation::Subtract => ch1[i] - ch2[i],
+                MathOperation::Multiply => ch1[i] * ch2[i],
+                MathOperation::InvertCh1 => -ch1[i],
+                MathOperation::InvertCh2 => -ch2[i],
+            };
+            out.push(val);
+        }
+
+        out
+    }
+
     /// Finds index matching signal trigger threshold and edge direction
     pub fn find_trigger_index(samples: &[f32], trigger: &TriggerConfig) -> Option<usize> {
         if samples.len() < 2 {
@@ -331,6 +355,189 @@ impl SignalDspEngine {
         packets
     }
 
+    /// Parses CSV formatted oscilloscope / signal capture files
+    pub fn parse_csv_signal(csv_content: &str) -> Result<(Vec<f32>, Vec<f32>, f32), String> {
+        let mut ch1 = Vec::new();
+        let mut ch2 = Vec::new();
+        let mut timestamps = Vec::new();
+
+        for line in csv_content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = line
+                .split([',', ';', '\t', ' '])
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            if parts.is_empty() {
+                continue;
+            }
+
+            // Skip non-numeric header rows
+            if parts[0].chars().any(|c| c.is_alphabetic()) {
+                continue;
+            }
+
+            match parts.len() {
+                1 => {
+                    if let Ok(v) = parts[0].parse::<f32>() {
+                        ch1.push(v);
+                    }
+                }
+                2 => {
+                    // Try parsing as (time, ch1) or (ch1, ch2)
+                    if let (Ok(p0), Ok(p1)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>()) {
+                        timestamps.push(p0);
+                        ch1.push(p1);
+                    }
+                }
+                _ => {
+                    // 3 or more: (time, ch1, ch2, ...)
+                    if let (Ok(t), Ok(v1), Ok(v2)) = (
+                        parts[0].parse::<f32>(),
+                        parts[1].parse::<f32>(),
+                        parts[2].parse::<f32>(),
+                    ) {
+                        timestamps.push(t);
+                        ch1.push(v1);
+                        ch2.push(v2);
+                    }
+                }
+            }
+        }
+
+        if ch1.is_empty() {
+            return Err("No numeric signal samples found in CSV".to_string());
+        }
+
+        // Calculate sample rate from timestamp delta if available
+        let sample_rate_hz = if timestamps.len() >= 2 {
+            let dt = (timestamps.last().unwrap() - timestamps.first().unwrap())
+                / (timestamps.len() - 1) as f32;
+            if dt > 1e-9 {
+                (1.0 / dt).clamp(1.0, 10_000_000.0)
+            } else {
+                50_000.0
+            }
+        } else {
+            50_000.0
+        };
+
+        if ch2.is_empty() {
+            ch2 = vec![0.0f32; ch1.len()];
+        }
+
+        Ok((ch1, ch2, sample_rate_hz))
+    }
+
+    /// Parses PCM WAV signal audio files (16-bit or 32-bit float)
+    pub fn parse_wav_signal(wav_bytes: &[u8]) -> Result<(Vec<f32>, f32), String> {
+        if wav_bytes.len() < 44 {
+            return Err("WAV data too short for header".to_string());
+        }
+
+        if &wav_bytes[0..4] != b"RIFF" || &wav_bytes[8..12] != b"WAVE" {
+            return Err("Invalid WAV RIFF/WAVE header".to_string());
+        }
+
+        // Search for fmt and data chunks
+        let mut idx = 12;
+        let mut sample_rate_hz = 44_100.0f32;
+        let mut bits_per_sample = 16u16;
+        let mut num_channels = 1u16;
+        let mut audio_format = 1u16;
+        let mut data_offset = 0;
+        let mut data_len = 0;
+
+        while idx + 8 <= wav_bytes.len() {
+            let chunk_id = &wav_bytes[idx..idx + 4];
+            let chunk_size = u32::from_le_bytes(
+                wav_bytes[idx + 4..idx + 8]
+                    .try_into()
+                    .map_err(|_| "Failed to parse chunk size")?,
+            ) as usize;
+
+            if chunk_id == b"fmt " && idx + 8 + chunk_size <= wav_bytes.len() {
+                let fmt_data = &wav_bytes[idx + 8..];
+                if fmt_data.len() >= 16 {
+                    audio_format = u16::from_le_bytes([fmt_data[0], fmt_data[1]]);
+                    num_channels = u16::from_le_bytes([fmt_data[2], fmt_data[3]]);
+                    sample_rate_hz =
+                        u32::from_le_bytes([fmt_data[4], fmt_data[5], fmt_data[6], fmt_data[7]])
+                            as f32;
+                    bits_per_sample = u16::from_le_bytes([fmt_data[14], fmt_data[15]]);
+                }
+            } else if chunk_id == b"data" {
+                data_offset = idx + 8;
+                data_len = chunk_size.min(wav_bytes.len().saturating_sub(data_offset));
+                break;
+            }
+
+            idx += 8 + chunk_size;
+        }
+
+        if data_offset == 0 || data_len == 0 {
+            return Err("Missing WAV 'data' subchunk".to_string());
+        }
+
+        let raw_samples = &wav_bytes[data_offset..data_offset + data_len];
+        let mut samples = Vec::new();
+
+        if audio_format == 1 && bits_per_sample == 16 {
+            // 16-bit PCM signed
+            for chunk in raw_samples.chunks_exact(2 * num_channels as usize) {
+                let s16 = i16::from_le_bytes([chunk[0], chunk[1]]);
+                samples.push(s16 as f32 / 32768.0);
+            }
+        } else if audio_format == 3 && bits_per_sample == 32 {
+            // 32-bit IEEE float
+            for chunk in raw_samples.chunks_exact(4 * num_channels as usize) {
+                let f = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                samples.push(f);
+            }
+        } else {
+            // Fallback: 8-bit unsigned
+            for chunk in raw_samples.chunks_exact(num_channels as usize) {
+                samples.push((chunk[0] as f32 - 128.0) / 128.0);
+            }
+        }
+
+        Ok((samples, sample_rate_hz))
+    }
+
+    /// Parses Value Change Dump (VCD) logic analyzer files into digital binary stream
+    pub fn parse_vcd_signal(vcd_text: &str) -> Result<(Vec<u8>, f32), String> {
+        let mut digital_samples = Vec::new();
+        let mut current_state = 0u8;
+
+        for line in vcd_text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('$') {
+                continue;
+            }
+
+            if line.starts_with('0') {
+                current_state = 0;
+                digital_samples.push(current_state);
+            } else if line.starts_with('1') {
+                current_state = 1;
+                digital_samples.push(current_state);
+            } else if line.starts_with('#') {
+                // Time advance - repeat current state for duration
+                digital_samples.push(current_state);
+            }
+        }
+
+        if digital_samples.is_empty() {
+            return Err("No digital states found in VCD text".to_string());
+        }
+
+        Ok((digital_samples, 100_000.0))
+    }
+
     /// Synthesizes clean mathematical waveforms for test verification and live demo simulation
     pub fn generate_synthetic_waveform(
         waveform_type: WaveformType,
@@ -413,6 +620,68 @@ mod tests {
         assert!((stats.vpp - (amp * 2.0)).abs() < 1.0);
         assert!(stats.vrms > 1.5 && stats.vrms < 2.5);
         assert!((stats.frequency_hz - freq).abs() < 50.0);
+    }
+
+    #[test]
+    fn test_channel_math_operations() {
+        let ch1 = vec![1.0, 2.0, 3.0, 4.0];
+        let ch2 = vec![0.5, 1.0, 1.5, 2.0];
+
+        let add = SignalDspEngine::compute_channel_math(&ch1, &ch2, MathOperation::Add);
+        assert_eq!(add, vec![1.5, 3.0, 4.5, 6.0]);
+
+        let sub = SignalDspEngine::compute_channel_math(&ch1, &ch2, MathOperation::Subtract);
+        assert_eq!(sub, vec![0.5, 1.0, 1.5, 2.0]);
+
+        let mul = SignalDspEngine::compute_channel_math(&ch1, &ch2, MathOperation::Multiply);
+        assert_eq!(mul, vec![0.5, 2.0, 4.5, 8.0]);
+
+        let inv = SignalDspEngine::compute_channel_math(&ch1, &ch2, MathOperation::InvertCh1);
+        assert_eq!(inv, vec![-1.0, -2.0, -3.0, -4.0]);
+    }
+
+    #[test]
+    fn test_parse_csv_signal() {
+        let csv_data = "Time,Ch1,Ch2\n0.000,1.25,-0.50\n0.001,1.50,-0.40\n0.002,1.75,-0.30\n";
+        let (ch1, ch2, rate) = SignalDspEngine::parse_csv_signal(csv_data).unwrap();
+        assert_eq!(ch1.len(), 3);
+        assert_eq!(ch2.len(), 3);
+        assert_eq!(ch1[0], 1.25);
+        assert!((rate - 1000.0).abs() < 10.0);
+    }
+
+    #[test]
+    fn test_parse_wav_signal_synthetic() {
+        // Construct a minimal valid 16-bit PCM WAV in memory
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&36u32.to_le_bytes()); // remaining size
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes()); // subchunk1 size
+        wav.extend_from_slice(&1u16.to_le_bytes()); // AudioFormat = 1 (PCM)
+        wav.extend_from_slice(&1u16.to_le_bytes()); // NumChannels = 1
+        wav.extend_from_slice(&44100u32.to_le_bytes()); // SampleRate
+        wav.extend_from_slice(&88200u32.to_le_bytes()); // ByteRate
+        wav.extend_from_slice(&2u16.to_le_bytes()); // BlockAlign
+        wav.extend_from_slice(&16u16.to_le_bytes()); // BitsPerSample
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&4u32.to_le_bytes()); // 2 samples * 2 bytes
+        wav.extend_from_slice(&16384i16.to_le_bytes()); // sample 1 = 0.5
+        wav.extend_from_slice(&(-16384i16).to_le_bytes()); // sample 2 = -0.5
+
+        let (samples, rate) = SignalDspEngine::parse_wav_signal(&wav).unwrap();
+        assert_eq!(rate, 44100.0);
+        assert_eq!(samples.len(), 2);
+        assert!((samples[0] - 0.5).abs() < 0.01);
+        assert!((samples[1] - (-0.5)).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_parse_vcd_signal() {
+        let vcd = "$timescale 1us $end\n#0\n0!\n#10\n1!\n#20\n0!\n";
+        let (digital, _) = SignalDspEngine::parse_vcd_signal(vcd).unwrap();
+        assert!(!digital.is_empty());
     }
 
     #[test]
