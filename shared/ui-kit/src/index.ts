@@ -10,6 +10,9 @@ export * from './ipc/client';
 // Re-export Component Interfaces
 export * from './components/types';
 
+// Re-export History & Undo/Redo State Manager
+export * from './history/undoRedo';
+
 // Re-export Svelte Components
 export { default as AgCommandPalette } from './components/AgCommandPalette.svelte';
 export { default as AgLicenseModal } from './components/AgLicenseModal.svelte';
@@ -17,4 +20,5 @@ export { default as AgVirtualGrid } from './components/AgVirtualGrid.svelte';
 export { default as AgSplitPane } from './components/AgSplitPane.svelte';
 export { default as AgChartCanvas } from './components/AgChartCanvas.svelte';
 export { default as AgUndoToast } from './components/AgUndoToast.svelte';
+export { default as AgEmptyStateCard } from './components/AgEmptyStateCard.svelte';
 

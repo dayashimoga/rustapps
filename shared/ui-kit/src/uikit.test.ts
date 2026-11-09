@@ -6,6 +6,7 @@ import {
   isDesktopApp,
   getLocalFileUrl,
 } from './ipc/client';
+import { UndoRedoStack } from './history/undoRedo';
 import type { CommandItem, VirtualColumn } from './components/types';
 
 describe('Antigravity UI Kit - IPC Transport Suite', () => {
@@ -108,6 +109,78 @@ describe('Antigravity UI Kit - Component Logic Suite', () => {
     expect(scaleY(0)).toBe(padTop + plotHeight); // Bottom
     expect(scaleY(200)).toBe(padTop); // Top
     expect(scaleY(100)).toBe(padTop + plotHeight / 2); // Middle
+  });
+});
+
+describe('Antigravity UI Kit - Undo/Redo State Manager', () => {
+  it('pushes new states and allows stepwise undo and redo', () => {
+    const stack = new UndoRedoStack<string>('initial');
+    expect(stack.current).toBe('initial');
+    expect(stack.canUndo).toBe(false);
+    expect(stack.canRedo).toBe(false);
+
+    stack.push('step1');
+    stack.push('step2');
+    expect(stack.current).toBe('step2');
+    expect(stack.canUndo).toBe(true);
+    expect(stack.canRedo).toBe(false);
+
+    // Undo to step1
+    const u1 = stack.undo();
+    expect(u1).toBe('step1');
+    expect(stack.current).toBe('step1');
+    expect(stack.canRedo).toBe(true);
+
+    // Undo to initial
+    const u2 = stack.undo();
+    expect(u2).toBe('initial');
+    expect(stack.current).toBe('initial');
+    expect(stack.canUndo).toBe(false);
+
+    // Redo to step1
+    const r1 = stack.redo();
+    expect(r1).toBe('step1');
+    expect(stack.current).toBe('step1');
+
+    // Redo to step2
+    const r2 = stack.redo();
+    expect(r2).toBe('step2');
+    expect(stack.current).toBe('step2');
+    expect(stack.canRedo).toBe(false);
+  });
+
+  it('invalidates future branch when new state is pushed after undo', () => {
+    const stack = new UndoRedoStack<number>(1);
+    stack.push(2);
+    stack.push(3);
+
+    stack.undo(); // back to 2
+    expect(stack.canRedo).toBe(true);
+
+    stack.push(99); // branch to 99
+    expect(stack.current).toBe(99);
+    expect(stack.canRedo).toBe(false); // future is wiped
+    expect(stack.canUndo).toBe(true);
+
+    stack.undo();
+    expect(stack.current).toBe(2);
+  });
+
+  it('respects maximum capacity bounds', () => {
+    const stack = new UndoRedoStack<number>(0, { maxCapacity: 3 });
+    stack.push(1);
+    stack.push(2);
+    stack.push(3);
+    stack.push(4);
+    stack.push(5);
+
+    expect(stack.current).toBe(5);
+    expect(stack.pastCount).toBe(3); // capped at 3
+
+    expect(stack.undo()).toBe(4);
+    expect(stack.undo()).toBe(3);
+    expect(stack.undo()).toBe(2);
+    expect(stack.canUndo).toBe(false); // 0 and 1 were evicted
   });
 });
 
