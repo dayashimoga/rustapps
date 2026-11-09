@@ -2,10 +2,14 @@
 //! High-Level Digital Forensics & Incident Response Triage Service
 
 use crate::collector::ForensicCollector;
+use crate::evtx_parser::EvtxParser;
+use crate::mitre::MitreEngine;
 use crate::models::{
-    CertArtifact, DfirStats, FileIntegrityRecord, LogEventRecord, ProcessArtifact, Severity,
-    SocketArtifact, TriageSummary,
+    CertArtifact, ChainOfCustodyManifest, DfirStats, FileIntegrityRecord, LogEventRecord,
+    MitreAttackMapping, PackageVerificationReport, ProcessArtifact, Severity, SocketArtifact,
+    TriageSummary,
 };
+use crate::sealer::EvidenceSealer;
 use rusqlite::{params, Connection};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -25,6 +29,7 @@ pub enum DfirError {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TriagePackage {
     pub summary: TriageSummary,
+    pub mitre_techniques: Vec<MitreAttackMapping>,
     pub processes: Vec<ProcessArtifact>,
     pub sockets: Vec<SocketArtifact>,
     pub suspicious_files: Vec<FileIntegrityRecord>,
@@ -108,6 +113,10 @@ impl DfirService {
         // 5. Collect Certificates
         let certificates = ForensicCollector::inspect_certificates();
 
+        // 6. Correlate artifacts against MITRE ATT&CK matrix
+        let mitre_techniques =
+            MitreEngine::map_artifacts(&processes, &sockets, &files, &event_logs);
+
         // Calculate threat metrics & score (0 to 100)
         let susp_procs = processes.iter().filter(|p| p.is_suspicious).count();
         let ext_sockets = sockets.iter().filter(|s| s.is_external).count();
@@ -120,8 +129,12 @@ impl DfirService {
             })
             .count();
         let bad_certs = certificates.iter().filter(|c| c.is_expired).count();
+        let crit_mitre = mitre_techniques
+            .iter()
+            .filter(|m| m.severity == Severity::Critical || m.severity == Severity::High)
+            .count();
 
-        let threats_detected = susp_procs + ext_sockets + susp_files + bad_certs;
+        let threats_detected = susp_procs + ext_sockets + susp_files + bad_certs + crit_mitre;
 
         let mut threat_score = 0u32;
         threat_score += (susp_procs as u32) * 25;
@@ -129,6 +142,7 @@ impl DfirService {
         threat_score += (susp_files as u32) * 20;
         threat_score += (crit_logs as u32) * 10;
         threat_score += (bad_certs as u32) * 15;
+        threat_score += (crit_mitre as u32) * 15;
         threat_score = threat_score.min(100);
 
         let severity = match threat_score {
@@ -160,6 +174,7 @@ impl DfirService {
 
         let package = TriagePackage {
             summary: summary.clone(),
+            mitre_techniques,
             processes,
             sockets,
             suspicious_files: files,
@@ -234,11 +249,18 @@ impl DfirService {
     /// Retrieves full triage artifact package by ID
     pub fn get_triage_package(&self, triage_id: &str) -> Result<TriagePackage, DfirError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT package_json FROM triage_runs WHERE triage_id = ?1;")?;
-        let json_str: String = stmt
-            .query_row([triage_id], |r| r.get(0))
-            .map_err(|_| DfirError::NotFound(triage_id.to_string()))?;
+        let json_str: String = if triage_id == "latest" || triage_id.is_empty() {
+            let mut stmt = conn.prepare(
+                "SELECT package_json FROM triage_runs ORDER BY collected_at DESC LIMIT 1;",
+            )?;
+            stmt.query_row([], |r| r.get(0))
+                .map_err(|_| DfirError::NotFound("latest".to_string()))?
+        } else {
+            let mut stmt =
+                conn.prepare("SELECT package_json FROM triage_runs WHERE triage_id = ?1;")?;
+            stmt.query_row([triage_id], |r| r.get(0))
+                .map_err(|_| DfirError::NotFound(triage_id.to_string()))?
+        };
 
         let package: TriagePackage =
             serde_json::from_str(&json_str).unwrap_or_else(|_| TriagePackage {
@@ -255,6 +277,7 @@ impl DfirService {
                     threat_score: 0,
                     severity: Severity::Low,
                 },
+                mitre_techniques: Vec::new(),
                 processes: Vec::new(),
                 sockets: Vec::new(),
                 suspicious_files: Vec::new(),
@@ -287,6 +310,58 @@ impl DfirService {
             total_files_hashed: total_files,
         })
     }
+
+    /// Exports and cryptographically signs a triage package into a .dfir bundle
+    pub fn export_signed_bundle(
+        &self,
+        triage_id: &str,
+        output_path: impl AsRef<Path>,
+    ) -> Result<ChainOfCustodyManifest, DfirError> {
+        let package = self.get_triage_package(triage_id)?;
+        let mitre = if !package.mitre_techniques.is_empty() {
+            package.mitre_techniques.clone()
+        } else {
+            MitreEngine::map_artifacts(
+                &package.processes,
+                &package.sockets,
+                &package.suspicious_files,
+                &package.event_logs,
+            )
+        };
+        EvidenceSealer::seal_package(&package, &mitre, output_path)
+    }
+
+    /// Verifies an existing .dfir cryptographic evidence package
+    pub fn verify_signed_bundle(
+        &self,
+        bundle_path: impl AsRef<Path>,
+    ) -> Result<PackageVerificationReport, DfirError> {
+        EvidenceSealer::verify_package(bundle_path)
+    }
+
+    /// Retrieves or computes MITRE ATT&CK technique mappings for a triage run
+    pub fn get_mitre_mapping(&self, triage_id: &str) -> Result<Vec<MitreAttackMapping>, DfirError> {
+        let package = self.get_triage_package(triage_id)?;
+        if !package.mitre_techniques.is_empty() {
+            Ok(package.mitre_techniques)
+        } else {
+            Ok(MitreEngine::map_artifacts(
+                &package.processes,
+                &package.sockets,
+                &package.suspicious_files,
+                &package.event_logs,
+            ))
+        }
+    }
+
+    /// Parses an offline Windows Event Log (.evtx) file
+    pub fn parse_evtx_file(
+        &self,
+        path: impl AsRef<Path>,
+        max_records: usize,
+    ) -> Result<Vec<LogEventRecord>, DfirError> {
+        EvtxParser::parse_file(path, max_records).map_err(DfirError::Io)
+    }
 }
 
 #[cfg(test)]
@@ -315,5 +390,22 @@ mod tests {
 
         let stats = service.get_stats().unwrap();
         assert_eq!(stats.total_triage_runs, 1);
+
+        // Test MITRE mapping retrieval
+        let mitre = service.get_mitre_mapping(&pkg.summary.triage_id).unwrap();
+        // Even on clean systems, process list yields execution techniques or mappings
+        assert_eq!(mitre.len(), pkg.mitre_techniques.len());
+
+        // Test bundle export & verification
+        let bundle_file = tempfile::NamedTempFile::new().unwrap();
+        let manifest = service
+            .export_signed_bundle(&pkg.summary.triage_id, bundle_file.path())
+            .unwrap();
+        assert_eq!(manifest.package_id, pkg.summary.triage_id);
+        assert!(!manifest.ed25519_signature.is_empty());
+
+        let verify_report = service.verify_signed_bundle(bundle_file.path()).unwrap();
+        assert!(verify_report.is_valid);
+        assert!(verify_report.signature_verified);
     }
 }

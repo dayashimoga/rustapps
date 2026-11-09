@@ -81,6 +81,50 @@ pub fn dispatch_ipc_command(command: &str, payload: Value) -> Result<Value, Stri
             Ok(json!(records))
         }
 
+        "export_signed_bundle" => {
+            let triage_id = payload["triage_id"]
+                .as_str()
+                .ok_or_else(|| "Missing required parameter 'triage_id'".to_string())?;
+            let output_path = payload["output_path"]
+                .as_str()
+                .ok_or_else(|| "Missing required parameter 'output_path'".to_string())?;
+            let manifest = service
+                .export_signed_bundle(triage_id, output_path)
+                .map_err(|e| e.to_string())?;
+            Ok(json!(manifest))
+        }
+
+        "verify_signed_bundle" => {
+            let bundle_path = payload["bundle_path"]
+                .as_str()
+                .ok_or_else(|| "Missing required parameter 'bundle_path'".to_string())?;
+            let report = service
+                .verify_signed_bundle(bundle_path)
+                .map_err(|e| e.to_string())?;
+            Ok(json!(report))
+        }
+
+        "get_mitre_mapping" => {
+            let triage_id = payload["triage_id"]
+                .as_str()
+                .ok_or_else(|| "Missing required parameter 'triage_id'".to_string())?;
+            let mappings = service
+                .get_mitre_mapping(triage_id)
+                .map_err(|e| e.to_string())?;
+            Ok(json!(mappings))
+        }
+
+        "parse_evtx" => {
+            let path = payload["path"]
+                .as_str()
+                .ok_or_else(|| "Missing required parameter 'path'".to_string())?;
+            let max_records = payload["max_records"].as_u64().unwrap_or(100) as usize;
+            let records = service
+                .parse_evtx_file(path, max_records)
+                .map_err(|e| e.to_string())?;
+            Ok(json!(records))
+        }
+
         "get_license_status" => {
             let status: LicenseStatusReport = licensing.status_report();
             Ok(json!(status))
@@ -120,5 +164,32 @@ mod tests {
 
         let lic = dispatch_ipc_command("get_license_status", json!({})).unwrap();
         assert!(lic.get("tier").is_some());
+
+        // Test MITRE mapping IPC
+        let mitre =
+            dispatch_ipc_command("get_mitre_mapping", json!({ "triage_id": triage_id })).unwrap();
+        assert!(mitre.as_array().is_some());
+
+        // Test signed bundle export & verify IPC
+        let temp_bundle = tempfile::NamedTempFile::new().unwrap();
+        let export_res = dispatch_ipc_command(
+            "export_signed_bundle",
+            json!({
+                "triage_id": triage_id,
+                "output_path": temp_bundle.path().to_string_lossy()
+            }),
+        )
+        .unwrap();
+        assert!(export_res.get("ed25519_signature").is_some());
+
+        let verify_res = dispatch_ipc_command(
+            "verify_signed_bundle",
+            json!({
+                "bundle_path": temp_bundle.path().to_string_lossy()
+            }),
+        )
+        .unwrap();
+        assert_eq!(verify_res["is_valid"], true);
+        assert_eq!(verify_res["signature_verified"], true);
     }
 }

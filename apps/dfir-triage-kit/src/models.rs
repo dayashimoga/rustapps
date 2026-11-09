@@ -156,3 +156,51 @@ pub struct DfirStats {
     pub total_threats_flagged: usize,
     pub total_files_hashed: usize,
 }
+
+/// MITRE ATT&CK technique mapping for flagged forensic anomalies
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MitreAttackMapping {
+    pub technique_id: String,
+    pub technique_name: String,
+    pub tactic: String,
+    pub severity: Severity,
+    pub evidence: String,
+}
+
+/// Cryptographic hash entry for a file in an evidence bundle
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileHashEntry {
+    pub file_name: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub blake3: String,
+}
+
+/// Court-admissible cryptographic chain-of-custody manifest
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChainOfCustodyManifest {
+    pub manifest_version: String,
+    pub package_id: String,
+    pub host_name: String,
+    pub os_type: String,
+    pub collected_at: i64,
+    pub collector_version: String,
+    pub sha256_package_hash: String,
+    pub blake3_package_hash: String,
+    pub ed25519_signature: String,
+    pub public_key: String,
+    pub mitre_summary: Vec<MitreAttackMapping>,
+    pub file_hashes: Vec<FileHashEntry>,
+}
+
+/// Package verification report for tamper detection
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageVerificationReport {
+    pub package_path: String,
+    pub is_valid: bool,
+    pub signature_verified: bool,
+    pub files_verified: usize,
+    pub mismatched_files: Vec<String>,
+    pub signer_public_key: String,
+    pub notes: String,
+}

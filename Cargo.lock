@@ -656,7 +656,10 @@ name = "dfir-triage-kit"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ed25519-dalek",
+ "flate2",
  "platform-common",
+ "rand",
  "regex",
  "rusqlite",
  "serde",

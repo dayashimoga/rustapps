@@ -31,10 +31,13 @@ serde_json.workspace = true
 # Cryptography & Hashing
 blake3.workspace = true
 sha2.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
 
 # Filesystem & Pattern Matching
 walkdir.workspace = true
 regex.workspace = true
+flate2.workspace = true
 
 # Utilities
 thiserror.workspace = true
