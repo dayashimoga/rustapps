@@ -40,6 +40,8 @@ pub enum StorageError {
     },
     #[error("Audit log previous hash mismatch at entry {index}")]
     AuditChainLinkBroken { index: usize },
+    #[error("Database backup or restoration error: {0}")]
+    BackupError(String),
 }
 
 /// Represents a schema migration
@@ -115,6 +117,118 @@ impl Database {
     /// Get the database file path, if file-backed.
     pub fn path(&self) -> Option<&Path> {
         self.db_path.as_deref()
+    }
+
+    /// Create an authenticated AES-256-GCM encrypted snapshot (.bak) of the SQLite database.
+    ///
+    /// Executes a WAL checkpoint (TRUNCATE) to guarantee all transactions are safely synced,
+    /// encrypts the raw database file into an `EncryptedEnvelope`, atomically writes the backup
+    /// file, and rotates older snapshots exceeding `max_snapshots`.
+    pub fn create_encrypted_backup<P: AsRef<Path>>(
+        &self,
+        backup_dir: P,
+        key: &[u8; 32],
+        max_snapshots: usize,
+    ) -> Result<PathBuf, StorageError> {
+        let db_path = self.db_path.as_ref().ok_or_else(|| {
+            StorageError::BackupError("Cannot create backup of an in-memory database".to_string())
+        })?;
+
+        // 1. Force WAL checkpoint to flush all uncommitted/WAL pages into main SQLite file
+        self.with_connection(|conn| {
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+            Ok(())
+        })?;
+
+        // 2. Read SQLite database file bytes
+        let db_bytes = std::fs::read(db_path)?;
+
+        // 3. Encrypt via authenticated AES-256-GCM envelope
+        let envelope = EncryptedEnvelope::encrypt(&db_bytes, key)?;
+        let serialized = serde_json::to_vec_pretty(&envelope)
+            .map_err(|e| StorageError::BackupError(format!("Failed to serialize backup: {}", e)))?;
+
+        // 4. Ensure backup directory exists
+        let backup_dir_ref = backup_dir.as_ref();
+        std::fs::create_dir_all(backup_dir_ref)?;
+
+        // 5. Generate timestamped backup file name: <db_filename>.<timestamp>.bak
+        let db_file_name = db_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("database.db");
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let backup_file_name = format!("{}.{}.bak", db_file_name, timestamp);
+        let backup_path = backup_dir_ref.join(&backup_file_name);
+
+        // 6. Write backup file atomically
+        atomic_write_file(&backup_path, &serialized)?;
+
+        // 7. Rotate older snapshots if exceeding max_snapshots
+        if max_snapshots > 0 {
+            Self::rotate_backups(backup_dir_ref, db_file_name, max_snapshots)?;
+        }
+
+        Ok(backup_path)
+    }
+
+    /// Rotate older backup snapshots matching `<db_file_name>.*.bak` so at most `max_snapshots` remain.
+    fn rotate_backups(
+        backup_dir: &Path,
+        db_file_name: &str,
+        max_snapshots: usize,
+    ) -> Result<(), StorageError> {
+        let prefix = format!("{}.", db_file_name);
+        let mut backups = Vec::new();
+
+        if let Ok(entries) = std::fs::read_dir(backup_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                        if file_name.starts_with(&prefix) && file_name.ends_with(".bak") {
+                            let mtime = entry
+                                .metadata()
+                                .and_then(|m| m.modified())
+                                .unwrap_or(std::time::UNIX_EPOCH);
+                            backups.push((path, mtime));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort by modification time ascending (oldest first)
+        backups.sort_by_key(|(_, mtime)| *mtime);
+
+        if backups.len() > max_snapshots {
+            let to_remove = backups.len() - max_snapshots;
+            for (path, _) in backups.into_iter().take(to_remove) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Restore a SQLite database from an authenticated AES-256-GCM encrypted backup file.
+    pub fn restore_encrypted_backup<P: AsRef<Path>, B: AsRef<Path>>(
+        target_db_path: P,
+        backup_file: B,
+        key: &[u8; 32],
+    ) -> Result<Self, StorageError> {
+        let backup_bytes = std::fs::read(backup_file.as_ref())?;
+        let envelope: EncryptedEnvelope = serde_json::from_slice(&backup_bytes)
+            .map_err(|e| StorageError::BackupError(format!("Invalid backup format: {}", e)))?;
+
+        let decrypted_bytes = envelope.decrypt(key)?;
+        let target_ref = target_db_path.as_ref();
+
+        atomic_write_file(target_ref, &decrypted_bytes)?;
+        Self::open(target_ref)
     }
 }
 
@@ -570,5 +684,82 @@ mod tests {
             err2,
             StorageError::AuditChainLinkBroken { index: 2 }
         ));
+    }
+
+    #[test]
+    fn test_encrypted_database_backup_and_restore() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("production.db");
+        let backup_dir = temp.path().join("backups");
+        let restore_path = temp.path().join("restored.db");
+        let key = [0x55u8; 32];
+
+        // 1. Initialize DB and insert records
+        let db = Database::open(&db_path).unwrap();
+        db.with_connection(|conn| {
+            conn.execute_batch(
+                "CREATE TABLE secrets (id INTEGER PRIMARY KEY, key TEXT, value TEXT);
+                 INSERT INTO secrets (key, value) VALUES ('api_token', 'sec_987654321');
+                 INSERT INTO secrets (key, value) VALUES ('ssh_key', 'ed25519-secret');"
+            )?;
+            Ok(())
+        }).unwrap();
+
+        // 2. Create encrypted backup
+        let backup_file = db.create_encrypted_backup(&backup_dir, &key, 3).unwrap();
+        assert!(backup_file.exists());
+        assert!(backup_file.to_string_lossy().ends_with(".bak"));
+
+        // Verify the raw backup file is NOT plaintext SQLite
+        let raw_backup = std::fs::read(&backup_file).unwrap();
+        assert!(!raw_backup.starts_with(b"SQLite format 3"));
+
+        // 3. Restore backup with correct key
+        let restored_db = Database::restore_encrypted_backup(&restore_path, &backup_file, &key).unwrap();
+        assert!(restore_path.exists());
+
+        // Verify restored records
+        let count: i64 = restored_db.with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM secrets", [], |row| row.get(0))
+        }).unwrap();
+        assert_eq!(count, 2);
+
+        let token: String = restored_db.with_connection(|conn| {
+            conn.query_row("SELECT value FROM secrets WHERE key = 'api_token'", [], |row| row.get(0))
+        }).unwrap();
+        assert_eq!(token, "sec_987654321");
+
+        // 4. Restore with wrong key must fail authenticated decryption
+        let wrong_key = [0x99u8; 32];
+        let bad_restore = temp.path().join("bad_restored.db");
+        assert!(Database::restore_encrypted_backup(&bad_restore, &backup_file, &wrong_key).is_err());
+    }
+
+    #[test]
+    fn test_backup_rotation() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("vault.db");
+        let backup_dir = temp.path().join("backups");
+        let key = [0x77u8; 32];
+
+        let db = Database::open(&db_path).unwrap();
+        db.with_connection(|conn| {
+            conn.execute_batch("CREATE TABLE t (x INT); INSERT INTO t VALUES (1);")?;
+            Ok(())
+        }).unwrap();
+
+        // Create 4 snapshots with max_snapshots = 2
+        for _ in 0..4 {
+            db.create_encrypted_backup(&backup_dir, &key, 2).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let entries: Vec<_> = std::fs::read_dir(&backup_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().to_string_lossy().ends_with(".bak"))
+            .collect();
+
+        assert_eq!(entries.len(), 2, "Backups must be rotated to exactly max_snapshots");
     }
 }

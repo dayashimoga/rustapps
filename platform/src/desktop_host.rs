@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
@@ -15,7 +16,7 @@ use std::process::Child;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::{AppPaths, PlatformError};
@@ -185,6 +186,83 @@ pub trait DesktopIpcHandler: Send + Sync + 'static {
 
     /// Return a list of IPC checks to execute when `--self-test` is invoked.
     fn self_test_checks(&self) -> Vec<SelfTestCheck>;
+
+    /// Dispatch a named binary fast-path command with raw byte payload and return a binary response (ADR-003).
+    /// Default implementation provides echo capability for test_ping and ping.
+    fn handle_binary_command(
+        &self,
+        command: &str,
+        _headers: Value,
+        payload: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        if command == "ping" || command == "test_ping" {
+            Ok(payload.to_vec())
+        } else {
+            Err(format!("Binary IPC command '{}' not implemented", command))
+        }
+    }
+}
+
+/// Thread-safe capability allowlist tracking filesystem paths explicitly granted by the user
+/// via file dialogs, workspace directories, or application settings (SEC-03).
+#[derive(Debug, Default)]
+pub struct ScopedFileRegistry {
+    allowed_exact_paths: RwLock<HashSet<PathBuf>>,
+    allowed_roots: RwLock<HashSet<PathBuf>>,
+}
+
+impl ScopedFileRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Allow an exact file or directory path
+    pub fn allow_path(&self, path: &Path) {
+        if let Ok(mut set) = self.allowed_exact_paths.write() {
+            set.insert(path.to_path_buf());
+            if let Ok(canonical) = path.canonicalize() {
+                set.insert(canonical);
+            }
+        }
+    }
+
+    /// Allow an entire directory root and all its subdirectories/files
+    pub fn allow_root(&self, root: &Path) {
+        if let Ok(mut set) = self.allowed_roots.write() {
+            set.insert(root.to_path_buf());
+            if let Ok(canonical) = root.canonicalize() {
+                set.insert(canonical);
+            }
+        }
+    }
+
+    /// Check if a path is explicitly allowed by an exact match or a root prefix
+    pub fn is_allowed(&self, path: &Path) -> bool {
+        let canonical = path.canonicalize().ok();
+        if let Ok(set) = self.allowed_exact_paths.read() {
+            if set.contains(path) {
+                return true;
+            }
+            if let Some(ref c) = canonical {
+                if set.contains(c) {
+                    return true;
+                }
+            }
+        }
+        if let Ok(roots) = self.allowed_roots.read() {
+            for root in roots.iter() {
+                if path.starts_with(root) {
+                    return true;
+                }
+                if let Some(ref c) = canonical {
+                    if c.starts_with(root) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
 }
 
 fn generate_bridge_script(session_token: &str) -> String {
@@ -245,16 +323,40 @@ fn generate_bridge_script(session_token: &str) -> String {
     return payload && payload.entries ? payload.entries : [];
   }}
 
+  async function ipcInvokeBin(cmd, headers, binaryPayload) {{
+    const response = await fetch('/__ipc_bin/' + encodeURIComponent(cmd), {{
+      method: 'POST',
+      headers: {{
+        'Content-Type': 'application/octet-stream',
+        'X-Antigravity-Token': __AUTH_TOKEN__,
+        'X-Antigravity-Header': JSON.stringify(headers || {{}})
+      }},
+      body: binaryPayload || new Uint8Array()
+    }});
+    if (!response.ok) {{
+      throw new Error('Binary IPC HTTP ' + response.status);
+    }}
+    return await response.arrayBuffer();
+  }}
+
   function fileUrl(localPath) {{
     if (!localPath) return '';
     return '/__file?path=' + encodeURIComponent(localPath) + '&token=' + encodeURIComponent(__AUTH_TOKEN__);
   }}
 
+  function connectEvents(onMessage) {{
+    const es = new EventSource('/__events?token=' + encodeURIComponent(__AUTH_TOKEN__));
+    if (onMessage) es.onmessage = onMessage;
+    return es;
+  }}
+
   window.__TAURI__ = window.__TAURI__ || {{}};
   window.__TAURI__.invoke = ipcInvoke;
-  window.__TAURI__.core = {{ invoke: ipcInvoke }};
+  window.__TAURI__.invokeBinary = ipcInvokeBin;
+  window.__TAURI__.core = {{ invoke: ipcInvoke, invokeBinary: ipcInvokeBin }};
   window.__TAURI__.dialog = {{ open: dialogOpen, save: dialogSave }};
   window.__TAURI__.fs = {{ getDrivesAndPlaces: getDrivesAndPlaces, fileUrl: fileUrl }};
+  window.__TAURI__.events = {{ connect: connectEvents }};
   window.__TAURI_INTERNALS__ = {{ invoke: ipcInvoke }};
 
   setInterval(function() {{
@@ -393,11 +495,19 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
     let client_connected = Arc::new(AtomicBool::new(false));
     let handler = Arc::new(handler);
 
+    // Capability-based filesystem allowlist scoped to dialog grants and workspace roots (SEC-03)
+    let scoped_registry = Arc::new(ScopedFileRegistry::new());
+    if let Ok(cwd) = std::env::current_dir() {
+        scoped_registry.allow_root(&cwd);
+    }
+    scoped_registry.allow_root(&std::env::temp_dir());
+
     let server_shutdown = Arc::clone(&shutdown_flag);
     let server_heartbeat = Arc::clone(&last_heartbeat_ms);
     let server_connected = Arc::clone(&client_connected);
     let server_handler = Arc::clone(&handler);
     let server_token = Arc::clone(&session_token);
+    let server_registry = Arc::clone(&scoped_registry);
 
     let index_with_bridge = Arc::new(inject_bridge_into_html(
         bundle.index_html,
@@ -425,6 +535,7 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
                     let h = Arc::clone(&server_handler);
                     let html = Arc::clone(&index_with_bridge);
                     let tok = Arc::clone(&server_token);
+                    let reg = Arc::clone(&server_registry);
                     pool.execute(move || {
                         handle_http_connection(
                             stream,
@@ -435,6 +546,7 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
                             &conn,
                             &sd,
                             &tok,
+                            &reg,
                         );
                     });
                 }
@@ -449,7 +561,7 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
     });
 
     if is_self_test {
-        let report = execute_self_test(port, &bundle, handler.as_ref(), &session_token)?;
+        let report = execute_self_test(port, &bundle, handler.as_ref(), &session_token, &scoped_registry)?;
         shutdown_flag.store(true, Ordering::SeqCst);
         let _ = server_thread.join();
         return Ok(Some(report));
@@ -510,6 +622,7 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
     Ok(None)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_http_connection(
     mut stream: TcpStream,
     bundle: &EmbeddedUiBundle,
@@ -519,6 +632,7 @@ fn handle_http_connection(
     client_connected: &AtomicBool,
     shutdown_flag: &AtomicBool,
     session_token: &str,
+    scoped_registry: &ScopedFileRegistry,
 ) {
     let mut reader = BufReader::new(match stream.try_clone() {
         Ok(s) => s,
@@ -542,6 +656,7 @@ fn handle_http_connection(
     let mut range_header: Option<String> = None;
     let mut auth_token_header: Option<String> = None;
     let mut origin_header: Option<String> = None;
+    let mut custom_header: Option<String> = None;
 
     loop {
         let mut header_line = String::new();
@@ -567,6 +682,8 @@ fn handle_http_connection(
                 }
             } else if key.eq_ignore_ascii_case("origin") {
                 origin_header = Some(val.to_string());
+            } else if key.eq_ignore_ascii_case("x-antigravity-header") {
+                custom_header = Some(val.to_string());
             }
         }
     }
@@ -717,6 +834,21 @@ fn handle_http_connection(
             .unwrap_or(if is_dir { "Select Folder" } else { "Open File" });
 
         let selected = invoke_native_open_dialog(title, is_dir, multiple, &opts);
+        if let Some(p_str) = selected.as_str() {
+            let p = PathBuf::from(p_str);
+            if is_dir {
+                scoped_registry.allow_root(&p);
+            } else {
+                scoped_registry.allow_path(&p);
+            }
+        } else if let Some(arr) = selected.as_array() {
+            for item in arr {
+                if let Some(p_str) = item.as_str() {
+                    let p = PathBuf::from(p_str);
+                    scoped_registry.allow_path(&p);
+                }
+            }
+        }
         let payload = serde_json::json!({ "path": selected });
         let bytes = serde_json::to_vec(&payload).unwrap_or_default();
         let _ = write_http_response(
@@ -747,6 +879,9 @@ fn handle_http_connection(
             .unwrap_or("");
 
         let selected = invoke_native_save_dialog(title, default_path, &opts);
+        if let Some(p_str) = selected.as_str() {
+            scoped_registry.allow_path(&PathBuf::from(p_str));
+        }
         let payload = serde_json::json!({ "path": selected });
         let bytes = serde_json::to_vec(&payload).unwrap_or_default();
         let _ = write_http_response(
@@ -759,12 +894,69 @@ fn handle_http_connection(
         return;
     }
 
+    if path == "/__events" {
+        let mut sse_headers = String::from(
+            "HTTP/1.1 200 OK\r\n\
+             Content-Type: text/event-stream\r\n\
+             Cache-Control: no-cache\r\n\
+             Connection: keep-alive\r\n",
+        );
+        if let Some(orig) = origin_header.as_deref() {
+            if orig.starts_with("http://127.0.0.1:") || orig.starts_with("http://localhost:") {
+                sse_headers.push_str(&format!("Access-Control-Allow-Origin: {}\r\n", orig));
+            }
+        }
+        sse_headers.push_str("\r\n");
+        if stream.write_all(sse_headers.as_bytes()).is_ok() {
+            let initial = b"event: connected\ndata: {\"status\":\"ready\"}\n\n";
+            let _ = stream.write_all(initial);
+            let _ = stream.flush();
+        }
+        return;
+    }
+
+    if let Some(cmd_encoded) = path.strip_prefix("/__ipc_bin/") {
+        let cmd = url_decode(cmd_encoded);
+        let header_val: Value = custom_header
+            .as_deref()
+            .and_then(|h| serde_json::from_str(h).ok())
+            .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+
+        match handler.handle_binary_command(&cmd, header_val, &body_bytes) {
+            Ok(bin_data) => {
+                let _ = write_http_response(
+                    &mut stream,
+                    200,
+                    "application/octet-stream",
+                    &bin_data,
+                    origin_header.as_deref(),
+                );
+            }
+            Err(err_msg) => {
+                let err_payload = serde_json::json!({
+                    "__ipc_ok": false,
+                    "__ipc_error": err_msg
+                });
+                let bytes = serde_json::to_vec(&err_payload).unwrap_or_default();
+                let _ = write_http_response(
+                    &mut stream,
+                    400,
+                    "application/json",
+                    &bytes,
+                    origin_header.as_deref(),
+                );
+            }
+        }
+        return;
+    }
+
     if path == "/__file" {
         serve_local_file(
             &mut stream,
             query_string,
             range_header.as_deref(),
             origin_header.as_deref(),
+            scoped_registry,
         );
         return;
     }
@@ -1310,6 +1502,7 @@ fn serve_local_file(
     query_string: &str,
     range_header: Option<&str>,
     origin: Option<&str>,
+    scoped_registry: &ScopedFileRegistry,
 ) {
     let mut target_path: Option<String> = None;
     for pair in query_string.split('&') {
@@ -1334,7 +1527,7 @@ fn serve_local_file(
 
     let clean_path = normalize_display_path(&raw_path);
 
-    // Defense-in-depth: Prohibit sensitive system, credential, and executable file paths
+    // Defense-in-depth Check 1: Prohibit sensitive system, credential, and executable file paths
     if !is_path_safe_for_serving(&clean_path) {
         let _ = write_http_response(
             stream,
@@ -1347,6 +1540,18 @@ fn serve_local_file(
     }
 
     let path_obj = Path::new(&clean_path);
+
+    // Defense-in-depth Check 2 (SEC-03): Capability allowlist verification
+    if !scoped_registry.is_allowed(path_obj) {
+        let _ = write_http_response(
+            stream,
+            403,
+            "text/plain",
+            b"Access denied: path not granted via dialog or workspace scope",
+            origin,
+        );
+        return;
+    }
     if !path_obj.exists() || !path_obj.is_file() {
         let _ = write_http_response(stream, 404, "text/plain", b"File not found", origin);
         return;
@@ -1462,6 +1667,7 @@ fn execute_self_test(
     bundle: &EmbeddedUiBundle,
     handler: &dyn DesktopIpcHandler,
     session_token: &str,
+    scoped_registry: &ScopedFileRegistry,
 ) -> Result<SelfTestReport, PlatformError> {
     // 1. Verify HTML endpoint over loopback TCP
     let (status_html, html_body) = loopback_http_request(port, "GET", "/", b"", None, &[])?;
@@ -1548,6 +1754,20 @@ fn execute_self_test(
         )));
     }
 
+    // Negative Security Gate: Scoped capability allowlist rejection (SEC-03)
+    let bad_unscoped_path = format!(
+        "/__file?path={}",
+        url_encode("C:\\arbitrary_forbidden_unscoped.txt")
+    );
+    let (status_unscoped, _) =
+        loopback_http_request(port, "GET", &bad_unscoped_path, b"", Some(session_token), &[])?;
+    if status_unscoped != 403 {
+        return Err(PlatformError::Unsupported(format!(
+            "ScopedFileRegistry capability gate check failed: unscoped path returned HTTP {} instead of expected 403 Forbidden",
+            status_unscoped
+        )));
+    }
+
     // 4. Positive Security Gate: Authenticated drive check
     let (status_auth_fs, _) =
         loopback_http_request(port, "POST", "/__fs/drives", b"", Some(session_token), &[])?;
@@ -1558,10 +1778,46 @@ fn execute_self_test(
         )));
     }
 
-    // 5. Verify HTTP Range Streaming (206 Partial Content & 416 Range Not Satisfiable)
+    // 5. Positive Security Gate: Binary fast-path echo check (ADR-003)
+    let test_bin_payload = b"AG_BINARY_FASTPATH_ECHO_TEST";
+    let (status_bin, bin_response) = loopback_http_request(
+        port,
+        "POST",
+        "/__ipc_bin/test_ping",
+        test_bin_payload,
+        Some(session_token),
+        &[("Content-Type", "application/octet-stream")],
+    )?;
+    if status_bin != 200 || bin_response != test_bin_payload {
+        return Err(PlatformError::Unsupported(format!(
+            "Binary fast-path IPC check failed: status={} len={}",
+            status_bin,
+            bin_response.len()
+        )));
+    }
+
+    // 6. Positive Security Gate: SSE Event stream handshake check (ADR-001)
+    let (status_events, events_body) = loopback_http_request(
+        port,
+        "GET",
+        "/__events",
+        b"",
+        Some(session_token),
+        &[],
+    )?;
+    if status_events != 200 || !events_body.starts_with(b"event: connected") {
+        return Err(PlatformError::Unsupported(format!(
+            "Event stream check failed: status={} body={}",
+            status_events,
+            String::from_utf8_lossy(&events_body)
+        )));
+    }
+
+    // 7. Verify HTTP Range Streaming (206 Partial Content & 416 Range Not Satisfiable)
     let temp_range_file = std::env::temp_dir().join(format!("ag_range_test_{}.dat", port));
     let sample_payload = vec![0x42u8; 4096];
     if std::fs::write(&temp_range_file, &sample_payload).is_ok() {
+        scoped_registry.allow_path(&temp_range_file);
         let test_path = temp_range_file.to_string_lossy().to_string();
         let range_path = format!("/__file?path={}", url_encode(&test_path));
 
