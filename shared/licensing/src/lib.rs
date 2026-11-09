@@ -4,7 +4,9 @@
 //! Provides zero-network-egress, Ed25519-signed offline license verification,
 //! granular per-app and suite licensing, feature gating, and license tier evaluation.
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+#[cfg(any(test, feature = "signing"))]
+use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -133,7 +135,9 @@ pub const OFFICIAL_VERIFYING_KEY_BYTES: [u8; 32] = [
     219, 151, 76, 247, 226, 93, 226, 123, 144, 45, 46,
 ];
 
-/// Official 32-byte Ed25519 signing seed used by release tooling and testing
+/// Official 32-byte Ed25519 signing seed used by release tooling and testing.
+/// Strictly gated behind test or explicit feature flag to prevent key material leakage in production builds.
+#[cfg(any(test, feature = "signing"))]
 pub const OFFICIAL_SIGNING_SEED: [u8; 32] = [
     0x72, 0x6e, 0x74, 0x67, 0x72, 0x61, 0x76, 0x69, 0x74, 0x79, 0x5f, 0x6f, 0x66, 0x66, 0x6c, 0x69,
     0x6e, 0x65, 0x5f, 0x6c, 0x69, 0x63, 0x65, 0x6e, 0x73, 0x65, 0x5f, 0x73, 0x65, 0x65, 0x64, 0x31,
@@ -226,11 +230,14 @@ pub struct LicenseParameters {
     pub features: Vec<String>,
 }
 
-/// Offline license minting authority for signing test and production licenses
+/// Offline license minting authority for signing test and production licenses.
+/// Gated behind test or explicit "signing" feature to isolate private keys from runtime binaries.
+#[cfg(any(test, feature = "signing"))]
 pub struct LicenseAuthority {
     signing_key: SigningKey,
 }
 
+#[cfg(any(test, feature = "signing"))]
 impl LicenseAuthority {
     /// Initialize with the official monorepo private seed
     pub fn official() -> Self {
@@ -449,6 +456,7 @@ impl LicensingManager {
     }
 }
 
+#[cfg(any(test, feature = "signing"))]
 fn bytes_to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }

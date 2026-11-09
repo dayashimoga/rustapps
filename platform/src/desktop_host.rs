@@ -541,6 +541,8 @@ fn handle_http_connection(
     let mut content_length: usize = 0;
     let mut range_header: Option<String> = None;
     let mut auth_token_header: Option<String> = None;
+    let mut origin_header: Option<String> = None;
+
     loop {
         let mut header_line = String::new();
         if reader.read_line(&mut header_line).is_err() {
@@ -563,20 +565,46 @@ fn handle_http_connection(
                 if let Some(bearer) = val.strip_prefix("Bearer ") {
                     auth_token_header = Some(bearer.trim().to_string());
                 }
+            } else if key.eq_ignore_ascii_case("origin") {
+                origin_header = Some(val.to_string());
             }
         }
-    }
-
-    let mut body_bytes = vec![0u8; content_length.min(32 * 1024 * 1024)];
-    if content_length > 0 {
-        let _ = reader.read_exact(&mut body_bytes);
     }
 
     last_heartbeat_ms.store(current_epoch_ms(), Ordering::SeqCst);
     client_connected.store(true, Ordering::SeqCst);
 
+    // Security Gate 1 (SEC-02): Block external cross-origin requests.
+    // Loopback host must only accept same-origin or explicit loopback origins (127.0.0.1 / localhost).
+    let is_valid_local_origin = match origin_header.as_deref() {
+        Some(orig) => {
+            orig.starts_with("http://127.0.0.1:")
+                || orig.starts_with("http://localhost:")
+                || orig.starts_with("tauri://")
+                || orig.starts_with("app://")
+                || orig.starts_with("antigravity://")
+        }
+        None => true,
+    };
+    if !is_valid_local_origin {
+        let _ = write_http_response(
+            &mut stream,
+            403,
+            "application/json",
+            b"{\"__ipc_ok\":false,\"__ipc_error\":\"Forbidden: Cross-origin request rejected\"}",
+            None,
+        );
+        return;
+    }
+
     if method == "OPTIONS" {
-        let _ = write_http_response(&mut stream, 200, "text/plain", b"OK");
+        let _ = write_http_response(
+            &mut stream,
+            200,
+            "text/plain",
+            b"OK",
+            origin_header.as_deref(),
+        );
         return;
     }
 
@@ -590,30 +618,66 @@ fn handle_http_connection(
         }
     }
 
+    // Security Gate 2 (SEC-04): Constant-time token verification to prevent timing attacks.
     let is_authenticated = auth_token_header
         .as_deref()
-        .map(|t| t == session_token)
-        .or_else(|| query_token.as_deref().map(|t| t == session_token))
+        .map(|t| constant_time_eq_token(t, session_token))
+        .or_else(|| {
+            query_token
+                .as_deref()
+                .map(|t| constant_time_eq_token(t, session_token))
+        })
         .unwrap_or(false);
 
-    // Cryptographic Loopback Security Gate: All internal operational routes require authentication
+    // Security Gate 3 (SEC-02 & SEC-05): Check authentication BEFORE allocating memory or reading body.
     if path.starts_with("/__") && !is_authenticated {
         let _ = write_http_response(
             &mut stream,
             403,
             "application/json",
             b"{\"__ipc_ok\":false,\"__ipc_error\":\"Forbidden: Invalid or missing X-Antigravity-Token\"}",
+            origin_header.as_deref(),
         );
         return;
     }
 
+    // Security Gate 4 (SEC-05): Prevent memory exhaustion DoS via oversized Content-Length.
+    const MAX_IPC_BODY_SIZE: usize = 8 * 1024 * 1024; // 8 MB max for JSON IPC
+    if content_length > MAX_IPC_BODY_SIZE {
+        let _ = write_http_response(
+            &mut stream,
+            413,
+            "application/json",
+            b"{\"__ipc_ok\":false,\"__ipc_error\":\"Payload Too Large\"}",
+            origin_header.as_deref(),
+        );
+        return;
+    }
+
+    let mut body_bytes = vec![0u8; content_length];
+    if content_length > 0 {
+        let _ = reader.read_exact(&mut body_bytes);
+    }
+
     if path == "/__heartbeat" {
-        let _ = write_http_response(&mut stream, 200, "application/json", b"{\"ok\":true}");
+        let _ = write_http_response(
+            &mut stream,
+            200,
+            "application/json",
+            b"{\"ok\":true}",
+            origin_header.as_deref(),
+        );
         return;
     }
 
     if path == "/__shutdown" {
-        let _ = write_http_response(&mut stream, 200, "application/json", b"{\"shutdown\":true}");
+        let _ = write_http_response(
+            &mut stream,
+            200,
+            "application/json",
+            b"{\"shutdown\":true}",
+            origin_header.as_deref(),
+        );
         shutdown_flag.store(true, Ordering::SeqCst);
         return;
     }
@@ -622,7 +686,13 @@ fn handle_http_connection(
         let entries = enumerate_drives_and_places();
         let payload = serde_json::json!({ "entries": entries });
         let bytes = serde_json::to_vec(&payload).unwrap_or_default();
-        let _ = write_http_response(&mut stream, 200, "application/json", &bytes);
+        let _ = write_http_response(
+            &mut stream,
+            200,
+            "application/json",
+            &bytes,
+            origin_header.as_deref(),
+        );
         return;
     }
 
@@ -649,7 +719,13 @@ fn handle_http_connection(
         let selected = invoke_native_open_dialog(title, is_dir, multiple, &opts);
         let payload = serde_json::json!({ "path": selected });
         let bytes = serde_json::to_vec(&payload).unwrap_or_default();
-        let _ = write_http_response(&mut stream, 200, "application/json", &bytes);
+        let _ = write_http_response(
+            &mut stream,
+            200,
+            "application/json",
+            &bytes,
+            origin_header.as_deref(),
+        );
         return;
     }
 
@@ -673,12 +749,23 @@ fn handle_http_connection(
         let selected = invoke_native_save_dialog(title, default_path, &opts);
         let payload = serde_json::json!({ "path": selected });
         let bytes = serde_json::to_vec(&payload).unwrap_or_default();
-        let _ = write_http_response(&mut stream, 200, "application/json", &bytes);
+        let _ = write_http_response(
+            &mut stream,
+            200,
+            "application/json",
+            &bytes,
+            origin_header.as_deref(),
+        );
         return;
     }
 
     if path == "/__file" {
-        serve_local_file(&mut stream, query_string, range_header.as_deref());
+        serve_local_file(
+            &mut stream,
+            query_string,
+            range_header.as_deref(),
+            origin_header.as_deref(),
+        );
         return;
     }
 
@@ -698,7 +785,13 @@ fn handle_http_connection(
                     "__ipc_data": data
                 });
                 let bytes = serde_json::to_vec(&envelope).unwrap_or_default();
-                let _ = write_http_response(&mut stream, 200, "application/json", &bytes);
+                let _ = write_http_response(
+                    &mut stream,
+                    200,
+                    "application/json",
+                    &bytes,
+                    origin_header.as_deref(),
+                );
             }
             Err(err_msg) => {
                 let envelope = serde_json::json!({
@@ -706,7 +799,13 @@ fn handle_http_connection(
                     "__ipc_error": err_msg
                 });
                 let bytes = serde_json::to_vec(&envelope).unwrap_or_default();
-                let _ = write_http_response(&mut stream, 400, "application/json", &bytes);
+                let _ = write_http_response(
+                    &mut stream,
+                    400,
+                    "application/json",
+                    &bytes,
+                    origin_header.as_deref(),
+                );
             }
         }
         return;
@@ -719,6 +818,7 @@ fn handle_http_connection(
                 200,
                 "text/html; charset=utf-8",
                 index_html.as_bytes(),
+                origin_header.as_deref(),
             );
         }
         "/assets/app.js" => {
@@ -727,14 +827,26 @@ fn handle_http_connection(
                 200,
                 "application/javascript; charset=utf-8",
                 bundle.app_js,
+                origin_header.as_deref(),
             );
         }
         "/assets/app.css" => {
-            let _ =
-                write_http_response(&mut stream, 200, "text/css; charset=utf-8", bundle.app_css);
+            let _ = write_http_response(
+                &mut stream,
+                200,
+                "text/css; charset=utf-8",
+                bundle.app_css,
+                origin_header.as_deref(),
+            );
         }
         "/favicon.ico" => {
-            let _ = write_http_response(&mut stream, 204, "image/x-icon", b"");
+            let _ = write_http_response(
+                &mut stream,
+                204,
+                "image/x-icon",
+                b"",
+                origin_header.as_deref(),
+            );
         }
         _ => {
             // SPA fallback to index.html
@@ -743,9 +855,65 @@ fn handle_http_connection(
                 200,
                 "text/html; charset=utf-8",
                 index_html.as_bytes(),
+                origin_header.as_deref(),
             );
         }
     }
+}
+
+fn constant_time_eq_token(a: &str, b: &str) -> bool {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    if a_bytes.len() != b_bytes.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&x, &y) in a_bytes.iter().zip(b_bytes.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+fn is_path_safe_for_serving(clean_path: &str) -> bool {
+    if clean_path.contains("..") || clean_path.contains('\0') {
+        return false;
+    }
+    let lower = clean_path.to_ascii_lowercase().replace('\\', "/");
+    if lower.contains("/.ssh/")
+        || lower.ends_with("/.ssh")
+        || lower.contains("/.gnupg/")
+        || lower.ends_with("/.gnupg")
+        || lower.contains("/.aws/")
+        || lower.contains("/.azure/")
+        || lower.contains("/.kube/")
+        || lower.contains("/.docker/")
+        || lower.contains("/.env")
+        || lower.contains("/etc/shadow")
+        || lower.contains("/etc/passwd")
+        || lower.contains("/etc/sudoers")
+        || lower.contains("/system32/config")
+        || lower.ends_with("/sam")
+        || lower.ends_with("/system")
+        || lower.ends_with("/security")
+        || lower.ends_with(".key")
+        || lower.ends_with(".pem")
+        || lower.ends_with(".pfx")
+        || lower.ends_with(".p12")
+    {
+        return false;
+    }
+    if lower.ends_with(".exe")
+        || lower.ends_with(".dll")
+        || lower.ends_with(".sys")
+        || lower.ends_with(".bat")
+        || lower.ends_with(".cmd")
+        || lower.ends_with(".ps1")
+        || lower.ends_with(".vbs")
+        || lower.ends_with(".scr")
+    {
+        return false;
+    }
+    true
 }
 
 fn write_http_response(
@@ -753,6 +921,7 @@ fn write_http_response(
     status: u16,
     content_type: &str,
     body: &[u8],
+    origin: Option<&str>,
 ) -> std::io::Result<()> {
     let status_text = match status {
         200 => "OK",
@@ -761,15 +930,28 @@ fn write_http_response(
         400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
+        413 => "Payload Too Large",
         416 => "Range Not Satisfiable",
         _ => "Internal Server Error",
     };
+
+    let mut cors_headers = String::new();
+    if let Some(orig) = origin {
+        if orig.starts_with("http://127.0.0.1:") || orig.starts_with("http://localhost:") {
+            cors_headers = format!(
+                "Access-Control-Allow-Origin: {}\r\nVary: Origin\r\nAccess-Control-Allow-Headers: Content-Type, X-Antigravity-Token, Authorization, Range\r\nAccess-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\n",
+                orig
+            );
+        }
+    }
+
     let header = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type, X-Antigravity-Token, Authorization, Range\r\nAccess-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\n{}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
         status,
         status_text,
         content_type,
-        body.len()
+        body.len(),
+        cors_headers
     );
     stream.write_all(header.as_bytes())?;
     stream.write_all(body)?;
@@ -1123,7 +1305,12 @@ fn mime_type_for_path(path: &Path) -> &'static str {
     }
 }
 
-fn serve_local_file(stream: &mut TcpStream, query_string: &str, range_header: Option<&str>) {
+fn serve_local_file(
+    stream: &mut TcpStream,
+    query_string: &str,
+    range_header: Option<&str>,
+    origin: Option<&str>,
+) {
     let mut target_path: Option<String> = None;
     for pair in query_string.split('&') {
         if let Some((k, v)) = pair.split_once('=') {
@@ -1135,21 +1322,40 @@ fn serve_local_file(stream: &mut TcpStream, query_string: &str, range_header: Op
     }
 
     let Some(raw_path) = target_path else {
-        let _ = write_http_response(stream, 400, "text/plain", b"Missing path query parameter");
+        let _ = write_http_response(
+            stream,
+            400,
+            "text/plain",
+            b"Missing path query parameter",
+            origin,
+        );
         return;
     };
 
     let clean_path = normalize_display_path(&raw_path);
+
+    // Defense-in-depth: Prohibit sensitive system, credential, and executable file paths
+    if !is_path_safe_for_serving(&clean_path) {
+        let _ = write_http_response(
+            stream,
+            403,
+            "text/plain",
+            b"Access denied: protected or sensitive file path",
+            origin,
+        );
+        return;
+    }
+
     let path_obj = Path::new(&clean_path);
     if !path_obj.exists() || !path_obj.is_file() {
-        let _ = write_http_response(stream, 404, "text/plain", b"File not found");
+        let _ = write_http_response(stream, 404, "text/plain", b"File not found", origin);
         return;
     }
 
     let mut file = match File::open(path_obj) {
         Ok(f) => f,
         Err(_) => {
-            let _ = write_http_response(stream, 404, "text/plain", b"Cannot open file");
+            let _ = write_http_response(stream, 404, "text/plain", b"Cannot open file", origin);
             return;
         }
     };
@@ -1157,25 +1363,35 @@ fn serve_local_file(stream: &mut TcpStream, query_string: &str, range_header: Op
     let total_size = match file.metadata() {
         Ok(m) => m.len(),
         Err(_) => {
-            let _ = write_http_response(stream, 500, "text/plain", b"Metadata error");
+            let _ = write_http_response(stream, 500, "text/plain", b"Metadata error", origin);
             return;
         }
     };
 
     let content_type = mime_type_for_path(path_obj);
 
+    let mut cors_headers = String::new();
+    if let Some(orig) = origin {
+        if orig.starts_with("http://127.0.0.1:") || orig.starts_with("http://localhost:") {
+            cors_headers = format!(
+                "Access-Control-Allow-Origin: {}\r\nVary: Origin\r\nAccess-Control-Allow-Headers: Content-Type, X-Antigravity-Token, Authorization, Range\r\nAccess-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length\r\n",
+                orig
+            );
+        }
+    }
+
     if let Some(range_str) = range_header {
         match parse_byte_range(range_str, total_size) {
             Some(Ok((start, end))) => {
                 let length = end - start + 1;
                 if file.seek(SeekFrom::Start(start)).is_err() {
-                    let _ = write_http_response(stream, 500, "text/plain", b"Seek error");
+                    let _ = write_http_response(stream, 500, "text/plain", b"Seek error", origin);
                     return;
                 }
 
                 let header = format!(
-                    "HTTP/1.1 206 Partial Content\r\nContent-Type: {}\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type, X-Antigravity-Token, Authorization, Range\r\nAccess-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-                    content_type, length, start, end, total_size
+                    "HTTP/1.1 206 Partial Content\r\nContent-Type: {}\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\n{}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+                    content_type, length, start, end, total_size, cors_headers
                 );
                 if stream.write_all(header.as_bytes()).is_err() {
                     return;
@@ -1201,8 +1417,8 @@ fn serve_local_file(stream: &mut TcpStream, query_string: &str, range_header: Op
             }
             Some(Err(())) => {
                 let header = format!(
-                    "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{}\r\nContent-Type: text/plain\r\nContent-Length: 0\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-                    total_size
+                    "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{}\r\nContent-Type: text/plain\r\nContent-Length: 0\r\nAccept-Ranges: bytes\r\n{}Connection: close\r\n\r\n",
+                    total_size, cors_headers
                 );
                 let _ = stream.write_all(header.as_bytes());
                 let _ = stream.flush();
@@ -1216,8 +1432,8 @@ fn serve_local_file(stream: &mut TcpStream, query_string: &str, range_header: Op
 
     // Standard streaming full-file response using 64 KB stack buffer
     let header = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type, X-Antigravity-Token, Authorization, Range\r\nAccess-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-        content_type, total_size
+        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\n{}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+        content_type, total_size, cors_headers
     );
     if stream.write_all(header.as_bytes()).is_err() {
         return;
@@ -1299,6 +1515,36 @@ fn execute_self_test(
         return Err(PlatformError::Unsupported(format!(
             "Loopback security gate check failed: invalid token /__fs/drives returned HTTP {} instead of expected 403 Forbidden",
             status_bad_token
+        )));
+    }
+
+    // Negative Security Gate: Cross-origin request rejection (SEC-02)
+    let (status_cross_origin, _) = loopback_http_request(
+        port,
+        "POST",
+        "/__fs/drives",
+        b"",
+        Some(session_token),
+        &[("Origin", "https://malicious-website.com")],
+    )?;
+    if status_cross_origin != 403 {
+        return Err(PlatformError::Unsupported(format!(
+            "Cross-origin security gate failed: Origin https://malicious-website.com returned HTTP {} instead of expected 403 Forbidden",
+            status_cross_origin
+        )));
+    }
+
+    // Negative Security Gate: Sensitive path traversal rejection (SEC-03)
+    let bad_path = format!(
+        "/__file?path={}",
+        url_encode("C:\\Windows\\System32\\config\\SAM")
+    );
+    let (status_sensitive, _) =
+        loopback_http_request(port, "GET", &bad_path, b"", Some(session_token), &[])?;
+    if status_sensitive != 403 {
+        return Err(PlatformError::Unsupported(format!(
+            "Sensitive path protection check failed: accessing sensitive path returned HTTP {} instead of expected 403 Forbidden",
+            status_sensitive
         )));
     }
 
@@ -1449,6 +1695,14 @@ fn loopback_http_request(
 
     let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(0);
     let header_str = String::from_utf8_lossy(&raw[..header_end]);
+
+    // Security Gate Assertion (SEC-02): Loopback responses must never emit wildcard CORS
+    if header_str.contains("Access-Control-Allow-Origin: *") {
+        return Err(PlatformError::Unsupported(
+            "CORS policy violation: server returned wildcard Access-Control-Allow-Origin: *"
+                .to_string(),
+        ));
+    }
     let status = header_str
         .lines()
         .next()
