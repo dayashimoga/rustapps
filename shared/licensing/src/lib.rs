@@ -49,6 +49,7 @@ pub enum AppId {
     QrCodeStudio,
     CleanRoomRedactor,
     LocalDataSynthesizer,
+    SbomSupplyChainAuditor,
     AllAppsSuite,
 }
 
@@ -76,6 +77,7 @@ impl AppId {
             AppId::QrCodeStudio => "qr-code-studio",
             AppId::CleanRoomRedactor => "clean-room-redactor",
             AppId::LocalDataSynthesizer => "local-data-synthesizer",
+            AppId::SbomSupplyChainAuditor => "sbom-supply-chain-auditor",
             AppId::AllAppsSuite => "all-apps-suite",
         }
     }
@@ -120,6 +122,9 @@ impl AppId {
             }
             "local-data-synthesizer" | "localdatasynthesizer" | "synthesizer" | "synth" => {
                 Some(AppId::LocalDataSynthesizer)
+            }
+            "sbom-supply-chain-auditor" | "sbomauditor" | "sbom" => {
+                Some(AppId::SbomSupplyChainAuditor)
             }
             "all" | "all-apps" | "suite" | "all-apps-suite" | "allappssuite" => {
                 Some(AppId::AllAppsSuite)

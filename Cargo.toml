@@ -30,6 +30,7 @@ members = [
     "apps/qr-code-studio",
     "apps/clean-room-redactor",
     "apps/local-data-synthesizer",
+    "apps/sbom-supply-chain-auditor",
     "tools/license-signer",
     "tests",
     "benchmarks",
