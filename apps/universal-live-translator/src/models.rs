@@ -531,6 +531,22 @@ pub enum SubtitleFormat {
     Vtt,
 }
 
+/// Options for formatting bilingual subtitles
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BilingualSubtitleOptions {
+    pub format: SubtitleFormat,
+    pub primary_top: bool,
+}
+
+impl Default for BilingualSubtitleOptions {
+    fn default() -> Self {
+        Self {
+            format: SubtitleFormat::Srt,
+            primary_top: true,
+        }
+    }
+}
+
 /// Single document item for batch translation (.txt, .md, .srt, .vtt)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BatchDocumentItem {
@@ -550,6 +566,42 @@ pub struct BatchTranslationResult {
     pub elapsed_ms: f64,
     pub success: bool,
     pub error: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Meeting Translation Mode (System Loopback & Ephemeral Zero-Retention)
+// ---------------------------------------------------------------------------
+
+/// Configuration for a live audio meeting translation session
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeetingSessionConfig {
+    pub session_id: String,
+    pub title: Option<String>,
+    pub source_lang: Option<LanguageCode>,
+    pub target_lang: LanguageCode,
+    pub zero_retention_mode: bool,
+    pub domain_glossary: Option<String>,
+}
+
+/// A transcribed and translated speech entry within a meeting
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeetingTranscriptEntry {
+    pub id: usize,
+    pub timestamp_ms: u64,
+    pub speaker: String,
+    pub source_text: String,
+    pub translated_text: String,
+    pub confidence: f32,
+}
+
+/// Meeting session snapshot
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeetingSessionState {
+    pub config: MeetingSessionConfig,
+    pub created_at_secs: u64,
+    pub updated_at_secs: u64,
+    pub entries: Vec<MeetingTranscriptEntry>,
+    pub is_active: bool,
 }
 
 // ---------------------------------------------------------------------------

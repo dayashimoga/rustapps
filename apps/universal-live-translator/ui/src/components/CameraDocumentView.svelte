@@ -31,6 +31,8 @@
   let subtitleFormat: 'srt' | 'vtt' | 'md' | 'txt' = 'srt';
   let translatedSubtitles: string = '';
   let isTranslatingSubs: boolean = false;
+  let isBilingualSubtitles: boolean = false;
+  let bilingualPrimaryTop: boolean = true;
   let copySubSuccess: boolean = false;
   let isDocDragOver: boolean = false;
   let parsedCuesPreview: Array<{ index: number; time: string; original: string; translated: string }> = [];
@@ -338,12 +340,14 @@
     isTranslatingSubs = true;
     try {
       if (subtitleFormat === 'srt' || subtitleFormat === 'vtt') {
-        const res = await tauriInvoke<string>('translate_subtitles_cmd', {
+        const cmd = isBilingualSubtitles ? 'translate_subtitles_bilingual_cmd' : 'translate_subtitles_cmd';
+        const res = await tauriInvoke<string>(cmd, {
           content: subtitleContent,
           formatStr: subtitleFormat,
           sourceLangStr: null,
           targetLangStr: targetLang,
           domainGlossary: domainGlossary || null,
+          primaryTop: bilingualPrimaryTop,
         });
         translatedSubtitles = res;
         updateCuesPreview(subtitleContent, res);
@@ -683,6 +687,15 @@
               </button>
             </div>
           </div>
+
+          {#if subtitleFormat === 'srt' || subtitleFormat === 'vtt'}
+            <div class="bilingual-opt-row">
+              <label class="bilingual-toggle-label" title="Render both original and translated lines simultaneously">
+                <input type="checkbox" bind:checked={isBilingualSubtitles} />
+                <span>🌐 Bilingual Subtitles (Dual-Language)</span>
+              </label>
+            </div>
+          {/if}
 
           <button
             type="button"
@@ -1249,6 +1262,24 @@
     background: rgba(56, 189, 248, 0.18);
     color: var(--accent-cyan);
     font-weight: 600;
+  }
+
+  .bilingual-opt-row {
+    display: flex;
+    align-items: center;
+  }
+
+  .bilingual-toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    color: var(--accent-cyan);
+    cursor: pointer;
+    background: rgba(56, 189, 248, 0.08);
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(56, 189, 248, 0.25);
   }
 
   .translate-sub-btn {

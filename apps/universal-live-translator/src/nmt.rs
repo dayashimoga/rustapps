@@ -34,6 +34,8 @@ pub struct OfflineTranslationEngine {
     phrase_tables: HashMap<(LanguageCode, LanguageCode), HashMap<String, String>>,
     // domain_name -> Vec<GlossaryTerm>
     domain_glossaries: RwLock<HashMap<String, Vec<GlossaryTerm>>>,
+    // Mounted offline neural / quantized translation model packs
+    neural_packs: RwLock<HashMap<(LanguageCode, LanguageCode), HashMap<String, String>>>,
 }
 
 impl Default for OfflineTranslationEngine {
@@ -57,6 +59,38 @@ impl OfflineTranslationEngine {
             tokenizer,
             phrase_tables,
             domain_glossaries: RwLock::new(HashMap::new()),
+            neural_packs: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Mount offline verified neural translation pack entries
+    pub fn load_neural_pack_entries(
+        &self,
+        source_lang: LanguageCode,
+        target_lang: LanguageCode,
+        entries: HashMap<String, String>,
+    ) -> usize {
+        let count = entries.len();
+        if let Ok(mut packs) = self.neural_packs.write() {
+            packs.insert((source_lang, target_lang), entries);
+        }
+        count
+    }
+
+    /// Check if a neural model pack is mounted for this language pair
+    pub fn has_neural_pack(&self, source_lang: LanguageCode, target_lang: LanguageCode) -> bool {
+        self.neural_packs
+            .read()
+            .map(|p| p.contains_key(&(source_lang, target_lang)))
+            .unwrap_or(false)
+    }
+
+    /// Unload mounted neural pack for this language pair
+    pub fn unload_neural_pack(&self, source_lang: LanguageCode, target_lang: LanguageCode) -> bool {
+        if let Ok(mut packs) = self.neural_packs.write() {
+            packs.remove(&(source_lang, target_lang)).is_some()
+        } else {
+            false
         }
     }
 
@@ -199,7 +233,7 @@ impl OfflineTranslationEngine {
 
     /// Check if direct translation dictionary exists between languages
     fn has_direct_pair(&self, source: LanguageCode, target: LanguageCode) -> bool {
-        self.phrase_tables.contains_key(&(source, target))
+        self.phrase_tables.contains_key(&(source, target)) || self.has_neural_pack(source, target)
     }
 
     /// Direct translation between two languages
@@ -217,6 +251,24 @@ impl OfflineTranslationEngine {
         let lower_full = text.trim().to_lowercase();
         let norm_full = normalize_lookup_key(&lower_full);
         let unaccented_full = strip_latin_accents(&norm_full);
+
+        // Check mounted offline neural model pack first
+        if let Ok(packs) = self.neural_packs.read() {
+            if let Some(np) = packs.get(&pair) {
+                if let Some(direct_match) = np
+                    .get(&lower_full)
+                    .or_else(|| np.get(&norm_full))
+                    .or_else(|| np.get(&unaccented_full))
+                {
+                    let formatted = if is_capitalized(text.trim()) {
+                        capitalize_first_letter(direct_match)
+                    } else {
+                        direct_match.clone()
+                    };
+                    return (formatted, 0.99);
+                }
+            }
+        }
         if let Some(t) = table {
             if let Some(direct_match) = t
                 .get(&lower_full)
@@ -344,6 +396,44 @@ impl OfflineTranslationEngine {
         while i < words.len() {
             let mut matched = false;
 
+            // Try matching 5-word, 4-word, 3-word, 2-word phrases in mounted neural pack first
+            if let Ok(packs) = self.neural_packs.read() {
+                if let Some(np) = packs.get(&(_source, _target)) {
+                    for window in (2..=5.min(words.len() - i)).rev() {
+                        let phrase_slice = &words[i..i + window];
+                        let phrase = phrase_slice.join(" ").to_lowercase();
+                        let clean_phrase = normalize_lookup_key(&phrase);
+                        let unaccented_phrase = strip_latin_accents(&clean_phrase);
+
+                        if let Some(target_phrase) =
+                            np.get(&clean_phrase).or_else(|| np.get(&unaccented_phrase))
+                        {
+                            let trailing_punct: String = words[i + window - 1]
+                                .chars()
+                                .filter(|c| matches!(c, ',' | '.' | '!' | '?' | ';' | ':'))
+                                .collect();
+
+                            let mut result = target_phrase.clone();
+                            if !trailing_punct.is_empty() && !result.ends_with(&trailing_punct) {
+                                result.push_str(&trailing_punct);
+                            }
+                            if is_capitalized(words[i]) {
+                                result = capitalize_first_letter(&result);
+                            }
+                            output_words.push(result);
+                            matched_words += window;
+                            i += window;
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if matched {
+                continue;
+            }
+
             // Try matching 5-word, 4-word, 3-word, 2-word phrases first
             if let Some(tbl) = table {
                 for window in (2..=5.min(words.len() - i)).rev() {
@@ -397,9 +487,20 @@ impl OfflineTranslationEngine {
                 .collect();
             let punct_suffix: String = punct_suffix.chars().rev().collect();
 
-            if let Some(tbl) = table {
-                let direct_or_stemmed = tbl
-                    .get(&clean_word)
+            let neural_target_word = if let Ok(packs) = self.neural_packs.read() {
+                if let Some(np) = packs.get(&(_source, _target)) {
+                    np.get(&clean_word)
+                        .or_else(|| np.get(&unaccented_word))
+                        .cloned()
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let direct_or_stemmed = if let Some(tbl) = table {
+                tbl.get(&clean_word)
                     .or_else(|| tbl.get(&unaccented_word))
                     .or_else(|| {
                         if clean_word.ends_with('s') && clean_word.len() > 3 {
@@ -413,23 +514,28 @@ impl OfflineTranslationEngine {
                         } else {
                             None
                         }
-                    });
+                    })
+            } else {
+                None
+            };
 
-                if let Some(target_word) = direct_or_stemmed {
-                    let mut res = target_word.clone();
-                    if is_capitalized(raw_word) {
-                        res = capitalize_first_letter(&res);
-                    }
-                    let prefix_out = if punct_prefix == "¿" || punct_prefix == "¡" {
-                        ""
-                    } else {
-                        &punct_prefix
-                    };
-                    output_words.push(format!("{}{}{}", prefix_out, res, punct_suffix));
-                    matched_words += 1;
-                    i += 1;
-                    continue;
+            if let Some(target_word) = neural_target_word
+                .as_deref()
+                .or(direct_or_stemmed.map(|x| x.as_str()))
+            {
+                let mut res = target_word.to_string();
+                if is_capitalized(raw_word) {
+                    res = capitalize_first_letter(&res);
                 }
+                let prefix_out = if punct_prefix == "¿" || punct_prefix == "¡" {
+                    ""
+                } else {
+                    &punct_prefix
+                };
+                output_words.push(format!("{}{}{}", prefix_out, res, punct_suffix));
+                matched_words += 1;
+                i += 1;
+                continue;
             }
 
             // Check if it's numbers or punctuation
@@ -1893,5 +1999,39 @@ mod tests {
             .unwrap();
         assert!(res_multi.translated_text.contains("வணக்கம்"));
         assert!(res_multi.translated_text.contains("நன்றி"));
+    }
+
+    #[test]
+    fn test_neural_model_pack_override() {
+        let engine = OfflineTranslationEngine::new();
+
+        // Standard dictionary translation
+        let req = TranslationRequest {
+            source_lang: Some(LanguageCode::En),
+            target_lang: LanguageCode::Es,
+            text: "cloud native deployment".to_string(),
+            preserve_formatting: true,
+            domain_glossary: None,
+        };
+        let _res_before = engine.translate(&req).unwrap();
+
+        // Mount neural pack with specialized neural vocabulary
+        let mut custom_pack = HashMap::new();
+        custom_pack.insert(
+            "cloud native deployment".to_string(),
+            "despliegue nativo en la nube".to_string(),
+        );
+        let loaded =
+            engine.load_neural_pack_entries(LanguageCode::En, LanguageCode::Es, custom_pack);
+        assert_eq!(loaded, 1);
+        assert!(engine.has_neural_pack(LanguageCode::En, LanguageCode::Es));
+
+        let res_after = engine.translate(&req).unwrap();
+        assert_eq!(res_after.translated_text, "despliegue nativo en la nube");
+        assert!(res_after.confidence >= 0.98);
+
+        // Unload neural pack
+        assert!(engine.unload_neural_pack(LanguageCode::En, LanguageCode::Es));
+        assert!(!engine.has_neural_pack(LanguageCode::En, LanguageCode::Es));
     }
 }

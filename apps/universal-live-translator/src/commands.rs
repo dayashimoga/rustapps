@@ -5,7 +5,8 @@
 
 use crate::models::{
     BatchDocumentItem, BatchTranslationResult, CameraTranslationResult, ConversationSession,
-    ConversationTurn, GlossaryTerm, LanguageCode, PhraseCategory, PhrasebookItem, SubtitleFormat,
+    ConversationTurn, GlossaryTerm, LanguageCode, LanguagePackInfo, MeetingSessionConfig,
+    MeetingSessionState, MeetingTranscriptEntry, PhraseCategory, PhrasebookItem, SubtitleFormat,
     TranslationRequest, TranslationResponse, TtsSynthesisRequest, TtsSynthesisResponse,
 };
 use crate::service::TranslatorService;
@@ -150,6 +151,130 @@ pub fn translate_subtitles_cmd(
         domain_glossary.as_deref(),
     )
     .map_err(|e| e.to_string())
+}
+
+/// Bilingual subtitle translation command (.srt or .vtt)
+pub fn translate_subtitles_bilingual_cmd(
+    content: String,
+    format_str: String,
+    source_lang_str: Option<String>,
+    target_lang_str: String,
+    domain_glossary: Option<String>,
+    primary_top: bool,
+) -> Result<String, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+
+    let format = match format_str.to_lowercase().as_str() {
+        "vtt" => SubtitleFormat::Vtt,
+        _ => SubtitleFormat::Srt,
+    };
+
+    let source_lang = source_lang_str.and_then(|s| LanguageCode::parse(&s));
+    let target_lang = LanguageCode::parse(&target_lang_str).unwrap_or(LanguageCode::Es);
+
+    svc.translate_subtitle_content_bilingual(
+        &content,
+        format,
+        source_lang,
+        target_lang,
+        domain_glossary.as_deref(),
+        primary_top,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Start live meeting session command
+pub fn start_meeting_session_cmd(
+    session_id: String,
+    title: Option<String>,
+    source_lang_str: Option<String>,
+    target_lang_str: String,
+    zero_retention_mode: bool,
+    domain_glossary: Option<String>,
+) -> Result<MeetingSessionState, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+
+    let source_lang = source_lang_str.and_then(|s| LanguageCode::parse(&s));
+    let target_lang = LanguageCode::parse(&target_lang_str).unwrap_or(LanguageCode::Es);
+
+    let config = MeetingSessionConfig {
+        session_id,
+        title,
+        source_lang,
+        target_lang,
+        zero_retention_mode,
+        domain_glossary,
+    };
+
+    Ok(svc.start_meeting_session(config))
+}
+
+/// Feed audio PCM chunk to meeting session
+pub fn feed_meeting_audio_cmd(
+    session_id: String,
+    speaker: String,
+    pcm: Vec<f32>,
+    timestamp_ms: u64,
+) -> Result<Option<MeetingTranscriptEntry>, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+
+    svc.feed_meeting_audio_chunk(&session_id, &speaker, &pcm, timestamp_ms)
+        .map_err(|e| e.to_string())
+}
+
+/// Retrieve meeting session transcript
+pub fn get_meeting_transcript_cmd(
+    session_id: String,
+) -> Result<Option<MeetingSessionState>, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+
+    Ok(svc.get_meeting_transcript(&session_id))
+}
+
+/// End meeting session and optionally export subtitles
+pub fn end_meeting_session_cmd(
+    session_id: String,
+    export_subtitles: bool,
+    format_str: Option<String>,
+    bilingual: bool,
+) -> Result<Option<String>, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+
+    let format = format_str.map(|s| match s.to_lowercase().as_str() {
+        "vtt" => SubtitleFormat::Vtt,
+        _ => SubtitleFormat::Srt,
+    });
+
+    svc.end_meeting_session(&session_id, export_subtitles, format, bilingual)
+        .map_err(|e| e.to_string())
+}
+
+/// List available offline AI model packs
+pub fn list_model_packs_cmd() -> Result<Vec<LanguagePackInfo>, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+
+    Ok(svc.list_available_model_packs())
+}
+
+/// Mount neural model pack entries into translation engine
+pub fn mount_neural_pack_cmd(
+    source_code: String,
+    target_code: String,
+    vocabulary: std::collections::HashMap<String, String>,
+) -> Result<usize, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+
+    let src = LanguageCode::parse(&source_code).ok_or("Invalid source language code")?;
+    let tgt = LanguageCode::parse(&target_code).ok_or("Invalid target language code")?;
+
+    Ok(svc.mount_neural_pack_entries(src, tgt, vocabulary))
 }
 
 /// Document translation command (.md or .txt)
@@ -585,6 +710,197 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
                 domain_glossary,
             )?;
             Ok(json!(res))
+        }
+        "translate_subtitles_bilingual_cmd" | "export_bilingual_subtitles" => {
+            let content = args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let format_str = args
+                .get("formatStr")
+                .or_else(|| args.get("format_str"))
+                .or_else(|| args.get("format"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("srt")
+                .to_string();
+            let source_lang_str = args
+                .get("sourceLangStr")
+                .or_else(|| args.get("source_lang_str"))
+                .or_else(|| args.get("sourceLang"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let target_lang_str = args
+                .get("targetLangStr")
+                .or_else(|| args.get("target_lang_str"))
+                .or_else(|| args.get("targetLang"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("es")
+                .to_string();
+            let domain_glossary = args
+                .get("domainGlossary")
+                .or_else(|| args.get("domain_glossary"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let primary_top = args
+                .get("primaryTop")
+                .or_else(|| args.get("primary_top"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let res = translate_subtitles_bilingual_cmd(
+                content,
+                format_str,
+                source_lang_str,
+                target_lang_str,
+                domain_glossary,
+                primary_top,
+            )?;
+            Ok(json!(res))
+        }
+        "start_meeting_session_cmd" | "start_meeting_session" => {
+            let session_id = args
+                .get("sessionId")
+                .or_else(|| args.get("session_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| {
+                    format!(
+                        "meet-{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                    )
+                });
+            let title = args
+                .get("title")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let source_lang_str = args
+                .get("sourceLangStr")
+                .or_else(|| args.get("source_lang_str"))
+                .or_else(|| args.get("sourceLang"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let target_lang_str = args
+                .get("targetLangStr")
+                .or_else(|| args.get("target_lang_str"))
+                .or_else(|| args.get("targetLang"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("es")
+                .to_string();
+            let zero_retention_mode = args
+                .get("zeroRetentionMode")
+                .or_else(|| args.get("zero_retention_mode"))
+                .or_else(|| args.get("zeroRetention"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let domain_glossary = args
+                .get("domainGlossary")
+                .or_else(|| args.get("domain_glossary"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let res = start_meeting_session_cmd(
+                session_id,
+                title,
+                source_lang_str,
+                target_lang_str,
+                zero_retention_mode,
+                domain_glossary,
+            )?;
+            Ok(json!(res))
+        }
+        "feed_meeting_audio_cmd" | "feed_meeting_audio" => {
+            let session_id = args
+                .get("sessionId")
+                .or_else(|| args.get("session_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let speaker = args
+                .get("speaker")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Speaker")
+                .to_string();
+            let timestamp_ms = args
+                .get("timestampMs")
+                .or_else(|| args.get("timestamp_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let pcm: Vec<f32> = args
+                .get("pcm")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .map(|x| x.as_f64().unwrap_or(0.0) as f32)
+                        .collect()
+                })
+                .unwrap_or_else(|| vec![0.35f32; 8000]);
+            let res = feed_meeting_audio_cmd(session_id, speaker, pcm, timestamp_ms)?;
+            Ok(json!(res))
+        }
+        "get_meeting_transcript_cmd" | "get_meeting_transcript" => {
+            let session_id = args
+                .get("sessionId")
+                .or_else(|| args.get("session_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let res = get_meeting_transcript_cmd(session_id)?;
+            Ok(json!(res))
+        }
+        "end_meeting_session_cmd" | "end_meeting_session" => {
+            let session_id = args
+                .get("sessionId")
+                .or_else(|| args.get("session_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let export_subtitles = args
+                .get("exportSubtitles")
+                .or_else(|| args.get("export_subtitles"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let format_str = args
+                .get("formatStr")
+                .or_else(|| args.get("format_str"))
+                .or_else(|| args.get("format"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let bilingual = args
+                .get("bilingual")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let res = end_meeting_session_cmd(session_id, export_subtitles, format_str, bilingual)?;
+            Ok(json!(res))
+        }
+        "list_model_packs_cmd" | "list_model_packs" => {
+            let res = list_model_packs_cmd()?;
+            Ok(json!(res))
+        }
+        "mount_neural_pack_cmd" | "mount_neural_pack" => {
+            let source_code = args
+                .get("sourceCode")
+                .or_else(|| args.get("source_code"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("en")
+                .to_string();
+            let target_code = args
+                .get("targetCode")
+                .or_else(|| args.get("target_code"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("es")
+                .to_string();
+            let mut vocab = std::collections::HashMap::new();
+            if let Some(obj) = args.get("vocabulary").and_then(|v| v.as_object()) {
+                for (k, v) in obj {
+                    if let Some(val_str) = v.as_str() {
+                        vocab.insert(k.clone(), val_str.to_string());
+                    }
+                }
+            }
+            let res = mount_neural_pack_cmd(source_code, target_code, vocab)?;
+            Ok(json!({ "mountedCount": res }))
         }
         "translate_document_cmd" => {
             let content = args
@@ -1102,5 +1418,92 @@ mod tests {
         let err = dispatch_ipc_command("activate_license", json!({ "license_json": forged_json }))
             .unwrap_err();
         assert!(err.contains("signature") || err.contains("InvalidSignature"));
+    }
+
+    #[test]
+    fn test_meeting_and_bilingual_subtitles_ipc_commands() {
+        // 1. Bilingual Subtitle Translation IPC
+        let srt_sub = "1\n00:00:01,000 --> 00:00:03,000\nHello world\n\n";
+        let bi_val = dispatch_ipc_command(
+            "translate_subtitles_bilingual_cmd",
+            json!({
+                "content": srt_sub,
+                "formatStr": "srt",
+                "sourceLangStr": "en",
+                "targetLangStr": "es",
+                "primaryTop": true
+            }),
+        )
+        .unwrap();
+        let bi_str = bi_val.as_str().unwrap();
+        assert!(bi_str.contains("Hello world\nHola mundo"));
+
+        // 2. Start Meeting Session IPC
+        let start_val = dispatch_ipc_command(
+            "start_meeting_session_cmd",
+            json!({
+                "sessionId": "ipc-meet-99",
+                "title": "IPC Sync",
+                "sourceLangStr": "en",
+                "targetLangStr": "es",
+                "zeroRetentionMode": true
+            }),
+        )
+        .unwrap();
+        assert_eq!(start_val["config"]["session_id"], "ipc-meet-99");
+        assert_eq!(start_val["is_active"], true);
+
+        // 3. Feed Meeting Audio IPC
+        let feed_val = dispatch_ipc_command(
+            "feed_meeting_audio_cmd",
+            json!({
+                "sessionId": "ipc-meet-99",
+                "speaker": "Presenter",
+                "timestampMs": 500,
+                "pcm": vec![0.35f32; 8000]
+            }),
+        )
+        .unwrap();
+        assert_eq!(feed_val["speaker"], "Presenter");
+        assert!(!feed_val["source_text"].as_str().unwrap().is_empty());
+
+        // 4. Get Meeting Transcript IPC
+        let trans_val = dispatch_ipc_command(
+            "get_meeting_transcript_cmd",
+            json!({ "sessionId": "ipc-meet-99" }),
+        )
+        .unwrap();
+        assert_eq!(trans_val["entries"].as_array().unwrap().len(), 1);
+
+        // 5. End Meeting Session IPC with bilingual subtitle export
+        let end_val = dispatch_ipc_command(
+            "end_meeting_session_cmd",
+            json!({
+                "sessionId": "ipc-meet-99",
+                "exportSubtitles": true,
+                "formatStr": "srt",
+                "bilingual": true
+            }),
+        )
+        .unwrap();
+        let exported_text = end_val.as_str().unwrap();
+        assert!(exported_text.contains("Presenter:"));
+
+        // 6. Model Packs IPC
+        let packs_val = dispatch_ipc_command("list_model_packs_cmd", json!({})).unwrap();
+        assert!(packs_val.as_array().unwrap().len() >= 5);
+
+        let mount_val = dispatch_ipc_command(
+            "mount_neural_pack_cmd",
+            json!({
+                "sourceCode": "en",
+                "targetCode": "es",
+                "vocabulary": {
+                    "serverless computing": "computación sin servidor"
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(mount_val["mountedCount"], 1);
     }
 }

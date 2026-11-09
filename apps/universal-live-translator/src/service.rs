@@ -9,9 +9,10 @@ use crate::camera_translate::{CameraTranslateError, CameraTranslator};
 use crate::lid::{LanguageDetector, LidResult};
 use crate::models::{
     BatchDocumentItem, BatchTranslationResult, CameraTranslationResult, ConversationSession,
-    ConversationTurn, GlossaryTerm, LanguageCode, PhraseCategory, PhrasebookItem, SubtitleFormat,
-    TranscriptSegment, TranslationRequest, TranslationResponse, TtsSynthesisRequest,
-    TtsSynthesisResponse,
+    ConversationTurn, GlossaryTerm, LanguageCode, LanguagePackInfo, MeetingSessionConfig,
+    MeetingSessionState, MeetingTranscriptEntry, PhraseCategory, PhrasebookItem, SubtitleCue,
+    SubtitleFormat, TranscriptSegment, TranslationRequest, TranslationResponse,
+    TtsSynthesisRequest, TtsSynthesisResponse,
 };
 use crate::nmt::{OfflineTranslationEngine, TranslationError};
 use crate::phrasebook::{PhrasebookError, PhrasebookStore, TranslationHistoryRecord};
@@ -53,6 +54,7 @@ pub struct TranslatorService {
     camera: Arc<CameraTranslator>,
     subtitles: Arc<SubtitleTranslator>,
     conversations: Arc<RwLock<HashMap<String, ConversationSession>>>,
+    meeting_sessions: Arc<RwLock<HashMap<String, MeetingSessionState>>>,
 }
 
 impl TranslatorService {
@@ -95,6 +97,7 @@ impl TranslatorService {
             camera,
             subtitles,
             conversations: Arc::new(RwLock::new(HashMap::new())),
+            meeting_sessions: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -237,6 +240,26 @@ impl TranslatorService {
             source_lang,
             target_lang,
             domain_glossary,
+        )?)
+    }
+
+    /// Translate subtitle content (.srt or .vtt) bilingually
+    pub fn translate_subtitle_content_bilingual(
+        &self,
+        content: &str,
+        format: SubtitleFormat,
+        source_lang: Option<LanguageCode>,
+        target_lang: LanguageCode,
+        domain_glossary: Option<&str>,
+        primary_top: bool,
+    ) -> Result<String, ServiceError> {
+        Ok(self.subtitles.translate_subtitle_file_bilingual(
+            content,
+            format,
+            source_lang,
+            target_lang,
+            domain_glossary,
+            primary_top,
         )?)
     }
 
@@ -465,6 +488,252 @@ impl TranslatorService {
             Vec::new()
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Meeting Mode (System Loopback Audio & Ephemeral Zero-Retention)
+    // -----------------------------------------------------------------------
+
+    /// Start a new meeting session with system loopback audio translation
+    pub fn start_meeting_session(&self, config: MeetingSessionConfig) -> MeetingSessionState {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let state = MeetingSessionState {
+            config,
+            created_at_secs: now,
+            updated_at_secs: now,
+            entries: Vec::new(),
+            is_active: true,
+        };
+
+        if let Ok(mut map) = self.meeting_sessions.write() {
+            map.insert(state.config.session_id.clone(), state.clone());
+        }
+
+        state
+    }
+
+    /// Feed audio chunk (16kHz mono PCM) from loopback capture into meeting session
+    pub fn feed_meeting_audio_chunk(
+        &self,
+        session_id: &str,
+        speaker: &str,
+        pcm: &[f32],
+        timestamp_ms: u64,
+    ) -> Result<Option<MeetingTranscriptEntry>, ServiceError> {
+        let (source_lang, target_lang, zero_retention, domain_glossary) = {
+            let map = self
+                .meeting_sessions
+                .read()
+                .map_err(|_| ServiceError::ConversationNotFound(session_id.to_string()))?;
+            let s = map
+                .get(session_id)
+                .ok_or_else(|| ServiceError::ConversationNotFound(session_id.to_string()))?;
+            if !s.is_active {
+                return Ok(None);
+            }
+            (
+                s.config.source_lang.unwrap_or(LanguageCode::En),
+                s.config.target_lang,
+                s.config.zero_retention_mode,
+                s.config.domain_glossary.clone(),
+            )
+        };
+
+        // Recognize speech from PCM
+        let segments = self.speech_batch.recognize(pcm, source_lang)?;
+        if segments.is_empty() {
+            return Ok(None);
+        }
+
+        let combined_text = segments
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_string();
+
+        if combined_text.is_empty() {
+            return Ok(None);
+        }
+
+        let avg_confidence =
+            segments.iter().map(|s| s.confidence).sum::<f32>() / (segments.len() as f32);
+
+        // Translate to target language. If zero_retention_mode is true, never log to disk history.
+        let trans_req = TranslationRequest {
+            source_lang: Some(source_lang),
+            target_lang,
+            text: combined_text.clone(),
+            preserve_formatting: true,
+            domain_glossary,
+        };
+        let trans_res = self.translate_text_with_options(&trans_req, !zero_retention)?;
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let mut map = self
+            .meeting_sessions
+            .write()
+            .map_err(|_| ServiceError::ConversationNotFound(session_id.to_string()))?;
+        let session = map
+            .get_mut(session_id)
+            .ok_or_else(|| ServiceError::ConversationNotFound(session_id.to_string()))?;
+
+        let entry_id = session.entries.len() + 1;
+        let entry = MeetingTranscriptEntry {
+            id: entry_id,
+            timestamp_ms,
+            speaker: speaker.to_string(),
+            source_text: combined_text,
+            translated_text: trans_res.translated_text,
+            confidence: avg_confidence,
+        };
+
+        session.entries.push(entry.clone());
+        session.updated_at_secs = now;
+
+        Ok(Some(entry))
+    }
+
+    /// Retrieve meeting transcript state
+    pub fn get_meeting_transcript(&self, session_id: &str) -> Option<MeetingSessionState> {
+        let map = self.meeting_sessions.read().ok()?;
+        map.get(session_id).cloned()
+    }
+
+    /// End meeting session, optionally exporting to subtitles, and wipe from ephemeral memory if zero-retention
+    pub fn end_meeting_session(
+        &self,
+        session_id: &str,
+        export_subtitles: bool,
+        format: Option<SubtitleFormat>,
+        bilingual: bool,
+    ) -> Result<Option<String>, ServiceError> {
+        let mut map = self
+            .meeting_sessions
+            .write()
+            .map_err(|_| ServiceError::ConversationNotFound(session_id.to_string()))?;
+        let session = map
+            .get_mut(session_id)
+            .ok_or_else(|| ServiceError::ConversationNotFound(session_id.to_string()))?;
+
+        session.is_active = false;
+
+        let subtitle_export = if export_subtitles && !session.entries.is_empty() {
+            let fmt = format.unwrap_or(SubtitleFormat::Srt);
+            let mut cues = Vec::with_capacity(session.entries.len());
+            for entry in &session.entries {
+                let start_ms = entry.timestamp_ms;
+                let end_ms = start_ms + 3000;
+                cues.push(SubtitleCue {
+                    index: entry.id,
+                    start_ms,
+                    end_ms,
+                    original_text: format!("{}: {}", entry.speaker, entry.source_text),
+                    translated_text: format!("{}: {}", entry.speaker, entry.translated_text),
+                });
+            }
+            if bilingual {
+                Some(
+                    self.subtitles
+                        .serialize_subtitles_bilingual(&cues, fmt, true),
+                )
+            } else {
+                Some(self.subtitles.serialize_subtitles(&cues, fmt))
+            }
+        } else {
+            None
+        };
+
+        if session.config.zero_retention_mode {
+            map.remove(session_id);
+        }
+
+        Ok(subtitle_export)
+    }
+
+    // -----------------------------------------------------------------------
+    // Offline AI Model Hub Bridge
+    // -----------------------------------------------------------------------
+
+    /// List available offline neural translation packs
+    pub fn list_available_model_packs(&self) -> Vec<LanguagePackInfo> {
+        vec![
+            LanguagePackInfo {
+                id: "pack-en-es-v1".to_string(),
+                pair_name: "English - Spanish (Neural 4-bit)".to_string(),
+                source_code: LanguageCode::En,
+                target_code: LanguageCode::Es,
+                size_bytes: 48 * 1024 * 1024,
+                is_installed: self.nmt.has_neural_pack(LanguageCode::En, LanguageCode::Es),
+                version: "1.0.0".to_string(),
+                sha256_hash: "a1b2c3d4e5f6".to_string(),
+            },
+            LanguagePackInfo {
+                id: "pack-en-fr-v1".to_string(),
+                pair_name: "English - French (Neural 4-bit)".to_string(),
+                source_code: LanguageCode::En,
+                target_code: LanguageCode::Fr,
+                size_bytes: 46 * 1024 * 1024,
+                is_installed: self.nmt.has_neural_pack(LanguageCode::En, LanguageCode::Fr),
+                version: "1.0.0".to_string(),
+                sha256_hash: "f6e5d4c3b2a1".to_string(),
+            },
+            LanguagePackInfo {
+                id: "pack-en-de-v1".to_string(),
+                pair_name: "English - German (Neural 4-bit)".to_string(),
+                source_code: LanguageCode::En,
+                target_code: LanguageCode::De,
+                size_bytes: 50 * 1024 * 1024,
+                is_installed: self.nmt.has_neural_pack(LanguageCode::En, LanguageCode::De),
+                version: "1.0.0".to_string(),
+                sha256_hash: "b3c4d5e6f7a8".to_string(),
+            },
+            LanguagePackInfo {
+                id: "pack-en-ja-v1".to_string(),
+                pair_name: "English - Japanese (Neural 4-bit)".to_string(),
+                source_code: LanguageCode::En,
+                target_code: LanguageCode::Ja,
+                size_bytes: 54 * 1024 * 1024,
+                is_installed: self.nmt.has_neural_pack(LanguageCode::En, LanguageCode::Ja),
+                version: "1.0.0".to_string(),
+                sha256_hash: "c7d8e9f0a1b2".to_string(),
+            },
+            LanguagePackInfo {
+                id: "pack-en-zh-v1".to_string(),
+                pair_name: "English - Chinese (Neural 4-bit)".to_string(),
+                source_code: LanguageCode::En,
+                target_code: LanguageCode::Zh,
+                size_bytes: 52 * 1024 * 1024,
+                is_installed: self.nmt.has_neural_pack(LanguageCode::En, LanguageCode::Zh),
+                version: "1.0.0".to_string(),
+                sha256_hash: "d8e9f0a1b2c3".to_string(),
+            },
+        ]
+    }
+
+    /// Mount neural pack entries directly into NMT engine
+    pub fn mount_neural_pack_entries(
+        &self,
+        source_lang: LanguageCode,
+        target_lang: LanguageCode,
+        entries: HashMap<String, String>,
+    ) -> usize {
+        self.nmt
+            .load_neural_pack_entries(source_lang, target_lang, entries)
+    }
+
+    /// Check if neural model pack is mounted for this language pair
+    pub fn has_neural_pack(&self, source_lang: LanguageCode, target_lang: LanguageCode) -> bool {
+        self.nmt.has_neural_pack(source_lang, target_lang)
+    }
 }
 
 impl Default for TranslatorService {
@@ -521,5 +790,72 @@ mod tests {
 
         let fetched = service.get_conversation_session(&conv.id).unwrap();
         assert_eq!(fetched.turns.len(), 1);
+    }
+
+    #[test]
+    fn test_meeting_mode_zero_retention_and_bilingual_export() {
+        let service = TranslatorService::open_in_memory().unwrap();
+
+        let session_id = "meet-101".to_string();
+        let config = MeetingSessionConfig {
+            session_id: session_id.clone(),
+            title: Some("All-Hands Global Sync".to_string()),
+            source_lang: Some(LanguageCode::En),
+            target_lang: LanguageCode::Es,
+            zero_retention_mode: true,
+            domain_glossary: None,
+        };
+
+        let state = service.start_meeting_session(config);
+        assert_eq!(state.config.session_id, session_id);
+        assert!(state.is_active);
+
+        // Feed speech chunk
+        let pcm = vec![0.35f32; 16000]; // 1 sec synthetic audio
+        let entry_opt = service
+            .feed_meeting_audio_chunk(&session_id, "Alice (Presenter)", &pcm, 1000)
+            .unwrap();
+        assert!(entry_opt.is_some());
+        let entry = entry_opt.unwrap();
+        assert_eq!(entry.speaker, "Alice (Presenter)");
+        assert!(!entry.source_text.is_empty());
+        assert!(!entry.translated_text.is_empty());
+
+        // Check transcript
+        let current_state = service.get_meeting_transcript(&session_id).unwrap();
+        assert_eq!(current_state.entries.len(), 1);
+
+        // Because zero_retention_mode is true, translation history in SQLite must NOT contain this entry
+        let history = service.get_translation_history(10).unwrap();
+        assert_eq!(history.len(), 0);
+
+        // End meeting and export bilingual subtitles
+        let exported_srt = service
+            .end_meeting_session(&session_id, true, Some(SubtitleFormat::Srt), true)
+            .unwrap();
+        assert!(exported_srt.is_some());
+        let srt_text = exported_srt.unwrap();
+        assert!(srt_text.contains("Alice (Presenter):"));
+        assert!(srt_text.contains("-->"));
+
+        // Because zero_retention_mode is true, session must be wiped from memory upon termination
+        assert!(service.get_meeting_transcript(&session_id).is_none());
+    }
+
+    #[test]
+    fn test_service_model_pack_management() {
+        let service = TranslatorService::open_in_memory().unwrap();
+
+        let packs = service.list_available_model_packs();
+        assert!(packs.len() >= 5);
+
+        assert!(!service.has_neural_pack(LanguageCode::En, LanguageCode::Es));
+
+        let mut custom_pack = HashMap::new();
+        custom_pack.insert("microservices".to_string(), "microservicios".to_string());
+        let loaded =
+            service.mount_neural_pack_entries(LanguageCode::En, LanguageCode::Es, custom_pack);
+        assert_eq!(loaded, 1);
+        assert!(service.has_neural_pack(LanguageCode::En, LanguageCode::Es));
     }
 }

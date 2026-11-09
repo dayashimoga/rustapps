@@ -82,6 +82,52 @@ impl DesktopIpcHandler for TranslatorDesktopHandler {
                 }),
             },
             SelfTestCheck {
+                command: "translate_subtitles_bilingual_cmd",
+                payload: json!({
+                    "content": "1\n00:00:01,000 --> 00:00:03,000\nHello world\n",
+                    "formatStr": "srt",
+                    "sourceLangStr": "en",
+                    "targetLangStr": "es",
+                    "primaryTop": true
+                }),
+            },
+            SelfTestCheck {
+                command: "start_meeting_session_cmd",
+                payload: json!({
+                    "sessionId": "selftest-meet-1",
+                    "title": "Self Test Meeting",
+                    "sourceLangStr": "en",
+                    "targetLangStr": "es",
+                    "zeroRetentionMode": true
+                }),
+            },
+            SelfTestCheck {
+                command: "feed_meeting_audio_cmd",
+                payload: json!({
+                    "sessionId": "selftest-meet-1",
+                    "speaker": "SelfTest Speaker",
+                    "timestampMs": 100,
+                    "pcm": vec![0.35f32; 8000]
+                }),
+            },
+            SelfTestCheck {
+                command: "get_meeting_transcript_cmd",
+                payload: json!({ "sessionId": "selftest-meet-1" }),
+            },
+            SelfTestCheck {
+                command: "end_meeting_session_cmd",
+                payload: json!({
+                    "sessionId": "selftest-meet-1",
+                    "exportSubtitles": true,
+                    "formatStr": "srt",
+                    "bilingual": true
+                }),
+            },
+            SelfTestCheck {
+                command: "list_model_packs_cmd",
+                payload: json!({}),
+            },
+            SelfTestCheck {
                 command: "translate_document_cmd",
                 payload: json!({
                     "content": "# Document Title\nHello world",

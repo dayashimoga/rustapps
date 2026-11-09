@@ -24,6 +24,7 @@
 
   // Live Microphone, Loopback & Waveform state
   let audioSourceMode: 'mic' | 'loopback' = 'mic';
+  let isZeroRetention: boolean = true;
   let isHudOpen: boolean = false;
   let hudPosition: 'bottom' | 'top' = 'bottom';
   let hudFontSize: 'normal' | 'large' = 'normal';
@@ -67,6 +68,29 @@
       turns = currentSession.turns || [];
     } catch (e) {
       console.error('Failed to start conversation session:', e);
+    }
+  }
+
+  async function exportMeetingSubtitles() {
+    if (!currentSession) return;
+    try {
+      const srt = await tauriInvoke<string>('end_meeting_session_cmd', {
+        sessionId: currentSession.id,
+        exportSubtitles: true,
+        formatStr: 'srt',
+        bilingual: true,
+      });
+      if (srt) {
+        const blob = new Blob([srt], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `meeting_${currentSession.id}.bilingual.srt`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (e) {
+      console.error('Failed to export meeting subtitles:', e);
     }
   }
 
@@ -507,7 +531,24 @@
         <input type="checkbox" bind:checked={autoSpeakReplies} />
         <span>Auto-TTS</span>
       </label>
+      {#if audioSourceMode === 'loopback'}
+        <label class="zero-retention-toggle" title="Ephemeral Meeting Mode: Zero audio or text stored to disk">
+          <input type="checkbox" bind:checked={isZeroRetention} />
+          <span>🔒 0-Retention</span>
+        </label>
+      {/if}
     </div>
+
+    {#if audioSourceMode === 'loopback' && turns.length > 0}
+      <button
+        type="button"
+        class="export-sub-btn"
+        on:click={exportMeetingSubtitles}
+        title="Export meeting transcript as bilingual SRT subtitles"
+      >
+        🎬 Export Bilingual .SRT
+      </button>
+    {/if}
 
     <button
       type="button"
@@ -791,6 +832,37 @@
     color: var(--text-muted);
     cursor: pointer;
     margin-left: 0.4rem;
+  }
+
+  .zero-retention-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.72rem;
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.1);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(56, 189, 248, 0.25);
+    cursor: pointer;
+    margin-left: 0.4rem;
+  }
+
+  .export-sub-btn {
+    background: rgba(56, 189, 248, 0.15);
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    color: #38bdf8;
+    padding: 0.35rem 0.75rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .export-sub-btn:hover {
+    background: rgba(56, 189, 248, 0.25);
+    border-color: #38bdf8;
   }
 
   .pulse-dot {

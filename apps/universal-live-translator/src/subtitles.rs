@@ -63,6 +63,19 @@ impl SubtitleTranslator {
         }
     }
 
+    /// Serialize structured `SubtitleCue` list into target format string with bilingual display
+    pub fn serialize_subtitles_bilingual(
+        &self,
+        cues: &[SubtitleCue],
+        format: SubtitleFormat,
+        primary_top: bool,
+    ) -> String {
+        match format {
+            SubtitleFormat::Srt => serialize_srt_bilingual(cues, primary_top),
+            SubtitleFormat::Vtt => serialize_vtt_bilingual(cues, primary_top),
+        }
+    }
+
     /// Translate list of subtitle cues into target language preserving millisecond timing
     pub fn translate_cues(
         &self,
@@ -108,6 +121,22 @@ impl SubtitleTranslator {
         let translated_cues =
             self.translate_cues(&cues, source_lang, target_lang, domain_glossary)?;
         Ok(self.serialize_subtitles(&translated_cues, format))
+    }
+
+    /// Complete subtitle file bilingual translation workflow: parse, translate cues, serialize bilingually
+    pub fn translate_subtitle_file_bilingual(
+        &self,
+        content: &str,
+        format: SubtitleFormat,
+        source_lang: Option<LanguageCode>,
+        target_lang: LanguageCode,
+        domain_glossary: Option<&str>,
+        primary_top: bool,
+    ) -> Result<String, SubtitleError> {
+        let cues = self.parse_subtitles(content, format)?;
+        let translated_cues =
+            self.translate_cues(&cues, source_lang, target_lang, domain_glossary)?;
+        Ok(self.serialize_subtitles_bilingual(&translated_cues, format, primary_top))
     }
 
     /// Translate document text (.md, .txt) preserving structural elements (headings, code blocks, lists)
@@ -452,6 +481,33 @@ fn serialize_srt_subtitles(cues: &[SubtitleCue]) -> String {
     out
 }
 
+fn serialize_srt_bilingual(cues: &[SubtitleCue], primary_top: bool) -> String {
+    let mut out = String::new();
+    for (i, cue) in cues.iter().enumerate() {
+        let idx = i + 1;
+        let start_str = format_timestamp_ms(cue.start_ms, ',');
+        let end_str = format_timestamp_ms(cue.end_ms, ',');
+        let (first, second) = if primary_top {
+            (&cue.original_text, &cue.translated_text)
+        } else {
+            (&cue.translated_text, &cue.original_text)
+        };
+        let text = if second.is_empty() {
+            first.to_string()
+        } else if first.is_empty() {
+            second.to_string()
+        } else {
+            format!("{}\n{}", first, second)
+        };
+
+        out.push_str(&format!(
+            "{}\n{} --> {}\n{}\n\n",
+            idx, start_str, end_str, text
+        ));
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // WebVTT Parser & Serializer
 // ---------------------------------------------------------------------------
@@ -522,6 +578,33 @@ fn serialize_vtt_subtitles(cues: &[SubtitleCue]) -> String {
             &cue.translated_text
         } else {
             &cue.original_text
+        };
+
+        out.push_str(&format!(
+            "{}\n{} --> {}\n{}\n\n",
+            idx, start_str, end_str, text
+        ));
+    }
+    out
+}
+
+fn serialize_vtt_bilingual(cues: &[SubtitleCue], primary_top: bool) -> String {
+    let mut out = String::from("WEBVTT\n\n");
+    for (i, cue) in cues.iter().enumerate() {
+        let idx = i + 1;
+        let start_str = format_timestamp_ms(cue.start_ms, '.');
+        let end_str = format_timestamp_ms(cue.end_ms, '.');
+        let (first, second) = if primary_top {
+            (&cue.original_text, &cue.translated_text)
+        } else {
+            (&cue.translated_text, &cue.original_text)
+        };
+        let text = if second.is_empty() {
+            first.to_string()
+        } else if first.is_empty() {
+            second.to_string()
+        } else {
+            format!("{}\n{}", first, second)
         };
 
         out.push_str(&format!(
@@ -701,5 +784,58 @@ mod tests {
         assert_eq!(results[1].translated_filename, "procedure.es.srt");
         assert!(results[1].translated_content.contains("Hola"));
         assert!(results[1].translated_content.contains("Gracias"));
+    }
+
+    #[test]
+    fn test_bilingual_subtitle_translation() {
+        let nmt = Arc::new(OfflineTranslationEngine::new());
+        let speech = Arc::new(BatchSpeechRecognizer::new());
+        let translator = SubtitleTranslator::new(nmt, speech);
+
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\nHello world\n\n";
+
+        // Primary on top (original then translated)
+        let srt_bilingual = translator
+            .translate_subtitle_file_bilingual(
+                srt_content,
+                SubtitleFormat::Srt,
+                Some(LanguageCode::En),
+                LanguageCode::Es,
+                None,
+                true,
+            )
+            .unwrap();
+
+        assert!(srt_bilingual.contains("Hello world\nHola mundo"));
+
+        // Primary on bottom (translated then original)
+        let srt_bilingual_inverted = translator
+            .translate_subtitle_file_bilingual(
+                srt_content,
+                SubtitleFormat::Srt,
+                Some(LanguageCode::En),
+                LanguageCode::Es,
+                None,
+                false,
+            )
+            .unwrap();
+
+        assert!(srt_bilingual_inverted.contains("Hola mundo\nHello world"));
+
+        // WebVTT bilingual
+        let vtt_content = "WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nHello world\n\n";
+        let vtt_bilingual = translator
+            .translate_subtitle_file_bilingual(
+                vtt_content,
+                SubtitleFormat::Vtt,
+                Some(LanguageCode::En),
+                LanguageCode::Es,
+                None,
+                true,
+            )
+            .unwrap();
+
+        assert!(vtt_bilingual.starts_with("WEBVTT"));
+        assert!(vtt_bilingual.contains("Hello world\nHola mundo"));
     }
 }
