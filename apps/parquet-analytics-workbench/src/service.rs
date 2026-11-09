@@ -58,11 +58,7 @@ impl AnalyticsService {
                 .engine
                 .attach_sqlite_database(dataset_id, name, p, None)?,
             DatasetFormat::Parquet => self.engine.ingest_parquet_file(dataset_id, name, p)?,
-            DatasetFormat::JsonLines => {
-                // For JSONL, fallback to delimited parser or treat as tabular lines
-                self.engine
-                    .ingest_delimited_file(dataset_id, name, p, b',')?
-            }
+            DatasetFormat::JsonLines => self.engine.ingest_json_lines(dataset_id, name, p)?,
         };
 
         Ok(schema)
@@ -206,5 +202,22 @@ impl AnalyticsService {
             total_cached_rows,
             total_bytes_analyzed,
         }
+    }
+
+    /// Executes an arbitrary multi-table SQL query (including JOINs)
+    pub fn execute_sql(&self, sql: &str) -> Result<crate::models::SqlQueryResult, ServiceError> {
+        self.engine.execute_sql(sql).map_err(ServiceError::Engine)
+    }
+
+    /// Exports a dataset to CSV or JSONL format
+    pub fn export_dataset(
+        &self,
+        dataset_id: &str,
+        out_path: impl AsRef<Path>,
+        format: DatasetFormat,
+    ) -> Result<crate::models::ExportSummary, ServiceError> {
+        self.engine
+            .export_dataset(dataset_id, out_path.as_ref(), format)
+            .map_err(ServiceError::Engine)
     }
 }

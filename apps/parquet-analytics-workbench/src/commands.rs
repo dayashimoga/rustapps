@@ -122,6 +122,33 @@ pub fn dispatch_ipc_command(command: &str, payload: Value) -> Result<Value, Stri
             Ok(json!(status))
         }
 
+        "execute_sql" | "execute_sql_query" => {
+            let sql = payload["query"]
+                .as_str()
+                .or_else(|| payload["sql"].as_str())
+                .ok_or_else(|| "Missing required parameter 'query'".to_string())?;
+            let res = service.execute_sql(sql).map_err(|e| e.to_string())?;
+            Ok(json!(res))
+        }
+
+        "export_dataset" => {
+            let dataset_id = payload["dataset_id"]
+                .as_str()
+                .ok_or_else(|| "Missing required parameter 'dataset_id'".to_string())?;
+            let out_path = payload["out_path"]
+                .as_str()
+                .ok_or_else(|| "Missing required parameter 'out_path'".to_string())?;
+            let format_str = payload["format"].as_str().unwrap_or("csv");
+            let format = match format_str.to_ascii_lowercase().as_str() {
+                "jsonl" | "ndjson" => crate::models::DatasetFormat::JsonLines,
+                _ => crate::models::DatasetFormat::Csv,
+            };
+            let summary = service
+                .export_dataset(dataset_id, out_path, format)
+                .map_err(|e| e.to_string())?;
+            Ok(json!(summary))
+        }
+
         _ => Err(format!("Unknown command: '{}'", command)),
     }
 }
@@ -155,5 +182,50 @@ mod tests {
 
         let lic = dispatch_ipc_command("get_license_status", json!({})).unwrap();
         assert!(lic.get("tier").is_some());
+
+        // Test SQL query execution
+        let datasets = dispatch_ipc_command("list_datasets", json!({})).unwrap();
+        let arr = datasets.as_array().unwrap();
+        let first_id = arr[0]["dataset_id"].as_str().unwrap();
+        let tbl_name = format!("ds_{}", first_id.replace('-', "_"));
+
+        let sql_res = dispatch_ipc_command(
+            "execute_sql",
+            json!({
+                "query": format!("SELECT datacenter, count(*) as count FROM \"{}\" GROUP BY datacenter", tbl_name)
+            }),
+        )
+        .unwrap();
+        assert_eq!(sql_res["columns"], json!(["datacenter", "count"]));
+        assert!(sql_res["row_count"].as_u64().unwrap() > 0);
+
+        // Test CSV export
+        let temp = tempfile::tempdir().unwrap();
+        let csv_out = temp.path().join("export.csv");
+        let exp_res = dispatch_ipc_command(
+            "export_dataset",
+            json!({
+                "dataset_id": first_id,
+                "out_path": csv_out.to_str().unwrap(),
+                "format": "csv"
+            }),
+        )
+        .unwrap();
+        assert_eq!(exp_res["format"], "csv");
+        assert!(csv_out.exists());
+
+        // Test JSONL export
+        let jsonl_out = temp.path().join("export.jsonl");
+        let exp_jsonl = dispatch_ipc_command(
+            "export_dataset",
+            json!({
+                "dataset_id": first_id,
+                "out_path": jsonl_out.to_str().unwrap(),
+                "format": "jsonl"
+            }),
+        )
+        .unwrap();
+        assert_eq!(exp_jsonl["format"], "jsonl");
+        assert!(jsonl_out.exists());
     }
 }

@@ -3,7 +3,8 @@
 
 use crate::models::{
     AggregationType, ChartDataPoint, ChartRequest, ChartResult, ColumnMetadata, DataType,
-    DatasetFormat, FilterOperator, QueryPageResult, QueryRequest, SchemaSnapshot, SortDirection,
+    DatasetFormat, ExportSummary, FilterOperator, QueryPageResult, QueryRequest, SchemaSnapshot,
+    SortDirection, SqlQueryResult,
 };
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
@@ -686,6 +687,328 @@ impl DataEngine {
         let lock = self.datasets.lock().unwrap();
         lock.get(dataset_id).map(|d| d.schema.clone())
     }
+
+    /// Executes an arbitrary multi-table SQL query (including JOINs) over all loaded datasets
+    pub fn execute_sql(&self, sql: &str) -> Result<SqlQueryResult, DataEngineError> {
+        let start = Instant::now();
+        let conn = self.cache_conn.lock().unwrap();
+
+        let mut stmt = conn.prepare(sql)?;
+        let col_count = stmt.column_count();
+        let columns: Vec<String> = stmt
+            .column_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let mut rows = Vec::new();
+        let mut rows_iter = stmt.query([])?;
+        while let Some(row) = rows_iter.next()? {
+            let mut row_vals = Vec::with_capacity(col_count);
+            for i in 0..col_count {
+                let val: rusqlite::types::Value = row.get(i)?;
+                let json_val = match val {
+                    rusqlite::types::Value::Null => serde_json::Value::Null,
+                    rusqlite::types::Value::Integer(n) => serde_json::json!(n),
+                    rusqlite::types::Value::Real(f) => serde_json::json!(f),
+                    rusqlite::types::Value::Text(s) => serde_json::json!(s),
+                    rusqlite::types::Value::Blob(b) => {
+                        serde_json::json!(format!("<blob {}B>", b.len()))
+                    }
+                };
+                row_vals.push(json_val);
+            }
+            rows.push(row_vals);
+        }
+
+        let execution_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let row_count = rows.len();
+
+        Ok(SqlQueryResult {
+            columns,
+            rows,
+            row_count,
+            execution_ms,
+        })
+    }
+
+    /// Export dataset to CSV or JSONL format
+    pub fn export_dataset(
+        &self,
+        dataset_id: &str,
+        out_path: &Path,
+        format: DatasetFormat,
+    ) -> Result<ExportSummary, DataEngineError> {
+        let active = {
+            let lock = self.datasets.lock().unwrap();
+            lock.get(dataset_id)
+                .cloned()
+                .ok_or_else(|| DataEngineError::DatasetNotFound(dataset_id.to_string()))?
+        };
+
+        let conn = self.cache_conn.lock().unwrap();
+        let sql = format!("SELECT * FROM \"{}\"", active.table_name);
+        let mut stmt = conn.prepare(&sql)?;
+        let col_count = stmt.column_count();
+        let columns: Vec<String> = stmt
+            .column_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        if let Some(parent) = out_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        let mut exported_rows = 0;
+        let mut rows_iter = stmt.query([])?;
+
+        match format {
+            DatasetFormat::JsonLines => {
+                let mut out_file = std::io::BufWriter::new(File::create(out_path)?);
+                use std::io::Write;
+                while let Some(row) = rows_iter.next()? {
+                    let mut obj = serde_json::Map::with_capacity(col_count);
+                    for (i, col_name) in columns.iter().enumerate().take(col_count) {
+                        let val: rusqlite::types::Value = row.get(i)?;
+                        let json_val = match val {
+                            rusqlite::types::Value::Null => serde_json::Value::Null,
+                            rusqlite::types::Value::Integer(n) => serde_json::json!(n),
+                            rusqlite::types::Value::Real(f) => serde_json::json!(f),
+                            rusqlite::types::Value::Text(s) => serde_json::json!(s),
+                            rusqlite::types::Value::Blob(b) => serde_json::json!(b.len()),
+                        };
+                        obj.insert(col_name.clone(), json_val);
+                    }
+                    serde_json::to_writer(&mut out_file, &obj)
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    out_file.write_all(b"\n")?;
+                    exported_rows += 1;
+                }
+                out_file.flush()?;
+            }
+            _ => {
+                let mut writer = csv::Writer::from_path(out_path)?;
+                writer.write_record(&columns)?;
+                while let Some(row) = rows_iter.next()? {
+                    let mut record = Vec::with_capacity(col_count);
+                    for i in 0..col_count {
+                        let val: rusqlite::types::Value = row.get(i)?;
+                        let s = match val {
+                            rusqlite::types::Value::Null => String::new(),
+                            rusqlite::types::Value::Integer(n) => n.to_string(),
+                            rusqlite::types::Value::Real(f) => f.to_string(),
+                            rusqlite::types::Value::Text(s) => s,
+                            rusqlite::types::Value::Blob(b) => format!("<blob {}B>", b.len()),
+                        };
+                        record.push(s);
+                    }
+                    writer.write_record(&record)?;
+                    exported_rows += 1;
+                }
+                writer.flush()?;
+            }
+        }
+
+        let file_size_bytes = std::fs::metadata(out_path)?.len();
+
+        Ok(ExportSummary {
+            dataset_id: dataset_id.to_string(),
+            format: format.as_str().to_string(),
+            out_path: out_path.to_string_lossy().to_string(),
+            exported_rows,
+            file_size_bytes,
+        })
+    }
+
+    /// Ingests a JSON Lines (.jsonl / .ndjson) file into analytical cache
+    pub fn ingest_json_lines(
+        &self,
+        dataset_id: &str,
+        name: &str,
+        path: impl AsRef<Path>,
+    ) -> Result<SchemaSnapshot, DataEngineError> {
+        let p = path.as_ref();
+        let file = File::open(p)?;
+        let total_bytes = file.metadata()?.len();
+        let reader = BufReader::new(file);
+        use std::io::BufRead;
+
+        let mut sample_objects: Vec<serde_json::Map<String, serde_json::Value>> = Vec::new();
+        let mut total_lines = 0usize;
+
+        for line_res in reader.lines() {
+            let line = line_res?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(serde_json::Value::Object(map)) =
+                serde_json::from_str::<serde_json::Value>(trimmed)
+            {
+                if sample_objects.len() < 200 {
+                    sample_objects.push(map);
+                }
+                total_lines += 1;
+            }
+        }
+
+        if sample_objects.is_empty() {
+            return Err(DataEngineError::InvalidFormat(
+                "JSON Lines file contains no valid JSON objects".to_string(),
+            ));
+        }
+
+        // Collect all distinct keys from samples
+        let mut col_names = Vec::new();
+        for obj in &sample_objects {
+            for k in obj.keys() {
+                let clean_k = k.trim().replace([' ', '-', '.', '/', '\\'], "_");
+                if !col_names.contains(&clean_k) {
+                    col_names.push(clean_k);
+                }
+            }
+        }
+
+        // Infer types
+        let mut col_types = Vec::new();
+        for col in &col_names {
+            let mut is_int = true;
+            let mut is_float = true;
+            let mut has_non_null = false;
+
+            for obj in &sample_objects {
+                if let Some(val) = obj.get(col) {
+                    if !val.is_null() {
+                        has_non_null = true;
+                        if !val.is_i64() && !val.is_u64() {
+                            is_int = false;
+                        }
+                        if !val.is_f64() && !val.is_i64() && !val.is_u64() {
+                            is_float = false;
+                        }
+                    }
+                }
+            }
+
+            let inferred = if has_non_null && is_int {
+                DataType::Int64
+            } else if has_non_null && is_float {
+                DataType::Float64
+            } else {
+                DataType::Utf8
+            };
+            col_types.push(inferred);
+        }
+
+        let table_name = format!("ds_{}", dataset_id.replace('-', "_"));
+        let mut ddl = format!("CREATE TABLE \"{}\" (", table_name);
+        for (i, (col, dtype)) in col_names.iter().zip(col_types.iter()).enumerate() {
+            if i > 0 {
+                ddl.push_str(", ");
+            }
+            let sql_type = match dtype {
+                DataType::Int64 => "INTEGER",
+                DataType::Float64 => "REAL",
+                DataType::Boolean => "INTEGER",
+                DataType::DateTime => "TEXT",
+                _ => "TEXT",
+            };
+            ddl.push_str(&format!("\"{}\" {}", col, sql_type));
+        }
+        ddl.push(')');
+
+        let mut conn = self.cache_conn.lock().unwrap();
+        conn.execute(&format!("DROP TABLE IF EXISTS \"{}\"", table_name), [])?;
+        conn.execute(&ddl, [])?;
+
+        // Second pass: insert all records
+        let file2 = File::open(p)?;
+        let reader2 = BufReader::new(file2);
+        let tx = conn.transaction()?;
+        {
+            let placeholders = vec!["?"; col_names.len()].join(", ");
+            let insert_sql = format!("INSERT INTO \"{}\" VALUES ({})", table_name, placeholders);
+            let mut insert_stmt = tx.prepare(&insert_sql)?;
+
+            for line_res in reader2.lines() {
+                let line = line_res?;
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if let Ok(serde_json::Value::Object(map)) =
+                    serde_json::from_str::<serde_json::Value>(trimmed)
+                {
+                    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> =
+                        Vec::with_capacity(col_names.len());
+                    for col in &col_names {
+                        let val = map.get(col);
+                        match val {
+                            Some(serde_json::Value::Number(n)) => {
+                                if let Some(i) = n.as_i64() {
+                                    params_vec.push(Box::new(i));
+                                } else if let Some(f) = n.as_f64() {
+                                    params_vec.push(Box::new(f));
+                                } else {
+                                    params_vec.push(Box::new(n.to_string()));
+                                }
+                            }
+                            Some(serde_json::Value::String(s)) => {
+                                params_vec.push(Box::new(s.clone()))
+                            }
+                            Some(serde_json::Value::Bool(b)) => {
+                                params_vec.push(Box::new(if *b { 1i64 } else { 0i64 }))
+                            }
+                            _ => params_vec.push(Box::new(Option::<String>::None)),
+                        }
+                    }
+                    let refs: Vec<&dyn rusqlite::ToSql> =
+                        params_vec.iter().map(|b| b.as_ref()).collect();
+                    insert_stmt.execute(refs.as_slice())?;
+                }
+            }
+        }
+        tx.commit()?;
+
+        let columns: Vec<ColumnMetadata> = col_names
+            .iter()
+            .zip(col_types.iter())
+            .map(|(name, dtype)| ColumnMetadata {
+                name: name.clone(),
+                data_type: *dtype,
+                null_count: 0,
+                is_numeric: dtype.is_numeric(),
+            })
+            .collect();
+
+        let schema = SchemaSnapshot {
+            dataset_id: dataset_id.to_string(),
+            name: name.to_string(),
+            file_path: p.to_string_lossy().to_string(),
+            format: DatasetFormat::JsonLines,
+            columns,
+            total_rows: total_lines,
+            total_bytes,
+            last_scanned: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        };
+
+        let mut datasets = self.datasets.lock().unwrap();
+        datasets.insert(
+            dataset_id.to_string(),
+            ActiveDataset {
+                schema: schema.clone(),
+                table_name,
+                is_external_sqlite: false,
+                external_path: None,
+            },
+        );
+
+        Ok(schema)
+    }
 }
 
 #[cfg(test)]
@@ -784,5 +1107,70 @@ mod tests {
         let res = engine.query_dataset(&q).unwrap();
         assert_eq!(res.total_matching_rows, 1);
         assert_eq!(res.rows[0][0], "SKU-002");
+    }
+
+    #[test]
+    fn test_json_lines_ingestion_and_multi_table_join() {
+        let temp = tempfile::tempdir().unwrap();
+
+        // 1. Create a users.jsonl file
+        let users_path = temp.path().join("users.jsonl");
+        let users_jsonl = "{\"user_id\": 101, \"name\": \"Alice\", \"dept\": \"Engineering\"}\n\
+                           {\"user_id\": 102, \"name\": \"Bob\", \"dept\": \"DevOps\"}\n\
+                           {\"user_id\": 103, \"name\": \"Charlie\", \"dept\": \"SecOps\"}\n";
+        std::fs::write(&users_path, users_jsonl).unwrap();
+
+        // 2. Create an events.csv file
+        let events_path = temp.path().join("events.csv");
+        let events_csv = "event_id,user_id,action\n\
+                          1,101,git_push\n\
+                          2,101,ci_deploy\n\
+                          3,102,ssh_login\n";
+        std::fs::write(&events_path, events_csv).unwrap();
+
+        let engine = DataEngine::open_in_memory().unwrap();
+        let schema_users = engine
+            .ingest_json_lines("users", "Users", &users_path)
+            .unwrap();
+        assert_eq!(schema_users.total_rows, 3);
+
+        let schema_events = engine
+            .ingest_delimited_file("events", "Events", &events_path, b',')
+            .unwrap();
+        assert_eq!(schema_events.total_rows, 3);
+
+        // 3. Multi-table SQL JOIN between JSONL table (ds_users) and CSV table (ds_events)
+        let join_sql = "SELECT u.name, u.dept, e.action \
+                        FROM ds_users u \
+                        JOIN ds_events e ON u.user_id = e.user_id \
+                        ORDER BY e.event_id ASC";
+        let join_res = engine.execute_sql(join_sql).unwrap();
+
+        assert_eq!(join_res.columns, vec!["name", "dept", "action"]);
+        assert_eq!(join_res.row_count, 3);
+        assert_eq!(
+            join_res.rows[0],
+            vec![
+                serde_json::json!("Alice"),
+                serde_json::json!("Engineering"),
+                serde_json::json!("git_push")
+            ]
+        );
+        assert_eq!(
+            join_res.rows[1],
+            vec![
+                serde_json::json!("Alice"),
+                serde_json::json!("Engineering"),
+                serde_json::json!("ci_deploy")
+            ]
+        );
+        assert_eq!(
+            join_res.rows[2],
+            vec![
+                serde_json::json!("Bob"),
+                serde_json::json!("DevOps"),
+                serde_json::json!("ssh_login")
+            ]
+        );
     }
 }

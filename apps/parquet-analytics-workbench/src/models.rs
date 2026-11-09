@@ -215,3 +215,22 @@ pub struct WorkbenchStats {
     pub total_cached_rows: usize,
     pub total_bytes_analyzed: u64,
 }
+
+/// Result of multi-table SQL execution (JOINs, aggregations)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SqlQueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<serde_json::Value>>,
+    pub row_count: usize,
+    pub execution_ms: f64,
+}
+
+/// Summary of an export operation
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportSummary {
+    pub dataset_id: String,
+    pub format: String,
+    pub out_path: String,
+    pub exported_rows: usize,
+    pub file_size_bytes: u64,
+}
