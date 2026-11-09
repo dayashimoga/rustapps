@@ -69,6 +69,24 @@ impl DesktopIpcHandler for StudioDesktopHandler {
                 payload: json!({ "collection_id": "self-test-coll" }),
             },
             SelfTestCheck {
+                command: "resolve_variables",
+                payload: json!({
+                    "text": "{{baseUrl}}/health/v1",
+                    "collection_id": "self-test-coll"
+                }),
+            },
+            SelfTestCheck {
+                command: "list_environments",
+                payload: json!({}),
+            },
+            SelfTestCheck {
+                command: "run_owasp_audit",
+                payload: json!({
+                    "request_id": "self-test-req",
+                    "param_name": "q"
+                }),
+            },
+            SelfTestCheck {
                 command: "get_license_status",
                 payload: json!({}),
             },

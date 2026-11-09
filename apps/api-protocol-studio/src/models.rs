@@ -218,3 +218,80 @@ pub struct FuzzingResult {
     pub anomaly_detected: bool,
     pub notes: String,
 }
+
+/// A named execution environment (e.g., Local, Staging, Air-Gap Lab)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiEnvironment {
+    pub id: String,
+    pub name: String,
+    pub variables: Vec<KeyValuePair>,
+    pub is_active: bool,
+}
+
+impl ApiEnvironment {
+    pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            variables: Vec::new(),
+            is_active: false,
+        }
+    }
+}
+
+/// Variable token details for live hover preview & syntax highlighting
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VariableInterpolationToken {
+    pub key: String,
+    pub value: String,
+    pub found: bool,
+    pub placeholder: String,
+    pub start_idx: usize,
+    pub end_idx: usize,
+}
+
+/// Variable resolution summary with hover tokens
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VariableResolutionSummary {
+    pub original_text: String,
+    pub resolved_text: String,
+    pub tokens: Vec<VariableInterpolationToken>,
+    pub unresolved_count: usize,
+}
+
+/// Finding in an OWASP API Security report
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwaspReportFinding {
+    pub owasp_id: String,
+    pub title: String,
+    pub severity: String,
+    pub strategy: String,
+    pub target_param: String,
+    pub payload: String,
+    pub evidence: String,
+    pub remediation: String,
+}
+
+/// Comprehensive OWASP API Security Audit Report
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OwaspSecurityReport {
+    pub report_id: String,
+    pub generated_at: i64,
+    pub target_url: String,
+    pub method: String,
+    pub total_tests: usize,
+    pub anomalies_detected: usize,
+    pub overall_risk_score: String,
+    pub findings: Vec<OwaspReportFinding>,
+    pub markdown_summary: String,
+}
+
+/// Summary of an imported collection
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionImportSummary {
+    pub collection_id: String,
+    pub collection_name: String,
+    pub requests_count: usize,
+    pub variables_count: usize,
+    pub format: String,
+}

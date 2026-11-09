@@ -2,7 +2,9 @@
 //! Automated Offline Security & Protocol Fuzzing Engine
 
 use crate::http_client::AirGappedHttpClient;
-use crate::models::{ApiRequestItem, FuzzingResult, FuzzingStrategy};
+use crate::models::{
+    ApiRequestItem, FuzzingResult, FuzzingStrategy, OwaspReportFinding, OwaspSecurityReport,
+};
 
 pub struct ApiFuzzer;
 
@@ -62,7 +64,9 @@ impl ApiFuzzer {
         let mut results = Vec::new();
 
         for payload in payloads {
-            let fuzzed_request = base_request.clone();
+            let mut fuzzed_request = base_request.clone();
+            // Bound fuzzing timeout to at most 100ms per permutation for offline responsiveness
+            fuzzed_request.timeout_ms = base_request.timeout_ms.clamp(20, 100);
 
             // Mutate target parameter in query parameters or URL
             let mut target_url = resolved_url.to_string();
@@ -130,6 +134,141 @@ impl ApiFuzzer {
 
         results
     }
+
+    /// Synthesizes fuzzing permutation results into a formal OWASP API Security Audit Report
+    pub fn generate_owasp_report(
+        base_request: &ApiRequestItem,
+        resolved_url: &str,
+        results: &[FuzzingResult],
+    ) -> OwaspSecurityReport {
+        let mut findings = Vec::new();
+        let total_tests = results.len();
+        let mut anomalies_detected = 0;
+        let mut highest_severity = 0;
+
+        for res in results {
+            if res.anomaly_detected {
+                anomalies_detected += 1;
+
+                let (owasp_id, title, severity, sev_score, rem) = if res.payload.contains("whoami")
+                    || res.payload.contains("/etc/passwd")
+                    || res.payload.contains("dir")
+                {
+                    (
+                        "API8:2023",
+                        "Command Injection / Remote Code Execution",
+                        "CRITICAL",
+                        4,
+                        "Sanitize input using strict allowlists, never pass user inputs into OS command shells, and use parameterized system APIs.",
+                    )
+                } else if res.payload.contains("UNION SELECT")
+                    || res.payload.contains("DROP TABLE")
+                    || res.payload.contains("' OR '1'='1")
+                {
+                    (
+                        "API8:2023",
+                        "SQL Injection Flaw Detected",
+                        "HIGH",
+                        3,
+                        "Use parameterized SQL prepared statements or an ORM; never concatenate query strings directly into database drivers.",
+                    )
+                } else if res.payload.len() > 80 {
+                    (
+                        "API4:2023",
+                        "Unrestricted Resource Consumption / Buffer Size",
+                        "MEDIUM",
+                        2,
+                        "Enforce strict maximum string length limits and request payload size validation in reverse proxy/middleware.",
+                    )
+                } else if res.payload.contains("<script>") || res.payload.contains('\0') {
+                    (
+                        "API3:2023",
+                        "Broken Object Property Level Validation",
+                        "MEDIUM",
+                        2,
+                        "Validate all query and body characters against schema specifications, rejecting null bytes and script injection tokens.",
+                    )
+                } else {
+                    (
+                        "API10:2023",
+                        "Unsafe Consumption of Boundary Values",
+                        "LOW",
+                        1,
+                        "Ensure error handling handles non-standard numerical boundaries (NaN, -1, 64-bit int overflows) gracefully.",
+                    )
+                };
+
+                if sev_score > highest_severity {
+                    highest_severity = sev_score;
+                }
+
+                findings.push(OwaspReportFinding {
+                    owasp_id: owasp_id.to_string(),
+                    title: title.to_string(),
+                    severity: severity.to_string(),
+                    strategy: "Parameter Mutation Fuzzing".to_string(),
+                    target_param: res.target_param.clone(),
+                    payload: res.payload.clone(),
+                    evidence: format!(
+                        "Status: {}, Latency: {}ms, Notes: {}",
+                        res.status_code, res.latency_ms, res.notes
+                    ),
+                    remediation: rem.to_string(),
+                });
+            }
+        }
+
+        let overall_risk = match highest_severity {
+            4 => "CRITICAL",
+            3 => "HIGH",
+            2 => "MEDIUM",
+            1 => "LOW",
+            _ => "CLEAN",
+        };
+
+        let report_id = format!("owasp-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let now = 1700000000;
+
+        let mut md = format!(
+            "# OWASP API Security Audit Report\n\n- **Report ID:** `{}`\n- **Target Endpoint:** `{} {}`\n- **Overall Risk:** **{}**\n- **Checks Run:** {}\n- **Anomalies Detected:** {}\n\n| OWASP Category | Severity | Parameter | Payload | Evidence |\n| :--- | :--- | :--- | :--- | :--- |\n",
+            report_id,
+            base_request.method.as_str(),
+            resolved_url,
+            overall_risk,
+            total_tests,
+            anomalies_detected,
+        );
+
+        if findings.is_empty() {
+            md.push_str(
+                "| None | CLEAN | N/A | N/A | All adversarial fuzzing permutations handled safely |\n",
+            );
+        } else {
+            for f in &findings {
+                md.push_str(&format!(
+                    "| {} - {} | **{}** | `{}` | `{}` | {} |\n",
+                    f.owasp_id,
+                    f.title,
+                    f.severity,
+                    f.target_param,
+                    f.payload.replace('|', "\\|"),
+                    f.evidence
+                ));
+            }
+        }
+
+        OwaspSecurityReport {
+            report_id,
+            generated_at: now,
+            target_url: resolved_url.to_string(),
+            method: base_request.method.as_str().to_string(),
+            total_tests,
+            anomalies_detected,
+            overall_risk_score: overall_risk.to_string(),
+            findings,
+            markdown_summary: md,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -160,5 +299,12 @@ mod tests {
             ApiFuzzer::fuzz_endpoint(&req, &req.url, FuzzingStrategy::BoundaryValues, "id");
         assert_eq!(results.len(), 10);
         assert_eq!(results[0].target_param, "id");
+
+        let report = ApiFuzzer::generate_owasp_report(&req, &req.url, &results);
+        assert_eq!(report.target_url, "http://127.0.0.1:8080/api");
+        assert_eq!(report.total_tests, 10);
+        assert!(report
+            .markdown_summary
+            .contains("OWASP API Security Audit Report"));
     }
 }

@@ -4,9 +4,10 @@
 use crate::collection_store::{CollectionStore, StoreError};
 use crate::fuzzer::ApiFuzzer;
 use crate::http_client::{AirGappedHttpClient, HttpError};
+use crate::importers::{CurlParser, OpenApiCodec, PostmanCodec};
 use crate::models::{
-    ApiCollection, ApiRequestItem, ApiResponseSnapshot, FuzzingResult, FuzzingStrategy,
-    KeyValuePair,
+    ApiCollection, ApiEnvironment, ApiRequestItem, ApiResponseSnapshot, CollectionImportSummary,
+    FuzzingResult, FuzzingStrategy, KeyValuePair, OwaspSecurityReport, VariableResolutionSummary,
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -21,6 +22,12 @@ pub enum ServiceError {
     Http(#[from] HttpError),
     #[error("Request not found: {0}")]
     RequestNotFound(String),
+    #[error("Collection not found: {0}")]
+    CollectionNotFound(String),
+    #[error("Import error: {0}")]
+    ImportError(String),
+    #[error("Export error: {0}")]
+    ExportError(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,8 +103,11 @@ impl ApiStudioService {
             .get_request(request_id)?
             .ok_or_else(|| ServiceError::RequestNotFound(request_id.to_string()))?;
 
-        // Merge collection variables with runtime overrides
+        // Merge active environment variables, collection variables, and runtime overrides
         let mut vars = Vec::new();
+        if let Ok(Some(env)) = self.store.get_active_environment() {
+            vars.extend(env.variables);
+        }
         if let Ok(Some(coll)) = self.store.get_collection(&request.collection_id) {
             vars.extend(coll.variables);
         }
@@ -143,11 +153,13 @@ impl ApiStudioService {
             .get_request(request_id)?
             .ok_or_else(|| ServiceError::RequestNotFound(request_id.to_string()))?;
 
-        let vars = if let Ok(Some(coll)) = self.store.get_collection(&request.collection_id) {
-            coll.variables
-        } else {
-            Vec::new()
-        };
+        let mut vars = Vec::new();
+        if let Ok(Some(env)) = self.store.get_active_environment() {
+            vars.extend(env.variables);
+        }
+        if let Ok(Some(coll)) = self.store.get_collection(&request.collection_id) {
+            vars.extend(coll.variables);
+        }
         let resolved_url = CollectionStore::interpolate_variables(&request.url, &vars);
 
         Ok(ApiFuzzer::fuzz_endpoint(
@@ -155,6 +167,177 @@ impl ApiStudioService {
             &resolved_url,
             strategy,
             param_name,
+        ))
+    }
+
+    /// Saves an environment configuration
+    pub fn save_environment(&self, env: &ApiEnvironment) -> Result<(), ServiceError> {
+        Ok(self.store.save_environment(env)?)
+    }
+
+    /// Fetches an environment by id
+    pub fn get_environment(&self, id: &str) -> Result<Option<ApiEnvironment>, ServiceError> {
+        Ok(self.store.get_environment(id)?)
+    }
+
+    /// Lists all saved environments
+    pub fn list_environments(&self) -> Result<Vec<ApiEnvironment>, ServiceError> {
+        Ok(self.store.list_environments()?)
+    }
+
+    /// Deletes an environment by id
+    pub fn delete_environment(&self, id: &str) -> Result<bool, ServiceError> {
+        Ok(self.store.delete_environment(id)?)
+    }
+
+    /// Sets the active environment
+    pub fn set_active_environment(&self, id: &str) -> Result<bool, ServiceError> {
+        Ok(self.store.set_active_environment(id)?)
+    }
+
+    /// Gets the currently active environment
+    pub fn get_active_environment(&self) -> Result<Option<ApiEnvironment>, ServiceError> {
+        Ok(self.store.get_active_environment()?)
+    }
+
+    /// Resolves variable tokens for live hover tooltips & previews
+    pub fn resolve_variables(
+        &self,
+        text: &str,
+        collection_id: Option<&str>,
+        env_id: Option<&str>,
+    ) -> Result<VariableResolutionSummary, ServiceError> {
+        let mut vars = Vec::new();
+        if let Some(eid) = env_id {
+            if let Ok(Some(env)) = self.store.get_environment(eid) {
+                vars.extend(env.variables);
+            }
+        } else if let Ok(Some(env)) = self.store.get_active_environment() {
+            vars.extend(env.variables);
+        }
+
+        if let Some(cid) = collection_id {
+            if let Ok(Some(coll)) = self.store.get_collection(cid) {
+                vars.extend(coll.variables);
+            }
+        }
+
+        Ok(CollectionStore::resolve_variable_tokens(text, &vars))
+    }
+
+    /// Imports a request from a cURL command string
+    pub fn import_curl(
+        &self,
+        cmd: &str,
+        collection_id: &str,
+    ) -> Result<ApiRequestItem, ServiceError> {
+        let req = CurlParser::parse(cmd, collection_id).map_err(ServiceError::ImportError)?;
+        self.store.save_request(&req)?;
+        Ok(req)
+    }
+
+    /// Imports an OpenAPI 3.1 JSON specification
+    pub fn import_openapi(&self, json_str: &str) -> Result<CollectionImportSummary, ServiceError> {
+        let (coll, requests) = OpenApiCodec::import(json_str).map_err(ServiceError::ImportError)?;
+        let coll_id = coll.id.clone();
+        let coll_name = coll.name.clone();
+        let req_count = requests.len();
+        let var_count = coll.variables.len();
+
+        self.store.save_collection(&coll)?;
+        for req in requests {
+            self.store.save_request(&req)?;
+        }
+
+        Ok(CollectionImportSummary {
+            collection_id: coll_id,
+            collection_name: coll_name,
+            requests_count: req_count,
+            variables_count: var_count,
+            format: "OpenAPI 3.1".to_string(),
+        })
+    }
+
+    /// Exports a collection as OpenAPI 3.1 JSON specification
+    pub fn export_openapi(&self, collection_id: &str) -> Result<serde_json::Value, ServiceError> {
+        let coll = self
+            .store
+            .get_collection(collection_id)?
+            .ok_or_else(|| ServiceError::CollectionNotFound(collection_id.to_string()))?;
+        let requests = self.store.list_requests_in_collection(collection_id)?;
+        Ok(OpenApiCodec::export(&coll, &requests))
+    }
+
+    /// Imports a Postman Collection v2.1 JSON
+    pub fn import_postman(&self, json_str: &str) -> Result<CollectionImportSummary, ServiceError> {
+        let (coll, requests) = PostmanCodec::import(json_str).map_err(ServiceError::ImportError)?;
+        let coll_id = coll.id.clone();
+        let coll_name = coll.name.clone();
+        let req_count = requests.len();
+        let var_count = coll.variables.len();
+
+        self.store.save_collection(&coll)?;
+        for req in requests {
+            self.store.save_request(&req)?;
+        }
+
+        Ok(CollectionImportSummary {
+            collection_id: coll_id,
+            collection_name: coll_name,
+            requests_count: req_count,
+            variables_count: var_count,
+            format: "Postman v2.1".to_string(),
+        })
+    }
+
+    /// Exports a collection as Postman Collection v2.1 JSON
+    pub fn export_postman(&self, collection_id: &str) -> Result<serde_json::Value, ServiceError> {
+        let coll = self
+            .store
+            .get_collection(collection_id)?
+            .ok_or_else(|| ServiceError::CollectionNotFound(collection_id.to_string()))?;
+        let requests = self.store.list_requests_in_collection(collection_id)?;
+        Ok(PostmanCodec::export(&coll, &requests))
+    }
+
+    /// Runs a comprehensive OWASP API Security Audit against an endpoint
+    pub fn run_owasp_audit(
+        &self,
+        request_id: &str,
+        param_name: &str,
+    ) -> Result<OwaspSecurityReport, ServiceError> {
+        let request = self
+            .store
+            .get_request(request_id)?
+            .ok_or_else(|| ServiceError::RequestNotFound(request_id.to_string()))?;
+
+        let mut vars = Vec::new();
+        if let Ok(Some(env)) = self.store.get_active_environment() {
+            vars.extend(env.variables);
+        }
+        if let Ok(Some(coll)) = self.store.get_collection(&request.collection_id) {
+            vars.extend(coll.variables);
+        }
+        let resolved_url = CollectionStore::interpolate_variables(&request.url, &vars);
+
+        let strategies = [
+            FuzzingStrategy::SqlInjection,
+            FuzzingStrategy::CommandInjection,
+            FuzzingStrategy::BufferOverflow,
+            FuzzingStrategy::SpecialCharacters,
+            FuzzingStrategy::BoundaryValues,
+        ];
+
+        let mut all_results = Vec::new();
+        for strat in strategies {
+            let res = ApiFuzzer::fuzz_endpoint(&request, &resolved_url, strat, param_name);
+            all_results.extend(res);
+        }
+
+        Ok(ApiFuzzer::generate_owasp_report(
+            &request,
+            &resolved_url,
+            &all_results,
         ))
     }
 
@@ -228,5 +411,81 @@ mod tests {
         // Execute request against offline mock/closed port (expect 504 gateway response, no crash)
         let resp = service.execute_request("r-test", None).unwrap();
         assert!(resp.status_code == 200 || resp.status_code == 504);
+
+        // Test Environment Switching & Token Preview
+        let env = ApiEnvironment {
+            id: "env-staging".to_string(),
+            name: "Staging Cluster".to_string(),
+            variables: vec![
+                KeyValuePair::new("port", "9090"),
+                KeyValuePair::new("subdomain", "stage"),
+            ],
+            is_active: true,
+        };
+        service.save_environment(&env).unwrap();
+        service.set_active_environment("env-staging").unwrap();
+
+        let preview = service
+            .resolve_variables(
+                "https://{{subdomain}}.internal:{{port}}/v1/test",
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(preview.resolved_text, "https://stage.internal:9090/v1/test");
+        assert_eq!(preview.tokens.len(), 2);
+        assert_eq!(preview.unresolved_count, 0);
+
+        // Test cURL import
+        let curl_req = service
+            .import_curl(
+                r#"curl -X PUT "http://127.0.0.1:8080/users/42" -H "Content-Type: application/json" -d '{"active":true}'"#,
+                "c-test",
+            )
+            .unwrap();
+        assert_eq!(curl_req.method, HttpMethod::PUT);
+        assert_eq!(curl_req.collection_id, "c-test");
+
+        // Test OpenAPI import & export
+        let openapi_doc = r#"{
+            "openapi": "3.1.0",
+            "info": { "title": "Service OpenAPI", "version": "1.0.0" },
+            "paths": {
+                "/metrics": {
+                    "get": { "summary": "System metrics" }
+                }
+            }
+        }"#;
+        let oas_summary = service.import_openapi(openapi_doc).unwrap();
+        assert_eq!(oas_summary.requests_count, 1);
+        let exported_oas = service.export_openapi(&oas_summary.collection_id).unwrap();
+        assert!(exported_oas["paths"].get("/metrics").is_some());
+
+        // Test Postman import & export
+        let pm_doc = r#"{
+            "info": {
+                "name": "Service Postman",
+                "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+            },
+            "item": [{
+                "name": "Ping",
+                "request": {
+                    "method": "GET",
+                    "url": "http://127.0.0.1:8080/ping"
+                }
+            }]
+        }"#;
+        let pm_summary = service.import_postman(pm_doc).unwrap();
+        assert_eq!(pm_summary.requests_count, 1);
+        let exported_pm = service.export_postman(&pm_summary.collection_id).unwrap();
+        assert_eq!(exported_pm["info"]["name"], "Service Postman");
+
+        // Test OWASP Audit Report Generation
+        let owasp_report = service.run_owasp_audit("r-test", "id").unwrap();
+        assert_eq!(owasp_report.method, "GET");
+        assert!(owasp_report.total_tests >= 20);
+        assert!(owasp_report
+            .markdown_summary
+            .contains("OWASP API Security Audit Report"));
     }
 }

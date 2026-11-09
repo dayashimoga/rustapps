@@ -49,7 +49,11 @@ impl AirGappedHttpClient {
         let host = host_parts.next().unwrap_or("127.0.0.1");
         let port: u16 = host_parts.next().and_then(|p| p.parse().ok()).unwrap_or(80);
 
-        let timeout = Duration::from_millis(request.timeout_ms.max(500));
+        let timeout = Duration::from_millis(if request.timeout_ms == 0 {
+            5000
+        } else {
+            request.timeout_ms
+        });
 
         // Connect over TCP with timeout
         let addr = format!("{}:{}", host, port);

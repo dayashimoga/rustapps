@@ -2,7 +2,8 @@
 //! SQLite-backed Persistent Storage for Collections, Requests, History, and Variables
 
 use crate::models::{
-    ApiCollection, ApiRequestItem, ApiResponseSnapshot, HttpMethod, KeyValuePair, ProtocolType,
+    ApiCollection, ApiEnvironment, ApiRequestItem, ApiResponseSnapshot, HttpMethod, KeyValuePair,
+    ProtocolType, VariableInterpolationToken, VariableResolutionSummary,
 };
 use rusqlite::{params, Connection};
 use std::path::Path;
@@ -81,6 +82,13 @@ impl CollectionStore {
                 headers_json TEXT NOT NULL,
                 body TEXT NOT NULL,
                 timestamp INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS environments (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                variables_json TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE INDEX IF NOT EXISTS idx_requests_coll ON requests(collection_id);
@@ -327,16 +335,163 @@ impl CollectionStore {
         }
     }
 
-    /// Interpolates environment variables into an input string (e.g. `{{baseUrl}}/api`)
-    pub fn interpolate_variables(input: &str, vars: &[KeyValuePair]) -> String {
-        let mut result = input.to_string();
-        for v in vars {
-            if v.enabled {
-                let placeholder = format!("{{{{{}}}}}", v.key);
-                result = result.replace(&placeholder, &v.value);
+    pub fn save_environment(&self, env: &ApiEnvironment) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let vars_json = serde_json::to_string(&env.variables)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO environments (id, name, variables_json, is_active)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                env.id,
+                env.name,
+                vars_json,
+                if env.is_active { 1 } else { 0 }
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_environment(&self, id: &str) -> Result<Option<ApiEnvironment>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, variables_json, is_active FROM environments WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query(params![id])?;
+
+        if let Some(row) = rows.next()? {
+            let vars_json: String = row.get(2)?;
+            let is_active: i64 = row.get(3)?;
+            Ok(Some(ApiEnvironment {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                variables: serde_json::from_str(&vars_json).unwrap_or_default(),
+                is_active: is_active > 0,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn list_environments(&self) -> Result<Vec<ApiEnvironment>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, variables_json, is_active FROM environments ORDER BY name ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let vars_json: String = row.get(2)?;
+            let is_active: i64 = row.get(3)?;
+            Ok(ApiEnvironment {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                variables: serde_json::from_str(&vars_json).unwrap_or_default(),
+                is_active: is_active > 0,
+            })
+        })?;
+
+        let mut list = Vec::new();
+        for item in rows {
+            list.push(item?);
+        }
+        Ok(list)
+    }
+
+    pub fn delete_environment(&self, id: &str) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn.execute("DELETE FROM environments WHERE id = ?1", params![id])?;
+        Ok(affected > 0)
+    }
+
+    pub fn set_active_environment(&self, id: &str) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE environments SET is_active = 0", [])?;
+        let affected = conn.execute(
+            "UPDATE environments SET is_active = 1 WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    pub fn get_active_environment(&self) -> Result<Option<ApiEnvironment>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, variables_json, is_active FROM environments WHERE is_active = 1 LIMIT 1",
+        )?;
+        let mut rows = stmt.query([])?;
+
+        if let Some(row) = rows.next()? {
+            let vars_json: String = row.get(2)?;
+            let is_active: i64 = row.get(3)?;
+            Ok(Some(ApiEnvironment {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                variables: serde_json::from_str(&vars_json).unwrap_or_default(),
+                is_active: is_active > 0,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Resolves variable tokens with full metadata for live UI hover tooltips
+    pub fn resolve_variable_tokens(text: &str, vars: &[KeyValuePair]) -> VariableResolutionSummary {
+        let re = match regex::Regex::new(r"\{\{([a-zA-Z0-9_.-]+)\}\}") {
+            Ok(r) => r,
+            Err(_) => {
+                return VariableResolutionSummary {
+                    original_text: text.to_string(),
+                    resolved_text: text.to_string(),
+                    tokens: Vec::new(),
+                    unresolved_count: 0,
+                };
+            }
+        };
+
+        let mut tokens = Vec::new();
+        let mut resolved = String::new();
+        let mut last_idx = 0;
+        let mut unresolved_count = 0;
+
+        for cap in re.captures_iter(text) {
+            if let (Some(m), Some(k)) = (cap.get(0), cap.get(1)) {
+                let key = k.as_str();
+                resolved.push_str(&text[last_idx..m.start()]);
+
+                let found_var = vars.iter().find(|v| v.enabled && v.key == key);
+                let (val, found) = match found_var {
+                    Some(v) => (v.value.clone(), true),
+                    None => {
+                        unresolved_count += 1;
+                        (m.as_str().to_string(), false)
+                    }
+                };
+
+                tokens.push(VariableInterpolationToken {
+                    key: key.to_string(),
+                    value: if found { val.clone() } else { String::new() },
+                    found,
+                    placeholder: m.as_str().to_string(),
+                    start_idx: m.start(),
+                    end_idx: m.end(),
+                });
+
+                resolved.push_str(&val);
+                last_idx = m.end();
             }
         }
-        result
+
+        resolved.push_str(&text[last_idx..]);
+
+        VariableResolutionSummary {
+            original_text: text.to_string(),
+            resolved_text: resolved,
+            tokens,
+            unresolved_count,
+        }
+    }
+
+    /// Interpolates environment variables into an input string (e.g. `{{baseUrl}}/api`)
+    pub fn interpolate_variables(input: &str, vars: &[KeyValuePair]) -> String {
+        Self::resolve_variable_tokens(input, vars).resolved_text
     }
 }
 
