@@ -26,6 +26,7 @@ memmap2.workspace = true
 memchr.workspace = true
 regex.workspace = true
 rusqlite.workspace = true
+flate2.workspace = true
 
 # Internal workspace crates
 platform-common = { path = "../../platform" }

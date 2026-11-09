@@ -15,7 +15,7 @@ use shared_telemetry::LocalTelemetry;
 
 /// Opaque wrapper for `LogViewerService` across C-ABI boundary
 pub struct LogViewerHandle {
-    service: LogViewerService,
+    service: Arc<LogViewerService>,
     rt: Arc<Runtime>,
 }
 
@@ -49,7 +49,7 @@ pub extern "C" fn ulv_create_handle() -> *mut LogViewerHandle {
     };
 
     let telemetry = LocalTelemetry::new(false);
-    let service = LogViewerService::new(ws_store, telemetry);
+    let service = Arc::new(LogViewerService::new(ws_store, telemetry));
 
     Box::into_raw(Box::new(LogViewerHandle { service, rt }))
 }
@@ -228,7 +228,7 @@ pub unsafe extern "C" fn ulv_cluster_errors(
 /// `args_json` can be null or a valid null-terminated C string containing JSON object.
 #[no_mangle]
 pub unsafe extern "C" fn ulv_dispatch_command(
-    _handle: *mut LogViewerHandle,
+    handle: *mut LogViewerHandle,
     cmd: *const c_char,
     args_json: *const c_char,
 ) -> *mut c_char {
@@ -252,7 +252,14 @@ pub unsafe extern "C" fn ulv_dispatch_command(
         }
     };
 
-    match crate::commands::dispatch_ipc_command(cmd_str, args) {
+    let res = if !handle.is_null() {
+        let wrapper = &*handle;
+        crate::commands::dispatch_ipc_command_with_service(&wrapper.service, cmd_str, args)
+    } else {
+        crate::commands::dispatch_ipc_command(cmd_str, args)
+    };
+
+    match res {
         Ok(res) => to_c_string(&res),
         Err(e) => to_error_json(&e),
     }

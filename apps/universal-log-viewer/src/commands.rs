@@ -97,6 +97,47 @@ impl LogViewerService {
         }
     }
 
+    fn maybe_decompress_file<P: AsRef<Path>>(path: P) -> anyhow::Result<PathBuf> {
+        let p = path.as_ref();
+        let is_gz = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.eq_ignore_ascii_case("gz") || s.eq_ignore_ascii_case("gzip"))
+            .unwrap_or(false);
+
+        let has_gz_magic = if p.exists() {
+            if let Ok(mut file) = std::fs::File::open(p) {
+                let mut magic = [0u8; 2];
+                use std::io::Read;
+                file.read_exact(&mut magic).is_ok() && magic == [0x1f, 0x8b]
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if is_gz || has_gz_magic {
+            let cache_dir = platform_common::AppPaths::from_app_name("universal-log-viewer")
+                .map(|paths| paths.cache_dir)
+                .unwrap_or_else(|_| std::env::temp_dir());
+            let _ = std::fs::create_dir_all(&cache_dir);
+            let stem = p
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("decompressed");
+            let dest = cache_dir.join(format!("{}_{}.log", stem, std::process::id()));
+
+            let file = std::fs::File::open(p)?;
+            let mut decoder = flate2::read::GzDecoder::new(file);
+            let mut out_file = std::fs::File::create(&dest)?;
+            std::io::copy(&mut decoder, &mut out_file)?;
+            Ok(dest)
+        } else {
+            Ok(p.to_path_buf())
+        }
+    }
+
     /// Access plugin manager
     pub fn plugin_manager(&self) -> &LogViewerPluginManager {
         &self.plugin_manager
@@ -105,7 +146,8 @@ impl LogViewerService {
     /// Open a log file, map it into virtual memory, and build its sparse index.
     pub async fn open_file<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<OpenedFileInfo> {
         let path_ref = path.as_ref();
-        let engine = MmapLogEngine::open(path_ref)?;
+        let target_path = Self::maybe_decompress_file(path_ref)?;
+        let engine = MmapLogEngine::open(&target_path)?;
         let index = SparseLineIndex::build(engine.as_bytes());
 
         // Sample initial lines for format detection
@@ -131,7 +173,7 @@ impl LogViewerService {
         {
             let mut active_lock = self.active_file.write().await;
             *active_lock = Some(ActiveFileState {
-                path: path_ref.to_path_buf(),
+                path: target_path,
                 engine,
                 index,
                 tail: None,
@@ -623,6 +665,99 @@ impl LogViewerService {
     pub fn get_system_metrics(&self) -> ProcessResourceUsage {
         ProcessResourceUsage::sample()
     }
+
+    /// Execute read-only SQL aggregation query over normalized records in SQLite
+    pub async fn query_sql(
+        &self,
+        query: &str,
+        max_records: usize,
+    ) -> anyhow::Result<SqlQueryResult> {
+        let start = std::time::Instant::now();
+        let records = self.parse_records(max_records).await?;
+
+        let conn = rusqlite::Connection::open_in_memory()?;
+        conn.execute(
+            "CREATE TABLE logs (
+                line_number INTEGER,
+                timestamp INTEGER,
+                timestamp_iso TEXT,
+                level TEXT,
+                service TEXT,
+                message TEXT,
+                raw TEXT
+            )",
+            [],
+        )?;
+
+        {
+            let mut stmt = conn.prepare(
+                "INSERT INTO logs (line_number, timestamp, timestamp_iso, level, service, message, raw)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+
+            for r in &records {
+                let ts_epoch = r.timestamp_epoch_ms.unwrap_or(0);
+                let ts_iso = r.timestamp_raw.as_deref().unwrap_or("");
+                let level_str = r.severity.as_str();
+                stmt.execute(rusqlite::params![
+                    r.line_number as i64,
+                    ts_epoch,
+                    ts_iso,
+                    level_str,
+                    r.source.as_deref().unwrap_or(""),
+                    r.message,
+                    r.raw,
+                ])?;
+            }
+        }
+
+        let mut query_stmt = conn.prepare(query)?;
+        let col_count = query_stmt.column_count();
+        let columns: Vec<String> = query_stmt
+            .column_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let mut rows = Vec::new();
+        let mut rows_iter = query_stmt.query([])?;
+        while let Some(row) = rows_iter.next()? {
+            let mut row_vals = Vec::with_capacity(col_count);
+            for i in 0..col_count {
+                let val: rusqlite::types::Value = row.get(i)?;
+                let json_val = match val {
+                    rusqlite::types::Value::Null => serde_json::Value::Null,
+                    rusqlite::types::Value::Integer(n) => serde_json::json!(n),
+                    rusqlite::types::Value::Real(f) => serde_json::json!(f),
+                    rusqlite::types::Value::Text(s) => serde_json::json!(s),
+                    rusqlite::types::Value::Blob(b) => {
+                        serde_json::json!(format!("<blob {}B>", b.len()))
+                    }
+                };
+                row_vals.push(json_val);
+            }
+            rows.push(row_vals);
+        }
+
+        let execution_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let row_count = rows.len();
+
+        Ok(SqlQueryResult {
+            columns,
+            rows,
+            row_count,
+            execution_ms,
+        })
+    }
+}
+
+/// Query result for SQL execution over logs
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SqlQueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<serde_json::Value>>,
+    pub row_count: usize,
+    pub execution_ms: f64,
 }
 
 static DEFAULT_LOG_SERVICE: std::sync::OnceLock<Arc<LogViewerService>> = std::sync::OnceLock::new();
@@ -701,6 +836,16 @@ pub fn dispatch_ipc_command(
     args: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let svc = get_default_log_service()?;
+    dispatch_ipc_command_with_service(&svc, cmd, args)
+}
+
+/// Dispatch desktop IPC commands using an explicit LogViewerService instance
+pub fn dispatch_ipc_command_with_service(
+    svc: &Arc<LogViewerService>,
+    cmd: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let svc = Arc::clone(svc);
     let fut = async move {
         match cmd {
             "open_file" => {
@@ -771,9 +916,14 @@ pub fn dispatch_ipc_command(
                 let start_line = args
                     .get("startLine")
                     .or_else(|| args.get("start_line"))
+                    .or_else(|| args.get("offset"))
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as usize;
-                let count = args.get("count").and_then(|v| v.as_u64()).unwrap_or(60) as usize;
+                let count = args
+                    .get("count")
+                    .or_else(|| args.get("limit"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(60) as usize;
                 let slice = svc
                     .get_lines_slice(start_line, count)
                     .await
@@ -1236,6 +1386,21 @@ pub fn dispatch_ipc_command(
                 let status = activate_license_cmd(license_json)?;
                 serde_json::to_value(status).map_err(|e| e.to_string())
             }
+            "query_logs_sql" | "query_sql" => {
+                let query = args.get("query").and_then(|v| v.as_str()).unwrap_or(
+                    "SELECT level, count(*) as count FROM logs GROUP BY level ORDER BY count DESC",
+                );
+                let max_records = args
+                    .get("max_records")
+                    .or_else(|| args.get("maxRecords"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(20_000) as usize;
+                let res = svc
+                    .query_sql(query, max_records)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(res).map_err(|e| e.to_string())
+            }
             _ => Err(format!("Unknown Universal Log Viewer IPC command: {}", cmd)),
         }
     };
@@ -1431,5 +1596,78 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("signature") || err.contains("InvalidSignature"));
+    }
+
+    #[tokio::test]
+    async fn test_gz_file_transparent_decompression() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let temp = tempfile::tempdir().unwrap();
+        let gz_path = temp.path().join("archive.log.gz");
+        let raw_lines = "2026-10-19T10:00:00Z [INFO] Gzip booted\n2026-10-19T10:00:01Z [WARN] Disk getting full\n2026-10-19T10:00:02Z [ERROR] Failed to save state\n";
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(raw_lines.as_bytes()).unwrap();
+        let compressed = encoder.finish().unwrap();
+        std::fs::write(&gz_path, compressed).unwrap();
+
+        let ws = Arc::new(WorkspaceStore::open_in_memory().unwrap());
+        let svc = LogViewerService::new(ws, LocalTelemetry::new(false));
+
+        let info = svc.open_file(&gz_path).await.unwrap();
+        assert_eq!(info.total_lines, 3);
+
+        let lines = svc.get_lines_slice(0, 3).await.unwrap();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].text.contains("Gzip booted"));
+        assert!(lines[2].text.contains("Failed to save state"));
+    }
+
+    #[tokio::test]
+    async fn test_sql_over_logs_aggregation() {
+        let temp = tempfile::tempdir().unwrap();
+        let log_path = temp.path().join("sql_test.log");
+        let content = "2026-10-19T10:00:00Z [INFO] Auth service started\n\
+                       2026-10-19T10:00:01Z [INFO] User login success\n\
+                       2026-10-19T10:00:02Z [WARN] High memory usage\n\
+                       2026-10-19T10:00:03Z [ERROR] Database timeout\n\
+                       2026-10-19T10:00:04Z [ERROR] Connection pool empty\n";
+        std::fs::write(&log_path, content.as_bytes()).unwrap();
+
+        let ws = Arc::new(WorkspaceStore::open_in_memory().unwrap());
+        let svc = Arc::new(LogViewerService::new(ws, LocalTelemetry::new(false)));
+        svc.open_file(&log_path).await.unwrap();
+
+        let res = svc
+            .query_sql(
+                "SELECT level, count(*) as count FROM logs GROUP BY level ORDER BY count DESC",
+                100,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.columns, vec!["level", "count"]);
+        assert_eq!(res.row_count, 3);
+        let levels: Vec<String> = res
+            .rows
+            .iter()
+            .map(|r| r[0].as_str().unwrap().to_string())
+            .collect();
+        assert!(levels.contains(&"INFO".to_string()));
+        assert!(levels.contains(&"ERROR".to_string()));
+        assert!(levels.contains(&"WARN".to_string()));
+
+        let ipc_val = dispatch_ipc_command_with_service(
+            &svc,
+            "query_sql",
+            serde_json::json!({
+                "query": "SELECT count(*) as total_errors FROM logs WHERE level = 'ERROR'"
+            }),
+        )
+        .unwrap();
+        assert_eq!(ipc_val["row_count"], 1);
+        assert_eq!(ipc_val["rows"][0][0], 2);
     }
 }
