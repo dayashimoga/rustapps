@@ -2,11 +2,46 @@
 //! Offline AI Screen Recording & Tutorial Synthesis Engine
 //!
 //! Handles cursor tracking, automated zoom keyframe generation, silence/dead-air
-//! detection, subtitle cue synchronization, and self-contained tutorial compilation.
+//! detection, subtitle cue synchronization, PII redaction detection, keystroke HUD rendering,
+//! and self-contained tutorial compilation.
 
 use crate::models::{
-    AudioSilenceInterval, ClickType, CursorEvent, SubtitleCue, TutorialStep, ZoomKeyframe,
+    AudioSilenceInterval, ClickType, CursorEvent, KeystrokeEvent, RedactionRegion, SubtitleCue,
+    TextRegion, TutorialStep, ZoomKeyframe,
 };
+use regex::Regex;
+use std::sync::OnceLock;
+
+static RE_API_KEY: OnceLock<Regex> = OnceLock::new();
+static RE_JWT: OnceLock<Regex> = OnceLock::new();
+static RE_EMAIL: OnceLock<Regex> = OnceLock::new();
+static RE_CREDIT_CARD: OnceLock<Regex> = OnceLock::new();
+
+fn get_api_key_regex() -> &'static Regex {
+    RE_API_KEY.get_or_init(|| {
+        Regex::new(r"(?i)(?:sk-[a-zA-Z0-9_\-]{16,}|AKIA[0-9A-Z]{16}|ghp_[a-zA-Z0-9]{36}|[a-zA-Z0-9_\-]{20,}_api_key)")
+            .expect("Valid API key regex")
+    })
+}
+
+fn get_jwt_regex() -> &'static Regex {
+    RE_JWT.get_or_init(|| {
+        Regex::new(r"eyJ[a-zA-Z0-9_\-]{10,}\.eyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]+")
+            .expect("Valid JWT regex")
+    })
+}
+
+fn get_email_regex() -> &'static Regex {
+    RE_EMAIL.get_or_init(|| {
+        Regex::new(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+").expect("Valid email regex")
+    })
+}
+
+fn get_credit_card_regex() -> &'static Regex {
+    RE_CREDIT_CARD.get_or_init(|| {
+        Regex::new(r"\b(?:\d{4}[-\s]?){3}\d{4}\b").expect("Valid credit card regex")
+    })
+}
 
 pub struct TutorialEngine;
 
@@ -188,6 +223,100 @@ impl TutorialEngine {
         }
 
         steps
+    }
+
+    /// Detects sensitive PII patterns (API keys, JWT tokens, emails, credit cards)
+    /// across text bounding boxes and returns suggested redaction regions.
+    pub fn detect_pii_redactions(regions: &[TextRegion]) -> Vec<RedactionRegion> {
+        let mut redactions = Vec::new();
+        let re_api = get_api_key_regex();
+        let re_jwt = get_jwt_regex();
+        let re_email = get_email_regex();
+        let re_card = get_credit_card_regex();
+
+        for region in regions {
+            let mut detected_type = None;
+
+            if re_api.is_match(&region.text) {
+                detected_type = Some("api_key");
+            } else if re_jwt.is_match(&region.text) {
+                detected_type = Some("jwt");
+            } else if re_card.is_match(&region.text) {
+                detected_type = Some("credit_card");
+            } else if re_email.is_match(&region.text) {
+                detected_type = Some("email");
+            }
+
+            if let Some(ptype) = detected_type {
+                redactions.push(RedactionRegion {
+                    id: format!("redact-{}", uuid::Uuid::new_v4().simple()),
+                    label: format!("Auto Redacted ({})", ptype),
+                    x: region.x.clamp(0.0, 1.0),
+                    y: region.y.clamp(0.0, 1.0),
+                    width: region.width.clamp(0.01, 1.0),
+                    height: region.height.clamp(0.01, 1.0),
+                    pattern_type: ptype.to_string(),
+                });
+            }
+        }
+
+        redactions
+    }
+
+    /// Renders an SVG overlay element representing keystroke shortcut pill HUD
+    pub fn render_keystroke_hud_svg(
+        active_keys: &[&KeystrokeEvent],
+        width: u32,
+        height: u32,
+    ) -> String {
+        if active_keys.is_empty() {
+            return format!(
+                r#"<svg width="{}" height="{}" viewBox="0 0 {} {}" xmlns="http://www.w3.org/2000/svg"></svg>"#,
+                width, height, width, height
+            );
+        }
+
+        let mut pills = String::new();
+        let pill_height = 36;
+        let base_y = height.saturating_sub(60);
+
+        for (i, key) in active_keys.iter().enumerate() {
+            let combo = &key.key_combination;
+            let parts: Vec<&str> = combo.split('+').collect();
+            let mut key_tags = String::new();
+            let mut offset_x = 20.0f32;
+
+            for part in parts {
+                let text = part.trim();
+                let key_w = (text.len() as f32 * 10.0 + 20.0).max(36.0);
+                key_tags.push_str(&format!(
+                    r##"<rect x="{}" y="6" width="{}" height="24" rx="4" fill="#1e293b" stroke="#475569" stroke-width="1.5"/>
+                    <text x="{}" y="22" font-family="monospace, sans-serif" font-size="12" font-weight="700" fill="#f8fafc" text-anchor="middle">{}</text>"##,
+                    offset_x,
+                    key_w,
+                    offset_x + key_w / 2.0,
+                    text
+                ));
+                offset_x += key_w + 8.0;
+            }
+
+            let total_pill_w = offset_x + 12.0;
+            let start_x = ((width as f32 - total_pill_w) / 2.0).max(10.0);
+            let pill_y = base_y.saturating_sub((i as u32) * (pill_height + 8));
+
+            pills.push_str(&format!(
+                r##"<g transform="translate({}, {})">
+                    <rect x="0" y="0" width="{}" height="{}" rx="8" fill="rgba(15, 23, 42, 0.9)" stroke="#38bdf8" stroke-width="1.5" filter="drop-shadow(0 4px 6px rgba(0,0,0,0.6))"/>
+                    {}
+                </g>"##,
+                start_x, pill_y, total_pill_w, pill_height, key_tags
+            ));
+        }
+
+        format!(
+            r#"<svg width="{}" height="{}" viewBox="0 0 {} {}" xmlns="http://www.w3.org/2000/svg">{}</svg>"#,
+            width, height, width, height, pills
+        )
     }
 
     /// Formats subtitle cues into standard SubRip (.srt) timing text
@@ -378,6 +507,70 @@ mod tests {
         assert_eq!(steps[0].action_type, "Click");
         assert_eq!(steps[1].step_number, 2);
         assert_eq!(steps[1].action_type, "DoubleClick");
+    }
+
+    #[test]
+    fn test_pii_redaction_detection() {
+        let regions = vec![
+            TextRegion {
+                text: "Here is your API key: sk-ant-api03-abcdef1234567890xyz and continue"
+                    .to_string(),
+                x: 0.1,
+                y: 0.2,
+                width: 0.3,
+                height: 0.05,
+            },
+            TextRegion {
+                text: "Contact user at dev@enterprise.internal for support".to_string(),
+                x: 0.5,
+                y: 0.6,
+                width: 0.25,
+                height: 0.04,
+            },
+            TextRegion {
+                text: "Card number 4111 2222 3333 4444 on file".to_string(),
+                x: 0.2,
+                y: 0.8,
+                width: 0.4,
+                height: 0.05,
+            },
+            TextRegion {
+                text: "Normal non-sensitive instructional text".to_string(),
+                x: 0.1,
+                y: 0.1,
+                width: 0.5,
+                height: 0.05,
+            },
+        ];
+
+        let redactions = TutorialEngine::detect_pii_redactions(&regions);
+        assert_eq!(redactions.len(), 3);
+        assert_eq!(redactions[0].pattern_type, "api_key");
+        assert_eq!(redactions[1].pattern_type, "email");
+        assert_eq!(redactions[2].pattern_type, "credit_card");
+    }
+
+    #[test]
+    fn test_keystroke_hud_svg_rendering() {
+        let ev1 = KeystrokeEvent {
+            timestamp_ms: 1000,
+            key_combination: "Ctrl+Shift+P".to_string(),
+            duration_ms: 1200,
+        };
+        let ev2 = KeystrokeEvent {
+            timestamp_ms: 2500,
+            key_combination: "Enter".to_string(),
+            duration_ms: 500,
+        };
+
+        let svg_empty = TutorialEngine::render_keystroke_hud_svg(&[], 1280, 720);
+        assert!(svg_empty.contains("<svg width=\"1280\""));
+
+        let svg_active = TutorialEngine::render_keystroke_hud_svg(&[&ev1, &ev2], 1280, 720);
+        assert!(svg_active.contains("Ctrl"));
+        assert!(svg_active.contains("Shift"));
+        assert!(svg_active.contains("P"));
+        assert!(svg_active.contains("Enter"));
     }
 
     #[test]

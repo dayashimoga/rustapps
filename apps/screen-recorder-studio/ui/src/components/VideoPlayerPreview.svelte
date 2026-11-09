@@ -1,13 +1,17 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
-  import type { CursorEvent, ZoomKeyframe } from '../App.svelte';
+  import type { CursorEvent, KeystrokeEvent, RedactionRegion, ZoomKeyframe } from '../App.svelte';
 
   export let currentTimeMs: number = 0;
   export let durationMs: number = 10_000;
   export let isPlaying: boolean = false;
   export let zoomKeyframes: ZoomKeyframe[] = [];
   export let cursorEvents: CursorEvent[] = [];
+  export let keystrokeEvents: KeystrokeEvent[] = [];
+  export let redactionRegions: RedactionRegion[] = [];
   export let currentZoomScale: number = 1.45;
+
+  let showRedactions: boolean = true;
 
   const dispatch = createEventDispatcher<{
     seek: number;
@@ -37,11 +41,16 @@
       : prev;
   }, cursorEvents[0] || { timestamp_ms: 0, x: 0.5, y: 0.5, click: 'None' });
 
+  // Active keystrokes at currentTimeMs
+  $: activeKeystrokes = keystrokeEvents.filter(
+    (k) => currentTimeMs >= k.timestamp_ms && currentTimeMs <= k.timestamp_ms + k.duration_ms
+  );
+
   onMount(() => {
     drawFrame();
   });
 
-  $: if (canvas && (currentTimeMs || activeZoom || activeCursor)) {
+  $: if (canvas && (currentTimeMs || activeZoom || activeCursor || showRedactions || redactionRegions.length)) {
     drawFrame();
   }
 
@@ -89,6 +98,29 @@
     ctx.fillRect(520, 80, 180, 120);
     ctx.fillRect(60, 220, 440, 140);
     ctx.fillRect(520, 220, 180, 140);
+
+    // Draw Redaction Regions if enabled
+    if (showRedactions && redactionRegions.length > 0) {
+      for (const reg of redactionRegions) {
+        const rx = reg.x * w;
+        const ry = reg.y * h;
+        const rw = reg.width * w;
+        const rh = reg.height * h;
+
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
+        ctx.fillRect(rx, ry, rw, rh);
+
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(rx, ry, rw, rh);
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = '#f59e0b';
+        ctx.font = 'bold 10px monospace';
+        ctx.fillText(`🛡️ REDACTED (${reg.pattern_type.toUpperCase()})`, rx + 6, ry + 16);
+      }
+    }
 
     // If active zoom, draw dynamic zoom boundary box
     if (activeZoom) {
@@ -156,6 +188,19 @@
         <span>🔍 {activeZoom.label} ({activeZoom.scale}x)</span>
       </div>
     {/if}
+
+    {#if activeKeystrokes.length > 0}
+      <div class="keystroke-hud">
+        {#each activeKeystrokes as key}
+          <div class="key-pill">
+            <span class="hud-icon">⌨️</span>
+            {#each key.key_combination.split('+') as part}
+              <kbd>{part.trim()}</kbd>
+            {/each}
+          </div>
+        {/each}
+      </div>
+    {/if}
   </div>
 
   <div class="player-controls">
@@ -190,8 +235,17 @@
     </div>
 
     <div class="transport-right">
+      <button
+        class="redact-toggle-btn"
+        class:active={showRedactions}
+        on:click={() => (showRedactions = !showRedactions)}
+        title="Toggle PII Privacy Redactions Mask"
+      >
+        🛡️ Redactions ({redactionRegions.length})
+      </button>
+
       <label class="scale-label">
-        <span>Zoom Scale:</span>
+        <span>Zoom:</span>
         <input
           type="range"
           min="1.2"
@@ -245,6 +299,46 @@
     backdrop-filter: blur(4px);
   }
 
+  .keystroke-hud {
+    position: absolute;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: center;
+    pointer-events: none;
+    z-index: 40;
+  }
+
+  .key-pill {
+    background: rgba(15, 23, 42, 0.92);
+    border: 1px solid var(--accent-cyan);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+    padding: 6px 14px;
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    backdrop-filter: blur(8px);
+  }
+
+  .hud-icon {
+    font-size: 0.9rem;
+  }
+
+  .key-pill kbd {
+    background: #1e293b;
+    border: 1px solid #475569;
+    color: #f8fafc;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
   .player-controls {
     padding: 10px 16px;
     background: var(--bg-secondary);
@@ -268,6 +362,7 @@
     border-radius: 6px;
     font-size: 0.8rem;
     font-weight: 600;
+    cursor: pointer;
   }
 
   .play-btn:hover {
@@ -316,6 +411,24 @@
   .transport-right {
     display: flex;
     align-items: center;
+    gap: 14px;
+  }
+
+  .redact-toggle-btn {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .redact-toggle-btn.active {
+    background: rgba(245, 158, 11, 0.15);
+    border-color: #f59e0b;
+    color: #f59e0b;
   }
 
   .scale-label {

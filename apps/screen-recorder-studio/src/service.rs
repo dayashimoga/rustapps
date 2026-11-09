@@ -3,7 +3,8 @@
 
 use crate::engine::TutorialEngine;
 use crate::models::{
-    ClickType, CursorEvent, ExportConfig, ExportFormat, RecordingSession, StudioStats, SubtitleCue,
+    ClickType, CursorEvent, ExportConfig, ExportFormat, KeystrokeEvent, RecordingSession,
+    RedactionRegion, StudioStats, SubtitleCue, TextRegion, ZoomKeyframe,
 };
 use rusqlite::{params, Connection};
 use std::path::Path;
@@ -140,6 +141,7 @@ impl RecorderService {
         title: &str,
         duration_ms: u64,
         events: Vec<CursorEvent>,
+        keystroke_events: Vec<KeystrokeEvent>,
         subtitles: Vec<SubtitleCue>,
     ) -> Result<RecordingSession, StudioError> {
         let session_id = format!("rec-{}", uuid::Uuid::new_v4().simple());
@@ -178,7 +180,9 @@ impl RecorderService {
             auto_zooms_count: zoom_keyframes.len(),
             silence_trimmed_ms,
             cursor_events: events,
+            keystroke_events,
             zoom_keyframes,
+            redaction_regions: Vec::new(),
             subtitles,
             tutorial_steps,
         };
@@ -202,6 +206,78 @@ impl RecorderService {
         session.auto_zooms_count = session.zoom_keyframes.len();
         self.save_session(&session)?;
         Ok(session)
+    }
+
+    /// Adds a manual or customized zoom keyframe to a recording timeline
+    pub fn add_zoom_keyframe(
+        &self,
+        session_id: &str,
+        keyframe: ZoomKeyframe,
+    ) -> Result<RecordingSession, StudioError> {
+        let mut session = self.get_session(session_id)?;
+        session.zoom_keyframes.push(keyframe);
+        session.zoom_keyframes.sort_by_key(|k| k.start_ms);
+        session.auto_zooms_count = session.zoom_keyframes.len();
+        self.save_session(&session)?;
+        Ok(session)
+    }
+
+    /// Removes a zoom keyframe matching start_ms
+    pub fn delete_zoom_keyframe(
+        &self,
+        session_id: &str,
+        start_ms: u64,
+    ) -> Result<RecordingSession, StudioError> {
+        let mut session = self.get_session(session_id)?;
+        session.zoom_keyframes.retain(|k| k.start_ms != start_ms);
+        session.auto_zooms_count = session.zoom_keyframes.len();
+        self.save_session(&session)?;
+        Ok(session)
+    }
+
+    /// Adds a privacy / PII redaction mask region
+    pub fn add_redaction_region(
+        &self,
+        session_id: &str,
+        region: RedactionRegion,
+    ) -> Result<RecordingSession, StudioError> {
+        let mut session = self.get_session(session_id)?;
+        session.redaction_regions.push(region);
+        self.save_session(&session)?;
+        Ok(session)
+    }
+
+    /// Deletes a privacy / PII redaction region by ID
+    pub fn delete_redaction_region(
+        &self,
+        session_id: &str,
+        region_id: &str,
+    ) -> Result<RecordingSession, StudioError> {
+        let mut session = self.get_session(session_id)?;
+        session.redaction_regions.retain(|r| r.id != region_id);
+        self.save_session(&session)?;
+        Ok(session)
+    }
+
+    /// Auto-detects PII from supplied text regions and persists detected redaction masks
+    pub fn detect_pii_redactions_for_session(
+        &self,
+        session_id: &str,
+        text_regions: &[TextRegion],
+    ) -> Result<Vec<RedactionRegion>, StudioError> {
+        let mut session = self.get_session(session_id)?;
+        let detected = TutorialEngine::detect_pii_redactions(text_regions);
+        for r in &detected {
+            if !session
+                .redaction_regions
+                .iter()
+                .any(|existing| existing.label == r.label && (existing.x - r.x).abs() < 0.01)
+            {
+                session.redaction_regions.push(r.clone());
+            }
+        }
+        self.save_session(&session)?;
+        Ok(detected)
     }
 
     /// Exports tutorial output (HTML, SRT subtitles, or config manifest)
@@ -303,6 +379,24 @@ impl RecorderService {
             },
         ];
 
+        let keystroke_events = vec![
+            KeystrokeEvent {
+                timestamp_ms: 1200,
+                key_combination: "Ctrl+Shift+P".to_string(),
+                duration_ms: 800,
+            },
+            KeystrokeEvent {
+                timestamp_ms: 4500,
+                key_combination: "git commit -m \"feat: air-gap ready\"".to_string(),
+                duration_ms: 1500,
+            },
+            KeystrokeEvent {
+                timestamp_ms: 8200,
+                key_combination: "Enter".to_string(),
+                duration_ms: 500,
+            },
+        ];
+
         let subtitles = vec![
             SubtitleCue {
                 start_ms: 600,
@@ -324,12 +418,27 @@ impl RecorderService {
             },
         ];
 
-        self.create_recording_session(
+        let mut session = self.create_recording_session(
             "Demo: Offline Air-Gapped Deployment Walkthrough",
             12_000,
             events,
+            keystroke_events,
             subtitles,
-        )
+        )?;
+
+        // Seed sample PII redaction mask over credentials panel
+        session.redaction_regions = vec![RedactionRegion {
+            id: "redact-demo-1".to_string(),
+            label: "Auto Redacted (api_key)".to_string(),
+            x: 0.28,
+            y: 0.25,
+            width: 0.38,
+            height: 0.08,
+            pattern_type: "api_key".to_string(),
+        }];
+
+        self.save_session(&session)?;
+        Ok(session)
     }
 }
 
@@ -345,6 +454,8 @@ mod tests {
         assert_eq!(session.total_clicks, 4);
         assert_eq!(session.auto_zooms_count, 4);
         assert_eq!(session.tutorial_steps.len(), 4);
+        assert_eq!(session.keystroke_events.len(), 3);
+        assert_eq!(session.redaction_regions.len(), 1);
 
         let retrieved = service.get_session(&session.session_id).expect("get");
         assert_eq!(retrieved.title, session.title);
@@ -360,6 +471,66 @@ mod tests {
         // Adjust zoom scale
         let adjusted = service.adjust_auto_zooms(&session.session_id, 1.8).unwrap();
         assert_eq!(adjusted.zoom_keyframes[0].scale, 1.8);
+
+        // Add manual zoom keyframe
+        let updated = service
+            .add_zoom_keyframe(
+                &session.session_id,
+                ZoomKeyframe {
+                    start_ms: 10_000,
+                    end_ms: 11_500,
+                    focus_x: 0.5,
+                    focus_y: 0.5,
+                    scale: 2.0,
+                    easing: "ease-in-out".to_string(),
+                    label: "Manual Zoom".to_string(),
+                },
+            )
+            .unwrap();
+        assert_eq!(updated.zoom_keyframes.len(), 5);
+
+        // Delete zoom keyframe
+        let deleted = service
+            .delete_zoom_keyframe(&session.session_id, 10_000)
+            .unwrap();
+        assert_eq!(deleted.zoom_keyframes.len(), 4);
+
+        // Redaction operations
+        let red_session = service
+            .add_redaction_region(
+                &session.session_id,
+                RedactionRegion {
+                    id: "redact-custom-1".to_string(),
+                    label: "Test Region".to_string(),
+                    x: 0.1,
+                    y: 0.1,
+                    width: 0.2,
+                    height: 0.2,
+                    pattern_type: "custom".to_string(),
+                },
+            )
+            .unwrap();
+        assert_eq!(red_session.redaction_regions.len(), 2);
+
+        let unred_session = service
+            .delete_redaction_region(&session.session_id, "redact-custom-1")
+            .unwrap();
+        assert_eq!(unred_session.redaction_regions.len(), 1);
+
+        // Auto PII detection
+        let text_regions = vec![TextRegion {
+            text: "My secret token is sk-ant-api03-abcdef1234567890".to_string(),
+            x: 0.4,
+            y: 0.5,
+            width: 0.3,
+            height: 0.05,
+        }];
+        let detected = service
+            .detect_pii_redactions_for_session(&session.session_id, &text_regions)
+            .unwrap();
+        assert_eq!(detected.len(), 1);
+        let final_session = service.get_session(&session.session_id).unwrap();
+        assert_eq!(final_session.redaction_regions.len(), 2);
 
         // Export interactive HTML
         let html = service

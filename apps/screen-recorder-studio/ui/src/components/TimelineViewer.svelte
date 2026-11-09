@@ -1,16 +1,19 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import type { CursorEvent, SubtitleCue, TutorialStep, ZoomKeyframe } from '../App.svelte';
+  import type { CursorEvent, KeystrokeEvent, RedactionRegion, SubtitleCue, ZoomKeyframe } from '../App.svelte';
 
   export let durationMs: number = 10_000;
   export let currentTimeMs: number = 0;
   export let cursorEvents: CursorEvent[] = [];
   export let zoomKeyframes: ZoomKeyframe[] = [];
   export let subtitles: SubtitleCue[] = [];
+  export let keystrokeEvents: KeystrokeEvent[] = [];
   export let silenceTrimmedMs: number = 0;
 
   const dispatch = createEventDispatcher<{
     seek: number;
+    deleteZoom: number;
+    addZoom: number;
   }>();
 
   function handleTimelineClick(e: MouseEvent) {
@@ -25,6 +28,7 @@
     <div class="track-labels">
       <span class="label">Ruler</span>
       <span class="label">Clicks</span>
+      <span class="label">Keys</span>
       <span class="label">Auto-Zoom</span>
       <span class="label">Subtitles</span>
     </div>
@@ -68,7 +72,23 @@
         {/each}
       </div>
 
-      <!-- Track 3: Camera Auto-Zoom Intervals -->
+      <!-- Track 3: Keystrokes HUD Events -->
+      <div class="track keys-track">
+        {#each keystrokeEvents as key}
+          <div
+            class="key-block"
+            style="
+              left: {(key.timestamp_ms / (durationMs || 1)) * 100}%;
+              width: {Math.max(2, (key.duration_ms / (durationMs || 1)) * 100)}%;
+            "
+            title="Keystroke: {key.key_combination} ({key.duration_ms}ms)"
+          >
+            <span>⌨️ {key.key_combination}</span>
+          </div>
+        {/each}
+      </div>
+
+      <!-- Track 4: Camera Auto-Zoom Intervals -->
       <div class="track zoom-track">
         {#each zoomKeyframes as zoom}
           <div
@@ -77,14 +97,21 @@
               left: {(zoom.start_ms / (durationMs || 1)) * 100}%;
               width: {((zoom.end_ms - zoom.start_ms) / (durationMs || 1)) * 100}%;
             "
-            title="{zoom.label} ({zoom.scale}x)"
+            title="{zoom.label} ({zoom.scale}x) - Click (X) to delete"
           >
             <span>🔍 {zoom.label}</span>
+            <button
+              class="del-zoom-btn"
+              title="Delete keyframe"
+              on:click|stopPropagation={() => dispatch('deleteZoom', zoom.start_ms)}
+            >
+              ✕
+            </button>
           </div>
         {/each}
       </div>
 
-      <!-- Track 4: Subtitles & Audio -->
+      <!-- Track 5: Subtitles & Audio -->
       <div class="track subs-track">
         {#each subtitles as sub}
           <div
@@ -107,12 +134,19 @@
       <div class="legend-item"><span class="dot left"></span> Left Click</div>
       <div class="legend-item"><span class="dot right"></span> Right Click</div>
       <div class="legend-item"><span class="dot double"></span> Double Click</div>
+      <div class="legend-item"><span class="box key"></span> Keystroke</div>
       <div class="legend-item"><span class="box zoom"></span> Camera Zoom</div>
       <div class="legend-item"><span class="box sub"></span> Subtitle Cue</div>
     </div>
 
-    <div class="deadair-stat">
-      <span>🔇 Dead-Air Detected: <strong>{(silenceTrimmedMs / 1000).toFixed(1)}s trimmed</strong></span>
+    <div class="footer-actions">
+      <button class="add-zoom-btn" on:click={() => dispatch('addZoom', currentTimeMs)}>
+        + Add Zoom Keyframe at {Math.round(currentTimeMs)}ms
+      </button>
+
+      <div class="deadair-stat">
+        <span>🔇 Dead-Air: <strong>{(silenceTrimmedMs / 1000).toFixed(1)}s trimmed</strong></span>
+      </div>
     </div>
   </div>
 </div>
@@ -143,7 +177,7 @@
   }
 
   .track-labels .label {
-    height: 32px;
+    height: 30px;
     display: flex;
     align-items: center;
     padding-left: 12px;
@@ -192,7 +226,7 @@
   }
 
   .track {
-    height: 32px;
+    height: 30px;
     position: relative;
     border-bottom: 1px solid rgba(35, 49, 77, 0.6);
   }
@@ -243,6 +277,31 @@
     box-shadow: 0 0 6px var(--accent-purple);
   }
 
+  .keys-track {
+    background: rgba(15, 23, 42, 0.5);
+  }
+
+  .key-block {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    background: rgba(16, 185, 129, 0.25);
+    border: 1px solid #10b981;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    padding: 0 6px;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .key-block span {
+    font-size: 0.68rem;
+    color: #a7f3d0;
+    font-weight: 600;
+    font-family: var(--font-mono);
+  }
+
   .zoom-track {
     background: rgba(15, 23, 42, 0.6);
   }
@@ -256,6 +315,7 @@
     border-radius: 4px;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     padding: 0 6px;
     overflow: hidden;
     white-space: nowrap;
@@ -265,6 +325,21 @@
     font-size: 0.68rem;
     color: #e0f2fe;
     font-weight: 600;
+  }
+
+  .del-zoom-btn {
+    background: transparent;
+    border: none;
+    color: #fca5a5;
+    font-size: 0.65rem;
+    margin-left: 6px;
+    cursor: pointer;
+    padding: 1px 3px;
+    border-radius: 2px;
+  }
+
+  .del-zoom-btn:hover {
+    background: rgba(239, 68, 68, 0.3);
   }
 
   .subs-track {
@@ -304,6 +379,7 @@
   .legend {
     display: flex;
     gap: 14px;
+    align-items: center;
   }
 
   .legend-item {
@@ -329,8 +405,30 @@
     border-radius: 2px;
   }
 
+  .box.key { background: #10b981; }
   .box.zoom { background: var(--accent-cyan); }
   .box.sub { background: var(--accent-indigo); }
+
+  .footer-actions {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .add-zoom-btn {
+    background: rgba(56, 189, 248, 0.15);
+    border: 1px solid var(--accent-cyan);
+    color: var(--accent-cyan);
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .add-zoom-btn:hover {
+    background: rgba(56, 189, 248, 0.3);
+  }
 
   .deadair-stat {
     color: var(--accent-orange);

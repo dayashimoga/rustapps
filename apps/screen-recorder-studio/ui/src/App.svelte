@@ -16,6 +16,22 @@
     click: 'None' | 'Left' | 'Right' | 'Double';
   }
 
+  export interface KeystrokeEvent {
+    timestamp_ms: number;
+    key_combination: string;
+    duration_ms: number;
+  }
+
+  export interface RedactionRegion {
+    id: string;
+    label: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    pattern_type: string;
+  }
+
   export interface ZoomKeyframe {
     start_ms: number;
     end_ms: number;
@@ -55,7 +71,9 @@
     auto_zooms_count: number;
     silence_trimmed_ms: number;
     cursor_events: CursorEvent[];
+    keystroke_events: KeystrokeEvent[];
     zoom_keyframes: ZoomKeyframe[];
+    redaction_regions: RedactionRegion[];
     subtitles: SubtitleCue[];
     tutorial_steps: TutorialStep[];
   }
@@ -83,11 +101,12 @@
   let playInterval: any = null;
   let currentZoomScale: number = 1.45;
 
-  let activeRightTab: 'steps' | 'subtitles' | 'stats' = 'steps';
+  let activeRightTab: 'steps' | 'subtitles' | 'redactions' | 'stats' = 'steps';
   let isLicenseModalOpen: boolean = false;
   let isExportModalOpen: boolean = false;
   let isCommandPaletteOpen: boolean = false;
   let errorMessage: string = '';
+  let statusBanner: string = '';
 
   let licenseTier: 'Free' | 'Premium' | 'Business' = 'Free';
   let isLicenseActive: boolean = false;
@@ -96,7 +115,7 @@
     {
       id: 'toggle-play',
       title: isPlaying ? 'Pause Walkthrough Preview' : 'Play Walkthrough Preview',
-      subtitle: isPlaying ? 'Freeze playback at current timeline position' : 'Simulate cursor trajectories and auto-zooms',
+      subtitle: isPlaying ? 'Freeze playback at current timeline position' : 'Simulate cursor trajectories, keystrokes, and auto-zooms',
       category: 'Playback',
       icon: isPlaying ? '⏸️' : '▶️',
       shortcut: 'Space',
@@ -104,6 +123,24 @@
         if (isPlaying) pause();
         else play();
       },
+    },
+    {
+      id: 'scan-pii',
+      title: 'Scan & Auto-Redact Screen PII',
+      subtitle: 'Detect and mask API keys, JWT tokens, emails, and credit cards',
+      category: 'Privacy',
+      icon: '🛡️',
+      shortcut: '⌘R',
+      run: () => { handleDetectPii(); },
+    },
+    {
+      id: 'add-zoom',
+      title: 'Add Camera Zoom Keyframe',
+      subtitle: 'Insert a dynamic zoom keyframe centered on active playhead',
+      category: 'Camera',
+      icon: '🔍',
+      shortcut: 'Z',
+      run: () => { handleAddZoomKeyframe(currentTimeMs); },
     },
     {
       id: 'tab-steps',
@@ -124,12 +161,21 @@
       run: () => { activeRightTab = 'subtitles'; },
     },
     {
+      id: 'tab-redactions',
+      title: 'Privacy & Redaction Masks',
+      subtitle: 'Review masked API keys and sensitive UI bounding boxes',
+      category: 'Privacy',
+      icon: '🛡️',
+      shortcut: '3',
+      run: () => { activeRightTab = 'redactions'; },
+    },
+    {
       id: 'tab-stats',
       title: 'Studio Synthesis Metrics',
       subtitle: 'Review silence trimming and keyframe compression ratio',
       category: 'Tutorial',
       icon: '📊',
-      shortcut: '3',
+      shortcut: '4',
       run: () => { activeRightTab = 'stats'; },
     },
     {
@@ -226,6 +272,99 @@
     }
   }
 
+  async function handleAddZoomKeyframe(timeMs: number) {
+    if (!activeSession) return;
+    const start_ms = Math.max(0, Math.floor(timeMs));
+    const end_ms = Math.min(activeSession.duration_ms, start_ms + 1500);
+    try {
+      const updated = await invokeIpc<RecordingSession>('add_zoom_keyframe', {
+        session_id: activeSession.session_id,
+        keyframe: {
+          start_ms,
+          end_ms,
+          focus_x: 0.5,
+          focus_y: 0.5,
+          scale: currentZoomScale,
+          easing: 'ease-in-out',
+          label: `Zoom @ ${(start_ms / 1000).toFixed(1)}s`,
+        },
+      });
+      activeSession = updated;
+      statusBanner = `Added camera zoom keyframe at ${(start_ms / 1000).toFixed(1)}s`;
+      setTimeout(() => { statusBanner = ''; }, 3000);
+    } catch (e: any) {
+      errorMessage = e?.message || 'Failed to add zoom keyframe';
+    }
+  }
+
+  async function handleDeleteZoomKeyframe(startMs: number) {
+    if (!activeSession) return;
+    try {
+      const updated = await invokeIpc<RecordingSession>('delete_zoom_keyframe', {
+        session_id: activeSession.session_id,
+        start_ms: startMs,
+      });
+      activeSession = updated;
+      statusBanner = `Removed zoom keyframe`;
+      setTimeout(() => { statusBanner = ''; }, 3000);
+    } catch (e: any) {
+      errorMessage = e?.message || 'Failed to delete zoom keyframe';
+    }
+  }
+
+  async function handleDetectPii() {
+    if (!activeSession) return;
+    try {
+      const textRegions = [
+        {
+          text: 'API Key: sk-ant-api03-offlineairgapsec9876543210',
+          x: 0.28,
+          y: 0.25,
+          width: 0.38,
+          height: 0.08,
+        },
+        {
+          text: 'Contact: admin@airgap-enterprise.corp for support',
+          x: 0.52,
+          y: 0.42,
+          width: 0.30,
+          height: 0.06,
+        },
+      ];
+
+      const res = await invokeIpc<{ detected: RedactionRegion[]; session: RecordingSession }>(
+        'detect_pii_redactions',
+        {
+          session_id: activeSession.session_id,
+          text_regions: textRegions,
+        }
+      );
+      if (res && res.session) {
+        activeSession = res.session;
+        statusBanner = `Auto-detected ${res.detected.length} PII credential patterns`;
+        activeRightTab = 'redactions';
+        setTimeout(() => { statusBanner = ''; }, 4000);
+      }
+    } catch (e: any) {
+      errorMessage = e?.message || 'Failed to scan screen PII';
+    }
+  }
+
+  async function handleDeleteRedaction(regionId: string) {
+    if (!activeSession) return;
+    try {
+      const updated = await invokeIpc<RecordingSession>('delete_redaction_region', {
+        session_id: activeSession.session_id,
+        region_id: regionId,
+      });
+      activeSession = updated;
+      statusBanner = `Deleted redaction region`;
+      setTimeout(() => { statusBanner = ''; }, 3000);
+    } catch (e: any) {
+      errorMessage = e?.message || 'Failed to delete redaction region';
+    }
+  }
+
   function togglePlay() {
     if (isPlaying) {
       pause();
@@ -307,6 +446,10 @@
         </div>
       {/if}
 
+      <button class="redact-scan-btn" on:click={handleDetectPii} title="Auto-scan screen credentials">
+        🛡️ Scan PII
+      </button>
+
       <button class="export-btn" on:click={() => (isExportModalOpen = true)}>
         🚀 Export Tutorial
       </button>
@@ -321,6 +464,12 @@
       </button>
     </div>
   </header>
+
+  {#if statusBanner}
+    <div class="status-banner">
+      <span>✨ {statusBanner}</span>
+    </div>
+  {/if}
 
   {#if errorMessage}
     <div class="error-banner">
@@ -339,6 +488,8 @@
         {isPlaying}
         zoomKeyframes={activeSession?.zoom_keyframes || []}
         cursorEvents={activeSession?.cursor_events || []}
+        keystrokeEvents={activeSession?.keystroke_events || []}
+        redactionRegions={activeSession?.redaction_regions || []}
         {currentZoomScale}
         on:togglePlay={togglePlay}
         on:seek={(e) => handleSeek(e.detail)}
@@ -351,12 +502,15 @@
         cursorEvents={activeSession?.cursor_events || []}
         zoomKeyframes={activeSession?.zoom_keyframes || []}
         subtitles={activeSession?.subtitles || []}
+        keystrokeEvents={activeSession?.keystroke_events || []}
         silenceTrimmedMs={activeSession?.silence_trimmed_ms || 0}
         on:seek={(e) => handleSeek(e.detail)}
+        on:deleteZoom={(e) => handleDeleteZoomKeyframe(e.detail)}
+        on:addZoom={(e) => handleAddZoomKeyframe(e.detail)}
       />
     </section>
 
-    <!-- Right Workspace: Tutorial Steps & Subtitles -->
+    <!-- Right Workspace: Tutorial Steps, Subtitles & Privacy Redactions -->
     <aside class="right-workspace">
       <div class="right-tabs">
         <button
@@ -375,10 +529,17 @@
         </button>
         <button
           class="tab-btn"
+          class:active={activeRightTab === 'redactions'}
+          on:click={() => (activeRightTab = 'redactions')}
+        >
+          Masks ({activeSession?.redaction_regions.length || 0})
+        </button>
+        <button
+          class="tab-btn"
           class:active={activeRightTab === 'stats'}
           on:click={() => (activeRightTab = 'stats')}
         >
-          Studio Stats
+          Stats
         </button>
       </div>
 
@@ -396,6 +557,45 @@
             on:seek={(e) => handleSeek(e.detail)}
             on:exportSrt={() => (isExportModalOpen = true)}
           />
+        {:else if activeRightTab === 'redactions'}
+          <div class="redactions-panel">
+            <div class="panel-header">
+              <h3>Screen PII Privacy Redactions</h3>
+              <button class="action-btn" on:click={handleDetectPii}>
+                ⚡ Re-Scan Screen
+              </button>
+            </div>
+            <p class="panel-desc">
+              Automatic regex-based detection masks credentials, API keys, JWT tokens, emails, and credit cards before video render.
+            </p>
+
+            <div class="regions-list">
+              {#if (activeSession?.redaction_regions.length || 0) === 0}
+                <div class="empty-state">
+                  <span>No PII redaction masks currently applied.</span>
+                </div>
+              {:else}
+                {#each activeSession?.redaction_regions || [] as reg}
+                  <div class="region-card">
+                    <div class="region-info">
+                      <span class="region-badge">{reg.pattern_type.toUpperCase()}</span>
+                      <span class="region-label">{reg.label}</span>
+                      <span class="region-coords">
+                        Pos: {Math.round(reg.x * 100)}%, {Math.round(reg.y * 100)}% | Size: {Math.round(reg.width * 100)}% × {Math.round(reg.height * 100)}%
+                      </span>
+                    </div>
+                    <button
+                      class="del-region-btn"
+                      title="Delete mask"
+                      on:click={() => handleDeleteRedaction(reg.id)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          </div>
         {:else if activeRightTab === 'stats'}
           <div class="stats-panel">
             <h3>Studio Synthesis Metrics</h3>
@@ -589,6 +789,21 @@
     font-family: var(--font-mono);
   }
 
+  .redact-scan-btn {
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid #f59e0b;
+    color: #f59e0b;
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .redact-scan-btn:hover {
+    background: rgba(245, 158, 11, 0.25);
+  }
+
   .export-btn {
     background: linear-gradient(135deg, #2563eb, #1d4ed8);
     border: 1px solid #3b82f6;
@@ -597,6 +812,7 @@
     border-radius: 6px;
     font-size: 0.82rem;
     font-weight: 600;
+    cursor: pointer;
   }
 
   .export-btn:hover {
@@ -614,12 +830,22 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    cursor: pointer;
   }
 
   .license-btn.active {
     border-color: var(--accent-green);
     color: var(--accent-green);
     background: rgba(16, 185, 129, 0.1);
+  }
+
+  .status-banner {
+    background: rgba(16, 185, 129, 0.15);
+    border-bottom: 1px solid var(--accent-green);
+    padding: 6px 20px;
+    color: #6ee7b7;
+    font-size: 0.8rem;
+    font-weight: 600;
   }
 
   .error-banner {
@@ -637,6 +863,7 @@
     background: transparent;
     border: none;
     color: #fca5a5;
+    cursor: pointer;
   }
 
   .studio-body {
@@ -685,6 +912,7 @@
     color: var(--text-muted);
     font-size: 0.78rem;
     font-weight: 600;
+    cursor: pointer;
   }
 
   .tab-btn:hover {
@@ -699,6 +927,108 @@
   .tab-content {
     flex: 1;
     overflow-y: auto;
+  }
+
+  .redactions-panel {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .panel-header h3 {
+    font-size: 0.95rem;
+    color: var(--text-main);
+  }
+
+  .action-btn {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid #f59e0b;
+    color: #f59e0b;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .panel-desc {
+    font-size: 0.75rem;
+    color: var(--text-sub);
+    line-height: 1.4;
+  }
+
+  .regions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .empty-state {
+    padding: 24px 0;
+    text-align: center;
+    color: var(--text-sub);
+    font-size: 0.8rem;
+  }
+
+  .region-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .region-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .region-badge {
+    display: inline-block;
+    align-self: flex-start;
+    background: rgba(245, 158, 11, 0.2);
+    color: #f59e0b;
+    border: 1px solid #f59e0b;
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  .region-label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-main);
+  }
+
+  .region-coords {
+    font-size: 0.68rem;
+    color: var(--text-sub);
+    font-family: var(--font-mono);
+  }
+
+  .del-region-btn {
+    background: transparent;
+    border: none;
+    color: #fca5a5;
+    font-size: 0.8rem;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+  }
+
+  .del-region-btn:hover {
+    background: rgba(239, 68, 68, 0.2);
   }
 
   .stats-panel {

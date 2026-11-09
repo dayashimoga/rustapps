@@ -43,6 +43,65 @@ impl DesktopIpcHandler for StudioDesktopHandler {
                 payload: json!({ "session_id": "rec-demo", "scale": 1.6 }),
             },
             SelfTestCheck {
+                command: "add_zoom_keyframe",
+                payload: json!({
+                    "session_id": "rec-demo",
+                    "keyframe": {
+                        "start_ms": 11_000,
+                        "end_ms": 11_800,
+                        "focus_x": 0.5,
+                        "focus_y": 0.5,
+                        "scale": 1.7,
+                        "easing": "ease-in-out",
+                        "label": "Self-Test Zoom"
+                    }
+                }),
+            },
+            SelfTestCheck {
+                command: "delete_zoom_keyframe",
+                payload: json!({
+                    "session_id": "rec-demo",
+                    "start_ms": 11_000
+                }),
+            },
+            SelfTestCheck {
+                command: "detect_pii_redactions",
+                payload: json!({
+                    "session_id": "rec-demo",
+                    "text_regions": [
+                        {
+                            "text": "AWS Key: AKIAIOSFODNN7EXAMPLE",
+                            "x": 0.15,
+                            "y": 0.25,
+                            "width": 0.35,
+                            "height": 0.05
+                        }
+                    ]
+                }),
+            },
+            SelfTestCheck {
+                command: "add_redaction_region",
+                payload: json!({
+                    "session_id": "rec-demo",
+                    "region": {
+                        "id": "redact-self-test-1",
+                        "label": "Self-Test Redact",
+                        "x": 0.3,
+                        "y": 0.3,
+                        "width": 0.2,
+                        "height": 0.1,
+                        "pattern_type": "custom"
+                    }
+                }),
+            },
+            SelfTestCheck {
+                command: "delete_redaction_region",
+                payload: json!({
+                    "session_id": "rec-demo",
+                    "region_id": "redact-self-test-1"
+                }),
+            },
+            SelfTestCheck {
                 command: "get_license_status",
                 payload: json!({}),
             },

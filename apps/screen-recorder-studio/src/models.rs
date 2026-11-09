@@ -22,6 +22,36 @@ pub struct CursorEvent {
     pub click: ClickType,
 }
 
+/// Telemetry event capturing keyboard interaction and shortcut triggers
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeystrokeEvent {
+    pub timestamp_ms: u64,
+    pub key_combination: String,
+    pub duration_ms: u64,
+}
+
+/// Bounding region identified for privacy masking / PII redaction
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RedactionRegion {
+    pub id: String,
+    pub label: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub pattern_type: String, // "api_key", "email", "credit_card", "jwt", "custom"
+}
+
+/// Text block with coordinate bounding box for OCR / PII detection
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextRegion {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 /// Dynamic camera auto-zoom keyframe centered on user focus areas
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZoomKeyframe {
@@ -78,7 +108,11 @@ pub struct RecordingSession {
     pub auto_zooms_count: usize,
     pub silence_trimmed_ms: u64,
     pub cursor_events: Vec<CursorEvent>,
+    #[serde(default)]
+    pub keystroke_events: Vec<KeystrokeEvent>,
     pub zoom_keyframes: Vec<ZoomKeyframe>,
+    #[serde(default)]
+    pub redaction_regions: Vec<RedactionRegion>,
     pub subtitles: Vec<SubtitleCue>,
     pub tutorial_steps: Vec<TutorialStep>,
 }
