@@ -162,6 +162,8 @@ EOF
             echo "  [Android] Setting up local.properties and Gradle wrapper..."
             mkdir -p "${mobile_dir}/android"
 
+            export GRADLE_OPTS="-Dorg.gradle.internal.http.socketTimeout=120000 -Dorg.gradle.internal.http.connectionTimeout=120000 -Dorg.gradle.internal.repository.max.retries=10"
+
             cat <<EOF > "${mobile_dir}/android/local.properties"
 sdk.dir=${ANDROID_HOME:-/usr/local/lib/android/sdk}
 flutter.sdk=${FLUTTER_ROOT:-/opt/hostedtoolcache/flutter}
@@ -207,16 +209,17 @@ EOF
                 fi
             fi
 
-            # Enforce Gradle 8.5 in gradle-wrapper.properties across all builds
+            # Enforce Gradle 8.5 bin in gradle-wrapper.properties across all builds
             if [ -f "${mobile_dir}/android/gradle/wrapper/gradle-wrapper.properties" ]; then
-                sed -i -E 's/gradle-[0-9.]*-(all|bin)\.zip/gradle-8.5-all.zip/g' "${mobile_dir}/android/gradle/wrapper/gradle-wrapper.properties" 2>/dev/null || true
+                sed -i -E 's/gradle-[0-9.]*-(all|bin)\.zip/gradle-8.5-bin.zip/g' "${mobile_dir}/android/gradle/wrapper/gradle-wrapper.properties" 2>/dev/null || true
+                sed -i -E 's/networkTimeout=[0-9]+/networkTimeout=60000/g' "${mobile_dir}/android/gradle/wrapper/gradle-wrapper.properties" 2>/dev/null || true
             else
                 mkdir -p "${mobile_dir}/android/gradle/wrapper"
                 cat <<'WRAPPER_EOF' > "${mobile_dir}/android/gradle/wrapper/gradle-wrapper.properties"
 distributionBase=GRADLE_USER_HOME
 distributionPath=wrapper/dists
-distributionUrl=https\://services.gradle.org/distributions/gradle-8.5-all.zip
-networkTimeout=10000
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.5-bin.zip
+networkTimeout=60000
 validateDistributionUrl=true
 zipStoreBase=GRADLE_USER_HOME
 zipStorePath=wrapper/dists
@@ -339,6 +342,7 @@ EOF
 
         rm -f "${OUTPUT_DIR}/${bundle_name}"
         create_bundle_zip "${stage_dist}" "${OUTPUT_DIR}/${bundle_name}"
+        cp -f "${stage_dist}/README.md" "${OUTPUT_DIR}/README.md" 2>/dev/null || true
         rm -rf "${stage_dist}"
 
     else

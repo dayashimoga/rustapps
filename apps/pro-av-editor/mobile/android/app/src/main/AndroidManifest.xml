@@ -6,7 +6,7 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
     <application
-        android:label="Pro Audio & Video Editor"
+        android:label="Pro Audio &amp; Video Editor"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

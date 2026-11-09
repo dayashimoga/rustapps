@@ -492,12 +492,24 @@ jobs:
           fi
         shell: bash
 
+      - name: Cache Gradle Wrapper & Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/wrapper/
+            ~/.gradle/caches/
+          key: ${{ runner.os }}-gradle-8.5-${{ hashFiles('**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-8.5-
+            ${{ runner.os }}-gradle-
+
       - name: Pre-generate Official Flutter Gradle Wrapper Template
         run: |
           mkdir -p /tmp/flutter_tmpl_wrapper
           flutter create --platforms=android --org com.offlineapps --project-name tmpl_wrapper /tmp/flutter_tmpl_wrapper
           if [ -f /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/gradle-wrapper.properties ]; then
-            sed -i -E 's/gradle-[0-9.]*-(all|bin)\.zip/gradle-8.5-all.zip/g' /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/gradle-wrapper.properties
+            sed -i -E 's/gradle-[0-9.]*-(all|bin)\.zip/gradle-8.5-bin.zip/g' /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/gradle-wrapper.properties
+            sed -i -E 's/networkTimeout=[0-9]+/networkTimeout=60000/g' /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/gradle-wrapper.properties
             echo "Updated /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/gradle-wrapper.properties:"
             cat /tmp/flutter_tmpl_wrapper/android/gradle/wrapper/gradle-wrapper.properties
           fi

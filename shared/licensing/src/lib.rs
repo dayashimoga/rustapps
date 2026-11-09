@@ -60,12 +60,17 @@ impl AppId {
 /// Commercial license tiers in ascending capability order
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum LicenseTier {
-    /// Community Free tier (\$0 Forever)
+    /// Community Free tier ($0 Forever)
     Free = 0,
     /// Professional Individual tier (perpetual offline license)
+    #[serde(alias = "Pro")]
     Premium = 1,
+    /// Professional Lifetime tier (perpetual offline license)
+    ProLifetime = 2,
     /// Enterprise & Air-Gapped Business tier
-    Business = 2,
+    Business = 3,
+    /// Site-Wide Enterprise Air-Gapped tier
+    Enterprise = 4,
 }
 
 /// Raw offline license certificate loaded from `.offlic` JSON or file
@@ -310,9 +315,14 @@ impl TierGate {
         }
     }
 
-    /// Convenience constructor for enterprise / business tier
-    pub fn enterprise() -> Self {
+    /// Convenience constructor for business tier
+    pub fn business() -> Self {
         Self::for_tier(LicenseTier::Business)
+    }
+
+    /// Convenience constructor for site-wide enterprise air-gapped tier
+    pub fn enterprise() -> Self {
+        Self::for_tier(LicenseTier::Enterprise)
     }
 
     /// Current operational tier
@@ -336,7 +346,7 @@ impl TierGate {
     /// Check if a specific named feature is enabled by tier or custom feature flag
     pub fn has_feature(&self, feature_name: &str) -> bool {
         if let Some(ref lic) = self.active_license {
-            if lic.tier == LicenseTier::Business {
+            if lic.tier >= LicenseTier::Business {
                 return true;
             }
             if lic
@@ -357,7 +367,9 @@ impl TierGate {
                 tier: match lic.tier {
                     LicenseTier::Free => "Free".to_string(),
                     LicenseTier::Premium => "Premium".to_string(),
+                    LicenseTier::ProLifetime => "ProLifetime".to_string(),
                     LicenseTier::Business => "Business".to_string(),
+                    LicenseTier::Enterprise => "Enterprise".to_string(),
                 },
                 licensee_name: lic.licensee_name.clone(),
                 is_perpetual: lic.is_perpetual,
@@ -582,8 +594,17 @@ mod tests {
         };
 
         let biz_gate = TierGate::new(Some(business_license));
+        assert!(biz_gate.require_tier(LicenseTier::Premium).is_ok());
+        assert!(biz_gate.require_tier(LicenseTier::ProLifetime).is_ok());
         assert!(biz_gate.require_tier(LicenseTier::Business).is_ok());
+        assert!(biz_gate.require_tier(LicenseTier::Enterprise).is_err());
         assert!(biz_gate.has_feature("any_feature"));
+
+        let ent_gate = TierGate::enterprise();
+        assert_eq!(ent_gate.current_tier(), LicenseTier::Enterprise);
+        assert!(ent_gate.require_tier(LicenseTier::Enterprise).is_ok());
+        assert!(ent_gate.require_tier(LicenseTier::Business).is_ok());
+        assert!(ent_gate.has_feature("unrestricted_defense_export"));
     }
 
     #[test]

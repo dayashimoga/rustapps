@@ -56,6 +56,8 @@ class OpenedFileInfo {
         'total_lines': totalLines,
         'file_size_bytes': fileSizeBytes,
       };
+
+  String get filePath => path;
 }
 
 class LogSearchMatch {
