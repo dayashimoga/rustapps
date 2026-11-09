@@ -172,22 +172,9 @@ pub fn decode_to_grayscale(bytes: &[u8], extension: &str) -> Result<GrayImage, S
         return Err("Image buffer too small".to_string());
     }
 
-    // BMP Decoding
-    if bytes.starts_with(b"BM") || extension == "bmp" {
-        return decode_bmp_to_grayscale(bytes);
-    }
-
-    // PNG Decoding (standard IHDR chunk extraction)
-    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") || extension == "png" {
-        return decode_png_to_grayscale(bytes);
-    }
-
-    // JPEG Decoding (SOF0 marker extraction)
-    if (bytes.starts_with(&[0xFF, 0xD8]) && bytes.len() > 10)
-        || extension == "jpg"
-        || extension == "jpeg"
-    {
-        return decode_jpeg_to_grayscale(bytes);
+    // Authentic multi-format decoding via shared-ai-core (PNG, BMP, JPEG, WebP)
+    if let Ok(img) = ImageDecoder::decode(bytes) {
+        return Ok(img.into());
     }
 
     // Fallback: Treat as raw uncompressed raster / luminance map
@@ -199,62 +186,6 @@ pub fn decode_to_grayscale(bytes: &[u8], extension: &str) -> Result<GrayImage, S
     }
 
     Err(format!("Unsupported image format: {}", extension))
-}
-
-fn decode_bmp_to_grayscale(bytes: &[u8]) -> Result<GrayImage, String> {
-    match ImageDecoder::decode_bmp(bytes) {
-        Ok(img) => Ok(img.into()),
-        Err(e) => Err(format!("BMP decoding error: {e}")),
-    }
-}
-
-fn decode_png_to_grayscale(bytes: &[u8]) -> Result<GrayImage, String> {
-    match ImageDecoder::decode_png(bytes) {
-        Ok(img) => Ok(img.into()),
-        Err(e) => Err(format!("PNG decoding error: {e}")),
-    }
-}
-
-fn decode_jpeg_to_grayscale(bytes: &[u8]) -> Result<GrayImage, String> {
-    if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
-        return Err("Invalid JPEG header".to_string());
-    }
-
-    // Try general decoder
-    if let Ok(img) = ImageDecoder::decode(bytes) {
-        return Ok(img.into());
-    }
-
-    // If pure uncompressed raw payload follows header, extract dimensions safely
-    let mut cursor = 2;
-    let mut width = 0u32;
-    let mut height = 0u32;
-
-    while cursor + 8 < bytes.len() {
-        if bytes[cursor] == 0xFF {
-            let marker = bytes[cursor + 1];
-            if marker == 0xC0 || marker == 0xC2 {
-                height = u16::from_be_bytes([bytes[cursor + 5], bytes[cursor + 6]]) as u32;
-                width = u16::from_be_bytes([bytes[cursor + 7], bytes[cursor + 8]]) as u32;
-                break;
-            }
-            let len = u16::from_be_bytes([bytes[cursor + 2], bytes[cursor + 3]]) as usize;
-            cursor += 2 + len;
-        } else {
-            cursor += 1;
-        }
-    }
-
-    if width == 0 || height == 0 || width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
-        return Err("JPEG decoding failed or dimensions unsupported".to_string());
-    }
-
-    // Return empty white canvas if JPEG DCT bitstream cannot be decompressed offline
-    Ok(GrayImage::new(
-        width,
-        height,
-        vec![255u8; (width * height) as usize],
-    ))
 }
 
 // ---------------------------------------------------------------------------

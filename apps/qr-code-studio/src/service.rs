@@ -177,24 +177,34 @@ impl QrStudioService {
         })
     }
 
-    /// Scans a PNG image byte buffer or raw RGB pixels
+    /// Scans an image byte buffer (PNG, JPEG, WebP, BMP) or raw RGB pixels
     pub fn scan_qr_image(
         &self,
-        png_bytes: Option<&[u8]>,
+        image_bytes: Option<&[u8]>,
         raw_rgb: Option<(usize, usize, &[u8])>,
         passphrase_opt: Option<&str>,
     ) -> Result<QrScanResult, QrStudioError> {
         let t0 = Instant::now();
 
-        let (w, h, rgb_buf) = if let Some(bytes) = png_bytes {
-            let (width, height, rgb) =
-                decode_png_to_rgb(bytes).map_err(QrStudioError::DecodingError)?;
-            (width, height, rgb)
+        let (w, h, rgb_buf) = if let Some(bytes) = image_bytes {
+            if let Ok((width, height, rgba)) = shared_ai_core::ImageDecoder::decode_rgba(bytes) {
+                let mut rgb = Vec::with_capacity((width * height * 3) as usize);
+                for chunk in rgba.chunks_exact(4) {
+                    rgb.push(chunk[0]);
+                    rgb.push(chunk[1]);
+                    rgb.push(chunk[2]);
+                }
+                (width as usize, height as usize, rgb)
+            } else {
+                let (width, height, rgb) =
+                    decode_png_to_rgb(bytes).map_err(QrStudioError::DecodingError)?;
+                (width, height, rgb)
+            }
         } else if let Some((width, height, rgb)) = raw_rgb {
             (width, height, rgb.to_vec())
         } else {
             return Err(QrStudioError::InvalidInput(
-                "No PNG bytes or RGB frame provided for scanning".to_string(),
+                "No image bytes or RGB frame provided for scanning".to_string(),
             ));
         };
 
@@ -541,5 +551,27 @@ mod tests {
 
         let deleted = service.delete_history_item(rec_id).expect("Delete record");
         assert!(deleted);
+    }
+
+    #[test]
+    fn test_qr_scan_multiformat_images() {
+        let service = QrStudioService::open_in_memory().expect("In-memory service");
+        let payload = "https://antigravity.offline/multiformat";
+        let matrix = generate_qr_matrix(payload.as_bytes(), QrEccLevel::Medium).unwrap();
+        let style = QrStyleConfig::default();
+        let png_bytes = render_png(&matrix, &style).unwrap();
+
+        // 1. Direct PNG scan
+        let res_png = service.scan_qr_image(Some(&png_bytes), None, None).unwrap();
+        assert_eq!(res_png.decoded_text, payload);
+
+        // 2. Convert to BMP and scan via multi-format decoder
+        let (w, h, rgba) = shared_ai_core::ImageDecoder::decode_rgba(&png_bytes).unwrap();
+        let gray_pixels: Vec<u8> = rgba.chunks_exact(4).map(|c| c[0]).collect();
+        let gray_img = shared_ai_core::DecodedImage::new(w, h, gray_pixels);
+        let bmp_bytes = shared_ai_core::encode_gray_to_bmp(&gray_img);
+
+        let res_bmp = service.scan_qr_image(Some(&bmp_bytes), None, None).unwrap();
+        assert_eq!(res_bmp.decoded_text, payload);
     }
 }

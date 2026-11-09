@@ -22,6 +22,7 @@ shared-storage.workspace = true
 shared-encryption.workspace = true
 shared-telemetry.workspace = true
 shared-licensing = { path = "../../shared/licensing" }
+shared-ai-core.workspace = true
 
 # Storage, Compression & Serialization
 rusqlite.workspace = true

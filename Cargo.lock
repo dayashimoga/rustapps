@@ -1666,6 +1666,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shared-ai-core",
  "shared-encryption",
  "shared-licensing",
  "shared-storage",
