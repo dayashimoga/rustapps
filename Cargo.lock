@@ -1407,6 +1407,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "modbus-can-industrial-debugger"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chrono",
+ "ed25519-dalek",
+ "hex",
+ "platform-common",
+ "rand",
+ "serde",
+ "serde_json",
+ "shared-licensing",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

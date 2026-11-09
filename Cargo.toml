@@ -36,6 +36,7 @@ members = [
     "apps/local-rag-contract-auditor",
     "apps/sql-migration-diff-studio",
     "apps/privacy-media-sanitizer",
+    "apps/modbus-can-industrial-debugger",
     "tools/license-signer",
     "tests",
     "benchmarks",
