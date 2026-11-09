@@ -700,10 +700,11 @@ mod tests {
             conn.execute_batch(
                 "CREATE TABLE secrets (id INTEGER PRIMARY KEY, key TEXT, value TEXT);
                  INSERT INTO secrets (key, value) VALUES ('api_token', 'sec_987654321');
-                 INSERT INTO secrets (key, value) VALUES ('ssh_key', 'ed25519-secret');"
+                 INSERT INTO secrets (key, value) VALUES ('ssh_key', 'ed25519-secret');",
             )?;
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         // 2. Create encrypted backup
         let backup_file = db.create_encrypted_backup(&backup_dir, &key, 3).unwrap();
@@ -715,24 +716,35 @@ mod tests {
         assert!(!raw_backup.starts_with(b"SQLite format 3"));
 
         // 3. Restore backup with correct key
-        let restored_db = Database::restore_encrypted_backup(&restore_path, &backup_file, &key).unwrap();
+        let restored_db =
+            Database::restore_encrypted_backup(&restore_path, &backup_file, &key).unwrap();
         assert!(restore_path.exists());
 
         // Verify restored records
-        let count: i64 = restored_db.with_connection(|conn| {
-            conn.query_row("SELECT count(*) FROM secrets", [], |row| row.get(0))
-        }).unwrap();
+        let count: i64 = restored_db
+            .with_connection(|conn| {
+                conn.query_row("SELECT count(*) FROM secrets", [], |row| row.get(0))
+            })
+            .unwrap();
         assert_eq!(count, 2);
 
-        let token: String = restored_db.with_connection(|conn| {
-            conn.query_row("SELECT value FROM secrets WHERE key = 'api_token'", [], |row| row.get(0))
-        }).unwrap();
+        let token: String = restored_db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT value FROM secrets WHERE key = 'api_token'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
         assert_eq!(token, "sec_987654321");
 
         // 4. Restore with wrong key must fail authenticated decryption
         let wrong_key = [0x99u8; 32];
         let bad_restore = temp.path().join("bad_restored.db");
-        assert!(Database::restore_encrypted_backup(&bad_restore, &backup_file, &wrong_key).is_err());
+        assert!(
+            Database::restore_encrypted_backup(&bad_restore, &backup_file, &wrong_key).is_err()
+        );
     }
 
     #[test]
@@ -746,7 +758,8 @@ mod tests {
         db.with_connection(|conn| {
             conn.execute_batch("CREATE TABLE t (x INT); INSERT INTO t VALUES (1);")?;
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         // Create 4 snapshots with max_snapshots = 2
         for _ in 0..4 {
@@ -760,6 +773,10 @@ mod tests {
             .filter(|e| e.path().to_string_lossy().ends_with(".bak"))
             .collect();
 
-        assert_eq!(entries.len(), 2, "Backups must be rotated to exactly max_snapshots");
+        assert_eq!(
+            entries.len(),
+            2,
+            "Backups must be rotated to exactly max_snapshots"
+        );
     }
 }

@@ -34,7 +34,7 @@ impl GaloisField {
             } else {
                 x << 1
             };
-            x = x2 ^ x;
+            x ^= x2;
         }
 
         Self { exp, log }

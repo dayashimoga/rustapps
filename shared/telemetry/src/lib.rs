@@ -327,7 +327,11 @@ impl LocalAuditSink {
             }
 
             let event: AuditEvent = serde_json::from_str(&line).map_err(|e| {
-                TelemetryError::AuditError(format!("Malformed audit JSON at line {}: {}", idx + 1, e))
+                TelemetryError::AuditError(format!(
+                    "Malformed audit JSON at line {}: {}",
+                    idx + 1,
+                    e
+                ))
             })?;
 
             if event.prev_hash != expected_prev {
@@ -378,7 +382,10 @@ impl LocalAuditSink {
             total_events: count,
             is_valid: true,
             broken_index: None,
-            message: format!("Audit chain intact: {} verified tamper-evident events", count),
+            message: format!(
+                "Audit chain intact: {} verified tamper-evident events",
+                count
+            ),
         })
     }
 }
@@ -488,15 +495,39 @@ mod tests {
         let sink = LocalAuditSink::open(temp_dir.path(), "devops-secret-vault").unwrap();
 
         // 1. Record 3 valid audit events
-        let ev1 = sink.record("vault_unlock", "admin", "vault:primary", "SUCCESS", serde_json::json!({"auth": "biometric"})).unwrap();
+        let ev1 = sink
+            .record(
+                "vault_unlock",
+                "admin",
+                "vault:primary",
+                "SUCCESS",
+                serde_json::json!({"auth": "biometric"}),
+            )
+            .unwrap();
         assert_eq!(ev1.sequence_id, 1);
         assert_eq!(ev1.prev_hash, "GENESIS_ROOT_HASH");
 
-        let ev2 = sink.record("secret_reveal", "admin", "secret:aws_prod", "SUCCESS", serde_json::json!({"fields": ["key", "secret"]})).unwrap();
+        let ev2 = sink
+            .record(
+                "secret_reveal",
+                "admin",
+                "secret:aws_prod",
+                "SUCCESS",
+                serde_json::json!({"fields": ["key", "secret"]}),
+            )
+            .unwrap();
         assert_eq!(ev2.sequence_id, 2);
         assert_eq!(ev2.prev_hash, ev1.event_hash);
 
-        let ev3 = sink.record("export_snapshot", "admin", "backup:vault.bak", "SUCCESS", serde_json::json!({"bytes": 4096})).unwrap();
+        let ev3 = sink
+            .record(
+                "export_snapshot",
+                "admin",
+                "backup:vault.bak",
+                "SUCCESS",
+                serde_json::json!({"bytes": 4096}),
+            )
+            .unwrap();
         assert_eq!(ev3.sequence_id, 3);
         assert_eq!(ev3.prev_hash, ev2.event_hash);
 
@@ -508,7 +539,15 @@ mod tests {
 
         // 3. Re-open sink on same path - should continue sequence
         let sink2 = LocalAuditSink::open(temp_dir.path(), "devops-secret-vault").unwrap();
-        let ev4 = sink2.record("vault_lock", "system", "vault:primary", "SUCCESS", serde_json::json!({})).unwrap();
+        let ev4 = sink2
+            .record(
+                "vault_lock",
+                "system",
+                "vault:primary",
+                "SUCCESS",
+                serde_json::json!({}),
+            )
+            .unwrap();
         assert_eq!(ev4.sequence_id, 4);
         assert_eq!(ev4.prev_hash, ev3.event_hash);
 

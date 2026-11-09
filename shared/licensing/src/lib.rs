@@ -149,12 +149,14 @@ impl AppId {
             "local-rag-contract-auditor" | "contractauditor" | "contract-auditor" | "legal-rag" => {
                 Some(AppId::LocalRagContractAuditor)
             }
-            "sql-migration-diff-studio" | "sqlmigrationdiffstudio" | "sql-studio" | "schema-diff" => {
-                Some(AppId::SqlMigrationDiffStudio)
-            }
-            "privacy-media-sanitizer" | "privacymediasanitizer" | "media-sanitizer" | "sanitizer" => {
-                Some(AppId::PrivacyMediaSanitizer)
-            }
+            "sql-migration-diff-studio"
+            | "sqlmigrationdiffstudio"
+            | "sql-studio"
+            | "schema-diff" => Some(AppId::SqlMigrationDiffStudio),
+            "privacy-media-sanitizer"
+            | "privacymediasanitizer"
+            | "media-sanitizer"
+            | "sanitizer" => Some(AppId::PrivacyMediaSanitizer),
             "modbus-can-industrial-debugger"
             | "modbuscanindustrialdebugger"
             | "industrial-debugger"

@@ -5,8 +5,8 @@
 //! and Ed25519 industrial audit manifest signing.
 
 use crate::models::{
-    CanParsedFrame, FieldbusAuditManifest, IndustrialBusFrame,
-    IndustrialSecurityAlert, IndustrialTraceSession, ModbusParsedFrame, SecurityAlertSeverity,
+    CanParsedFrame, FieldbusAuditManifest, IndustrialBusFrame, IndustrialSecurityAlert,
+    IndustrialTraceSession, ModbusParsedFrame, SecurityAlertSeverity,
 };
 use ed25519_dalek::{Signer, SigningKey};
 use std::collections::HashMap;
