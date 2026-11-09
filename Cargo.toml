@@ -28,6 +28,7 @@ members = [
     "apps/signal-telemetry-oscilloscope",
     "apps/audio-mastering-studio",
     "apps/qr-code-studio",
+    "tools/license-signer",
     "tests",
     "benchmarks",
 ]

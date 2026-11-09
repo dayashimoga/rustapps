@@ -55,6 +55,68 @@ impl AppId {
     pub fn covers(&self, target: AppId) -> bool {
         *self == AppId::AllAppsSuite || *self == target
     }
+
+    /// Canonical string identifier
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AppId::AiFileExplorer => "ai-file-explorer",
+            AppId::DevopsSecretVault => "devops-secret-vault",
+            AppId::UniversalLogViewer => "universal-log-viewer",
+            AppId::UniversalLiveTranslator => "universal-live-translator",
+            AppId::ProAvEditor => "pro-av-editor",
+            AppId::PersonalKnowledgeGraph => "personal-knowledge-graph",
+            AppId::ApiProtocolStudio => "api-protocol-studio",
+            AppId::ParquetAnalyticsWorkbench => "parquet-analytics-workbench",
+            AppId::DfirTriageKit => "dfir-triage-kit",
+            AppId::ScreenRecorderStudio => "screen-recorder-studio",
+            AppId::SignalTelemetryOscilloscope => "signal-telemetry-oscilloscope",
+            AppId::AudioMasteringStudio => "audio-mastering-studio",
+            AppId::QrCodeStudio => "qr-code-studio",
+            AppId::AllAppsSuite => "all-apps-suite",
+        }
+    }
+
+    /// Parse application identifier case-insensitively
+    pub fn from_str_lossy(s: &str) -> Option<Self> {
+        let normalized = s.trim().to_lowercase().replace('_', "-");
+        match normalized.as_str() {
+            "ai-file-explorer" | "aifileexplorer" | "explorer" => Some(AppId::AiFileExplorer),
+            "devops-secret-vault" | "devopssecretvault" | "vault" => Some(AppId::DevopsSecretVault),
+            "universal-log-viewer" | "universallogviewer" | "log-viewer" | "logviewer" => {
+                Some(AppId::UniversalLogViewer)
+            }
+            "universal-live-translator"
+            | "universallivetranslator"
+            | "live-translator"
+            | "translator" => Some(AppId::UniversalLiveTranslator),
+            "pro-av-editor" | "proaveditor" | "av-editor" | "editor" => Some(AppId::ProAvEditor),
+            "personal-knowledge-graph" | "personalknowledgegraph" | "pkg" | "knowledge" => {
+                Some(AppId::PersonalKnowledgeGraph)
+            }
+            "api-protocol-studio" | "apiprotocolstudio" | "api-studio" | "studio" => {
+                Some(AppId::ApiProtocolStudio)
+            }
+            "parquet-analytics-workbench" | "parquetanalyticsworkbench" | "parquet" | "paw" => {
+                Some(AppId::ParquetAnalyticsWorkbench)
+            }
+            "dfir-triage-kit" | "dfirtriagekit" | "dfir" => Some(AppId::DfirTriageKit),
+            "screen-recorder-studio" | "screenrecorderstudio" | "recorder" => {
+                Some(AppId::ScreenRecorderStudio)
+            }
+            "signal-telemetry-oscilloscope"
+            | "signaltelemetryoscilloscope"
+            | "oscilloscope"
+            | "scope" => Some(AppId::SignalTelemetryOscilloscope),
+            "audio-mastering-studio" | "audiomasteringstudio" | "mastering" | "audio" => {
+                Some(AppId::AudioMasteringStudio)
+            }
+            "qr-code-studio" | "qrcodestudio" | "qr" => Some(AppId::QrCodeStudio),
+            "all" | "all-apps" | "suite" | "all-apps-suite" | "allappssuite" => {
+                Some(AppId::AllAppsSuite)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Commercial license tiers in ascending capability order
@@ -71,6 +133,32 @@ pub enum LicenseTier {
     Business = 3,
     /// Site-Wide Enterprise Air-Gapped tier
     Enterprise = 4,
+}
+
+impl LicenseTier {
+    /// Canonical string identifier
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LicenseTier::Free => "Free",
+            LicenseTier::Premium => "Pro",
+            LicenseTier::ProLifetime => "ProLifetime",
+            LicenseTier::Business => "Business",
+            LicenseTier::Enterprise => "Enterprise",
+        }
+    }
+
+    /// Parse license tier case-insensitively
+    pub fn from_str_lossy(s: &str) -> Option<Self> {
+        let normalized = s.trim().to_lowercase().replace(['_', '-'], "");
+        match normalized.as_str() {
+            "free" | "community" => Some(LicenseTier::Free),
+            "pro" | "premium" => Some(LicenseTier::Premium),
+            "prolifetime" | "lifetime" => Some(LicenseTier::ProLifetime),
+            "business" | "team" => Some(LicenseTier::Business),
+            "enterprise" | "site" => Some(LicenseTier::Enterprise),
+            _ => None,
+        }
+    }
 }
 
 /// Raw offline license certificate loaded from `.offlic` JSON or file

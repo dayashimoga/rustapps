@@ -1087,6 +1087,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "license-signer"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "shared-licensing",
+ "uuid",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
