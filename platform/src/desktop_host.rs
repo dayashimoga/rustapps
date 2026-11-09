@@ -455,6 +455,14 @@ impl Drop for ThreadPool {
     }
 }
 
+fn unblock_server_listener(port: u16) {
+    if port > 0 {
+        use std::net::SocketAddr;
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        let _ = TcpStream::connect_timeout(&addr, Duration::from_millis(200));
+    }
+}
+
 /// Launch the desktop application runtime or execute `--self-test` / `--headless-server`.
 pub fn run_desktop_app<H: DesktopIpcHandler>(
     bundle: EmbeddedUiBundle,
@@ -516,7 +524,6 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
     ));
 
     let server_thread = std::thread::spawn(move || {
-        let _ = listener.set_nonblocking(true);
         let pool_size = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(8)
@@ -526,6 +533,9 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
         while !server_shutdown.load(Ordering::SeqCst) {
             match listener.accept() {
                 Ok((stream, _peer)) => {
+                    if server_shutdown.load(Ordering::SeqCst) {
+                        break;
+                    }
                     let _ = stream.set_nonblocking(false);
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
                     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
@@ -547,13 +557,17 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
                             &sd,
                             &tok,
                             &reg,
+                            port,
                         );
                     });
                 }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(12));
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                    continue;
                 }
                 Err(_) => {
+                    if server_shutdown.load(Ordering::SeqCst) {
+                        break;
+                    }
                     std::thread::sleep(Duration::from_millis(25));
                 }
             }
@@ -561,8 +575,15 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
     });
 
     if is_self_test {
-        let report = execute_self_test(port, &bundle, handler.as_ref(), &session_token, &scoped_registry)?;
+        let report = execute_self_test(
+            port,
+            &bundle,
+            handler.as_ref(),
+            &session_token,
+            &scoped_registry,
+        )?;
         shutdown_flag.store(true, Ordering::SeqCst);
+        unblock_server_listener(port);
         let _ = server_thread.join();
         return Ok(Some(report));
     }
@@ -573,6 +594,7 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
         while !shutdown_flag.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(100));
         }
+        unblock_server_listener(port);
         let _ = server_thread.join();
         return Ok(None);
     }
@@ -618,6 +640,7 @@ pub fn run_desktop_app<H: DesktopIpcHandler>(
     if let Some(mut child) = window_child {
         let _ = child.kill();
     }
+    unblock_server_listener(port);
     let _ = server_thread.join();
     Ok(None)
 }
@@ -633,422 +656,528 @@ fn handle_http_connection(
     shutdown_flag: &AtomicBool,
     session_token: &str,
     scoped_registry: &ScopedFileRegistry,
+    port: u16,
 ) {
     let mut reader = BufReader::new(match stream.try_clone() {
         Ok(s) => s,
         Err(_) => return,
     });
 
-    let mut request_line = String::new();
-    if reader.read_line(&mut request_line).is_err() || request_line.is_empty() {
-        return;
-    }
-
-    let parts: Vec<&str> = request_line.split_whitespace().collect();
-    if parts.len() < 2 {
-        return;
-    }
-    let method = parts[0];
-    let raw_path = parts[1];
-    let (path, query_string) = raw_path.split_once('?').unwrap_or((raw_path, ""));
-
-    let mut content_length: usize = 0;
-    let mut range_header: Option<String> = None;
-    let mut auth_token_header: Option<String> = None;
-    let mut origin_header: Option<String> = None;
-    let mut custom_header: Option<String> = None;
-
     loop {
-        let mut header_line = String::new();
-        if reader.read_line(&mut header_line).is_err() {
+        if shutdown_flag.load(Ordering::SeqCst) {
             break;
         }
-        let trimmed = header_line.trim();
-        if trimmed.is_empty() {
+
+        // Set read timeout for idle keep-alive requests (5 seconds timeout between requests)
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+
+        let mut request_line = String::new();
+        match reader.read_line(&mut request_line) {
+            Ok(0) => break, // EOF, peer closed socket cleanly
+            Ok(_) => {}
+            Err(_) => break, // Timeout or socket read error, terminate keep-alive loop
+        }
+
+        let trimmed_req = request_line.trim();
+        if trimmed_req.is_empty() {
             break;
         }
-        if let Some((k, v)) = trimmed.split_once(':') {
-            let key = k.trim();
-            let val = v.trim();
-            if key.eq_ignore_ascii_case("content-length") {
-                content_length = val.parse::<usize>().unwrap_or(0);
-            } else if key.eq_ignore_ascii_case("range") {
-                range_header = Some(val.to_string());
-            } else if key.eq_ignore_ascii_case("x-antigravity-token") {
-                auth_token_header = Some(val.to_string());
-            } else if key.eq_ignore_ascii_case("authorization") {
-                if let Some(bearer) = val.strip_prefix("Bearer ") {
-                    auth_token_header = Some(bearer.trim().to_string());
-                }
-            } else if key.eq_ignore_ascii_case("origin") {
-                origin_header = Some(val.to_string());
-            } else if key.eq_ignore_ascii_case("x-antigravity-header") {
-                custom_header = Some(val.to_string());
-            }
+
+        let parts: Vec<&str> = trimmed_req.split_whitespace().collect();
+        if parts.len() < 2 {
+            break;
         }
-    }
+        let method = parts[0];
+        let raw_path = parts[1];
+        let http_version = if parts.len() >= 3 {
+            parts[2]
+        } else {
+            "HTTP/1.1"
+        };
+        let (path, query_string) = raw_path.split_once('?').unwrap_or((raw_path, ""));
 
-    last_heartbeat_ms.store(current_epoch_ms(), Ordering::SeqCst);
-    client_connected.store(true, Ordering::SeqCst);
+        let mut content_length: usize = 0;
+        let mut range_header: Option<String> = None;
+        let mut auth_token_header: Option<String> = None;
+        let mut origin_header: Option<String> = None;
+        let mut custom_header: Option<String> = None;
+        let mut connection_header: Option<String> = None;
 
-    // Security Gate 1 (SEC-02): Block external cross-origin requests.
-    // Loopback host must only accept same-origin or explicit loopback origins (127.0.0.1 / localhost).
-    let is_valid_local_origin = match origin_header.as_deref() {
-        Some(orig) => {
-            orig.starts_with("http://127.0.0.1:")
-                || orig.starts_with("http://localhost:")
-                || orig.starts_with("tauri://")
-                || orig.starts_with("app://")
-                || orig.starts_with("antigravity://")
-        }
-        None => true,
-    };
-    if !is_valid_local_origin {
-        let _ = write_http_response(
-            &mut stream,
-            403,
-            "application/json",
-            b"{\"__ipc_ok\":false,\"__ipc_error\":\"Forbidden: Cross-origin request rejected\"}",
-            None,
-        );
-        return;
-    }
-
-    if method == "OPTIONS" {
-        let _ = write_http_response(
-            &mut stream,
-            200,
-            "text/plain",
-            b"OK",
-            origin_header.as_deref(),
-        );
-        return;
-    }
-
-    let mut query_token: Option<String> = None;
-    for pair in query_string.split('&') {
-        if let Some((k, v)) = pair.split_once('=') {
-            if k == "token" {
-                query_token = Some(url_decode(v));
+        let mut header_err = false;
+        loop {
+            let mut header_line = String::new();
+            if reader.read_line(&mut header_line).is_err() {
+                header_err = true;
                 break;
             }
-        }
-    }
-
-    // Security Gate 2 (SEC-04): Constant-time token verification to prevent timing attacks.
-    let is_authenticated = auth_token_header
-        .as_deref()
-        .map(|t| constant_time_eq_token(t, session_token))
-        .or_else(|| {
-            query_token
-                .as_deref()
-                .map(|t| constant_time_eq_token(t, session_token))
-        })
-        .unwrap_or(false);
-
-    // Security Gate 3 (SEC-02 & SEC-05): Check authentication BEFORE allocating memory or reading body.
-    if path.starts_with("/__") && !is_authenticated {
-        let _ = write_http_response(
-            &mut stream,
-            403,
-            "application/json",
-            b"{\"__ipc_ok\":false,\"__ipc_error\":\"Forbidden: Invalid or missing X-Antigravity-Token\"}",
-            origin_header.as_deref(),
-        );
-        return;
-    }
-
-    // Security Gate 4 (SEC-05): Prevent memory exhaustion DoS via oversized Content-Length.
-    const MAX_IPC_BODY_SIZE: usize = 8 * 1024 * 1024; // 8 MB max for JSON IPC
-    if content_length > MAX_IPC_BODY_SIZE {
-        let _ = write_http_response(
-            &mut stream,
-            413,
-            "application/json",
-            b"{\"__ipc_ok\":false,\"__ipc_error\":\"Payload Too Large\"}",
-            origin_header.as_deref(),
-        );
-        return;
-    }
-
-    let mut body_bytes = vec![0u8; content_length];
-    if content_length > 0 {
-        let _ = reader.read_exact(&mut body_bytes);
-    }
-
-    if path == "/__heartbeat" {
-        let _ = write_http_response(
-            &mut stream,
-            200,
-            "application/json",
-            b"{\"ok\":true}",
-            origin_header.as_deref(),
-        );
-        return;
-    }
-
-    if path == "/__shutdown" {
-        let _ = write_http_response(
-            &mut stream,
-            200,
-            "application/json",
-            b"{\"shutdown\":true}",
-            origin_header.as_deref(),
-        );
-        shutdown_flag.store(true, Ordering::SeqCst);
-        return;
-    }
-
-    if path == "/__fs/drives" {
-        let entries = enumerate_drives_and_places();
-        let payload = serde_json::json!({ "entries": entries });
-        let bytes = serde_json::to_vec(&payload).unwrap_or_default();
-        let _ = write_http_response(
-            &mut stream,
-            200,
-            "application/json",
-            &bytes,
-            origin_header.as_deref(),
-        );
-        return;
-    }
-
-    if path == "/__dialog/open" {
-        let opts: Value = if body_bytes.is_empty() {
-            Value::Object(serde_json::Map::new())
-        } else {
-            serde_json::from_slice(&body_bytes)
-                .unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
-        };
-        let is_dir = opts
-            .get("directory")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let multiple = opts
-            .get("multiple")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let title = opts
-            .get("title")
-            .and_then(|v| v.as_str())
-            .unwrap_or(if is_dir { "Select Folder" } else { "Open File" });
-
-        let selected = invoke_native_open_dialog(title, is_dir, multiple, &opts);
-        if let Some(p_str) = selected.as_str() {
-            let p = PathBuf::from(p_str);
-            if is_dir {
-                scoped_registry.allow_root(&p);
-            } else {
-                scoped_registry.allow_path(&p);
+            let trimmed = header_line.trim();
+            if trimmed.is_empty() {
+                break;
             }
-        } else if let Some(arr) = selected.as_array() {
-            for item in arr {
-                if let Some(p_str) = item.as_str() {
-                    let p = PathBuf::from(p_str);
-                    scoped_registry.allow_path(&p);
+            if let Some((k, v)) = trimmed.split_once(':') {
+                let key = k.trim();
+                let val = v.trim();
+                if key.eq_ignore_ascii_case("content-length") {
+                    content_length = val.parse::<usize>().unwrap_or(0);
+                } else if key.eq_ignore_ascii_case("range") {
+                    range_header = Some(val.to_string());
+                } else if key.eq_ignore_ascii_case("x-antigravity-token") {
+                    auth_token_header = Some(val.to_string());
+                } else if key.eq_ignore_ascii_case("authorization") {
+                    if let Some(bearer) = val.strip_prefix("Bearer ") {
+                        auth_token_header = Some(bearer.trim().to_string());
+                    }
+                } else if key.eq_ignore_ascii_case("origin") {
+                    origin_header = Some(val.to_string());
+                } else if key.eq_ignore_ascii_case("x-antigravity-header") {
+                    custom_header = Some(val.to_string());
+                } else if key.eq_ignore_ascii_case("connection") {
+                    connection_header = Some(val.to_string());
                 }
             }
         }
-        let payload = serde_json::json!({ "path": selected });
-        let bytes = serde_json::to_vec(&payload).unwrap_or_default();
-        let _ = write_http_response(
-            &mut stream,
-            200,
-            "application/json",
-            &bytes,
-            origin_header.as_deref(),
-        );
-        return;
-    }
-
-    if path == "/__dialog/save" {
-        let opts: Value = if body_bytes.is_empty() {
-            Value::Object(serde_json::Map::new())
-        } else {
-            serde_json::from_slice(&body_bytes)
-                .unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
-        };
-        let title = opts
-            .get("title")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Save File");
-        let default_path = opts
-            .get("defaultPath")
-            .or_else(|| opts.get("default_path"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        let selected = invoke_native_save_dialog(title, default_path, &opts);
-        if let Some(p_str) = selected.as_str() {
-            scoped_registry.allow_path(&PathBuf::from(p_str));
+        if header_err {
+            break;
         }
-        let payload = serde_json::json!({ "path": selected });
-        let bytes = serde_json::to_vec(&payload).unwrap_or_default();
-        let _ = write_http_response(
-            &mut stream,
-            200,
-            "application/json",
-            &bytes,
-            origin_header.as_deref(),
-        );
-        return;
-    }
 
-    if path == "/__events" {
-        let mut sse_headers = String::from(
-            "HTTP/1.1 200 OK\r\n\
-             Content-Type: text/event-stream\r\n\
-             Cache-Control: no-cache\r\n\
-             Connection: keep-alive\r\n",
-        );
-        if let Some(orig) = origin_header.as_deref() {
-            if orig.starts_with("http://127.0.0.1:") || orig.starts_with("http://localhost:") {
-                sse_headers.push_str(&format!("Access-Control-Allow-Origin: {}\r\n", orig));
-            }
-        }
-        sse_headers.push_str("\r\n");
-        if stream.write_all(sse_headers.as_bytes()).is_ok() {
-            let initial = b"event: connected\ndata: {\"status\":\"ready\"}\n\n";
-            let _ = stream.write_all(initial);
-            let _ = stream.flush();
-        }
-        return;
-    }
-
-    if let Some(cmd_encoded) = path.strip_prefix("/__ipc_bin/") {
-        let cmd = url_decode(cmd_encoded);
-        let header_val: Value = custom_header
+        let is_http_10 = http_version.starts_with("HTTP/1.0");
+        let client_wants_close = connection_header
             .as_deref()
-            .and_then(|h| serde_json::from_str(h).ok())
-            .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+            .map(|v| v.to_ascii_lowercase().contains("close"))
+            .unwrap_or(false);
+        let client_wants_keep_alive = connection_header
+            .as_deref()
+            .map(|v| v.to_ascii_lowercase().contains("keep-alive"))
+            .unwrap_or(false);
 
-        match handler.handle_binary_command(&cmd, header_val, &body_bytes) {
-            Ok(bin_data) => {
-                let _ = write_http_response(
-                    &mut stream,
-                    200,
-                    "application/octet-stream",
-                    &bin_data,
-                    origin_header.as_deref(),
-                );
-            }
-            Err(err_msg) => {
-                let err_payload = serde_json::json!({
-                    "__ipc_ok": false,
-                    "__ipc_error": err_msg
-                });
-                let bytes = serde_json::to_vec(&err_payload).unwrap_or_default();
-                let _ = write_http_response(
-                    &mut stream,
-                    400,
-                    "application/json",
-                    &bytes,
-                    origin_header.as_deref(),
-                );
-            }
-        }
-        return;
-    }
-
-    if path == "/__file" {
-        serve_local_file(
-            &mut stream,
-            query_string,
-            range_header.as_deref(),
-            origin_header.as_deref(),
-            scoped_registry,
-        );
-        return;
-    }
-
-    if let Some(cmd_encoded) = path.strip_prefix("/__ipc/") {
-        let cmd = url_decode(cmd_encoded);
-        let args: Value = if body_bytes.is_empty() {
-            Value::Object(serde_json::Map::new())
+        let mut keep_alive = if is_http_10 {
+            client_wants_keep_alive
         } else {
-            serde_json::from_slice(&body_bytes)
-                .unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
+            !client_wants_close
         };
 
-        match handler.handle_command(&cmd, args) {
-            Ok(data) => {
-                let envelope = serde_json::json!({
-                    "__ipc_ok": true,
-                    "__ipc_data": data
-                });
-                let bytes = serde_json::to_vec(&envelope).unwrap_or_default();
+        if shutdown_flag.load(Ordering::SeqCst) {
+            keep_alive = false;
+        }
+
+        last_heartbeat_ms.store(current_epoch_ms(), Ordering::SeqCst);
+        client_connected.store(true, Ordering::SeqCst);
+
+        // Security Gate 1 (SEC-02): Block external cross-origin requests.
+        // Loopback host must only accept same-origin or explicit loopback origins (127.0.0.1 / localhost).
+        let is_valid_local_origin = match origin_header.as_deref() {
+            Some(orig) => {
+                orig.starts_with("http://127.0.0.1:")
+                    || orig.starts_with("http://localhost:")
+                    || orig.starts_with("tauri://")
+                    || orig.starts_with("app://")
+                    || orig.starts_with("antigravity://")
+            }
+            None => true,
+        };
+        if !is_valid_local_origin {
+            let _ = write_http_response(
+                &mut stream,
+                403,
+                "application/json",
+                b"{\"__ipc_ok\":false,\"__ipc_error\":\"Forbidden: Cross-origin request rejected\"}",
+                None,
+                false,
+            );
+            break;
+        }
+
+        if method == "OPTIONS" {
+            let _ = write_http_response(
+                &mut stream,
+                200,
+                "text/plain",
+                b"OK",
+                origin_header.as_deref(),
+                keep_alive,
+            );
+            if !keep_alive {
+                break;
+            }
+            continue;
+        }
+
+        let mut query_token: Option<String> = None;
+        for pair in query_string.split('&') {
+            if let Some((k, v)) = pair.split_once('=') {
+                if k == "token" {
+                    query_token = Some(url_decode(v));
+                    break;
+                }
+            }
+        }
+
+        // Security Gate 2 (SEC-04): Constant-time token verification to prevent timing attacks.
+        let is_authenticated = auth_token_header
+            .as_deref()
+            .map(|t| constant_time_eq_token(t, session_token))
+            .or_else(|| {
+                query_token
+                    .as_deref()
+                    .map(|t| constant_time_eq_token(t, session_token))
+            })
+            .unwrap_or(false);
+
+        // Security Gate 3 (SEC-02 & SEC-05): Check authentication BEFORE allocating memory or reading body.
+        if path.starts_with("/__") && !is_authenticated {
+            let _ = write_http_response(
+                &mut stream,
+                403,
+                "application/json",
+                b"{\"__ipc_ok\":false,\"__ipc_error\":\"Forbidden: Invalid or missing X-Antigravity-Token\"}",
+                origin_header.as_deref(),
+                false,
+            );
+            break;
+        }
+
+        // Security Gate 4 (SEC-05): Prevent memory exhaustion DoS via oversized Content-Length.
+        const MAX_IPC_BODY_SIZE: usize = 8 * 1024 * 1024; // 8 MB max for JSON IPC
+        if content_length > MAX_IPC_BODY_SIZE {
+            let _ = write_http_response(
+                &mut stream,
+                413,
+                "application/json",
+                b"{\"__ipc_ok\":false,\"__ipc_error\":\"Payload Too Large\"}",
+                origin_header.as_deref(),
+                false,
+            );
+            break;
+        }
+
+        let mut body_bytes = vec![0u8; content_length];
+        if content_length > 0 && reader.read_exact(&mut body_bytes).is_err() {
+            break;
+        }
+
+        if path == "/__heartbeat" {
+            let _ = write_http_response(
+                &mut stream,
+                200,
+                "application/json",
+                b"{\"ok\":true}",
+                origin_header.as_deref(),
+                keep_alive,
+            );
+            if !keep_alive {
+                break;
+            }
+            continue;
+        }
+
+        if path == "/__shutdown" {
+            let _ = write_http_response(
+                &mut stream,
+                200,
+                "application/json",
+                b"{\"shutdown\":true}",
+                origin_header.as_deref(),
+                false,
+            );
+            shutdown_flag.store(true, Ordering::SeqCst);
+            unblock_server_listener(port);
+            break;
+        }
+
+        if path == "/__fs/drives" {
+            let entries = enumerate_drives_and_places();
+            let payload = serde_json::json!({ "entries": entries });
+            let bytes = serde_json::to_vec(&payload).unwrap_or_default();
+            let _ = write_http_response(
+                &mut stream,
+                200,
+                "application/json",
+                &bytes,
+                origin_header.as_deref(),
+                keep_alive,
+            );
+            if !keep_alive {
+                break;
+            }
+            continue;
+        }
+
+        if path == "/__dialog/open" {
+            let opts: Value = if body_bytes.is_empty() {
+                Value::Object(serde_json::Map::new())
+            } else {
+                serde_json::from_slice(&body_bytes)
+                    .unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
+            };
+            let is_dir = opts
+                .get("directory")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let multiple = opts
+                .get("multiple")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let title = opts
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or(if is_dir { "Select Folder" } else { "Open File" });
+
+            let selected = invoke_native_open_dialog(title, is_dir, multiple, &opts);
+            if let Some(p_str) = selected.as_str() {
+                let p = PathBuf::from(p_str);
+                if is_dir {
+                    scoped_registry.allow_root(&p);
+                } else {
+                    scoped_registry.allow_path(&p);
+                }
+            } else if let Some(arr) = selected.as_array() {
+                for item in arr {
+                    if let Some(p_str) = item.as_str() {
+                        let p = PathBuf::from(p_str);
+                        scoped_registry.allow_path(&p);
+                    }
+                }
+            }
+            let payload = serde_json::json!({ "path": selected });
+            let bytes = serde_json::to_vec(&payload).unwrap_or_default();
+            let _ = write_http_response(
+                &mut stream,
+                200,
+                "application/json",
+                &bytes,
+                origin_header.as_deref(),
+                keep_alive,
+            );
+            if !keep_alive {
+                break;
+            }
+            continue;
+        }
+
+        if path == "/__dialog/save" {
+            let opts: Value = if body_bytes.is_empty() {
+                Value::Object(serde_json::Map::new())
+            } else {
+                serde_json::from_slice(&body_bytes)
+                    .unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
+            };
+            let title = opts
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Save File");
+            let default_path = opts
+                .get("defaultPath")
+                .or_else(|| opts.get("default_path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let selected = invoke_native_save_dialog(title, default_path, &opts);
+            if let Some(p_str) = selected.as_str() {
+                scoped_registry.allow_path(&PathBuf::from(p_str));
+            }
+            let payload = serde_json::json!({ "path": selected });
+            let bytes = serde_json::to_vec(&payload).unwrap_or_default();
+            let _ = write_http_response(
+                &mut stream,
+                200,
+                "application/json",
+                &bytes,
+                origin_header.as_deref(),
+                keep_alive,
+            );
+            if !keep_alive {
+                break;
+            }
+            continue;
+        }
+
+        if path == "/__events" {
+            let mut sse_headers = String::from(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: text/event-stream\r\n\
+                 Cache-Control: no-cache\r\n\
+                 Connection: keep-alive\r\n",
+            );
+            if let Some(orig) = origin_header.as_deref() {
+                if orig.starts_with("http://127.0.0.1:") || orig.starts_with("http://localhost:") {
+                    sse_headers.push_str(&format!("Access-Control-Allow-Origin: {}\r\n", orig));
+                }
+            }
+            sse_headers.push_str("\r\n");
+            if stream.write_all(sse_headers.as_bytes()).is_ok() {
+                let initial = b"event: connected\ndata: {\"status\":\"ready\"}\n\n";
+                let _ = stream.write_all(initial);
+                let _ = stream.flush();
+            }
+            if keep_alive {
+                while !shutdown_flag.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(2000));
+                    if stream.write_all(b": ping\n\n").is_err() || stream.flush().is_err() {
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+
+        if let Some(cmd_encoded) = path.strip_prefix("/__ipc_bin/") {
+            let cmd = url_decode(cmd_encoded);
+            let header_val: Value = custom_header
+                .as_deref()
+                .and_then(|h| serde_json::from_str(h).ok())
+                .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+
+            match handler.handle_binary_command(&cmd, header_val, &body_bytes) {
+                Ok(bin_data) => {
+                    let _ = write_http_response(
+                        &mut stream,
+                        200,
+                        "application/octet-stream",
+                        &bin_data,
+                        origin_header.as_deref(),
+                        keep_alive,
+                    );
+                }
+                Err(err_msg) => {
+                    let err_payload = serde_json::json!({
+                        "__ipc_ok": false,
+                        "__ipc_error": err_msg
+                    });
+                    let bytes = serde_json::to_vec(&err_payload).unwrap_or_default();
+                    let _ = write_http_response(
+                        &mut stream,
+                        400,
+                        "application/json",
+                        &bytes,
+                        origin_header.as_deref(),
+                        keep_alive,
+                    );
+                }
+            }
+            if !keep_alive {
+                break;
+            }
+            continue;
+        }
+
+        if path == "/__file" {
+            serve_local_file(
+                &mut stream,
+                query_string,
+                range_header.as_deref(),
+                origin_header.as_deref(),
+                scoped_registry,
+                keep_alive,
+            );
+            if !keep_alive {
+                break;
+            }
+            continue;
+        }
+
+        if let Some(cmd_encoded) = path.strip_prefix("/__ipc/") {
+            let cmd = url_decode(cmd_encoded);
+            let args: Value = if body_bytes.is_empty() {
+                Value::Object(serde_json::Map::new())
+            } else {
+                serde_json::from_slice(&body_bytes)
+                    .unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
+            };
+
+            match handler.handle_command(&cmd, args) {
+                Ok(data) => {
+                    let envelope = serde_json::json!({
+                        "__ipc_ok": true,
+                        "__ipc_data": data
+                    });
+                    let bytes = serde_json::to_vec(&envelope).unwrap_or_default();
+                    let _ = write_http_response(
+                        &mut stream,
+                        200,
+                        "application/json",
+                        &bytes,
+                        origin_header.as_deref(),
+                        keep_alive,
+                    );
+                }
+                Err(err_msg) => {
+                    let envelope = serde_json::json!({
+                        "__ipc_ok": false,
+                        "__ipc_error": err_msg
+                    });
+                    let bytes = serde_json::to_vec(&envelope).unwrap_or_default();
+                    let _ = write_http_response(
+                        &mut stream,
+                        400,
+                        "application/json",
+                        &bytes,
+                        origin_header.as_deref(),
+                        keep_alive,
+                    );
+                }
+            }
+            if !keep_alive {
+                break;
+            }
+            continue;
+        }
+
+        match path {
+            "/" | "/index.html" => {
                 let _ = write_http_response(
                     &mut stream,
                     200,
-                    "application/json",
-                    &bytes,
+                    "text/html; charset=utf-8",
+                    index_html.as_bytes(),
                     origin_header.as_deref(),
+                    keep_alive,
                 );
             }
-            Err(err_msg) => {
-                let envelope = serde_json::json!({
-                    "__ipc_ok": false,
-                    "__ipc_error": err_msg
-                });
-                let bytes = serde_json::to_vec(&envelope).unwrap_or_default();
+            "/assets/app.js" => {
                 let _ = write_http_response(
                     &mut stream,
-                    400,
-                    "application/json",
-                    &bytes,
+                    200,
+                    "application/javascript; charset=utf-8",
+                    bundle.app_js,
                     origin_header.as_deref(),
+                    keep_alive,
+                );
+            }
+            "/assets/app.css" => {
+                let _ = write_http_response(
+                    &mut stream,
+                    200,
+                    "text/css; charset=utf-8",
+                    bundle.app_css,
+                    origin_header.as_deref(),
+                    keep_alive,
+                );
+            }
+            "/favicon.ico" => {
+                let _ = write_http_response(
+                    &mut stream,
+                    204,
+                    "image/x-icon",
+                    b"",
+                    origin_header.as_deref(),
+                    keep_alive,
+                );
+            }
+            _ => {
+                // SPA fallback to index.html
+                let _ = write_http_response(
+                    &mut stream,
+                    200,
+                    "text/html; charset=utf-8",
+                    index_html.as_bytes(),
+                    origin_header.as_deref(),
+                    keep_alive,
                 );
             }
         }
-        return;
-    }
 
-    match path {
-        "/" | "/index.html" => {
-            let _ = write_http_response(
-                &mut stream,
-                200,
-                "text/html; charset=utf-8",
-                index_html.as_bytes(),
-                origin_header.as_deref(),
-            );
-        }
-        "/assets/app.js" => {
-            let _ = write_http_response(
-                &mut stream,
-                200,
-                "application/javascript; charset=utf-8",
-                bundle.app_js,
-                origin_header.as_deref(),
-            );
-        }
-        "/assets/app.css" => {
-            let _ = write_http_response(
-                &mut stream,
-                200,
-                "text/css; charset=utf-8",
-                bundle.app_css,
-                origin_header.as_deref(),
-            );
-        }
-        "/favicon.ico" => {
-            let _ = write_http_response(
-                &mut stream,
-                204,
-                "image/x-icon",
-                b"",
-                origin_header.as_deref(),
-            );
-        }
-        _ => {
-            // SPA fallback to index.html
-            let _ = write_http_response(
-                &mut stream,
-                200,
-                "text/html; charset=utf-8",
-                index_html.as_bytes(),
-                origin_header.as_deref(),
-            );
+        if !keep_alive {
+            break;
         }
     }
 }
@@ -1114,6 +1243,7 @@ fn write_http_response(
     content_type: &str,
     body: &[u8],
     origin: Option<&str>,
+    keep_alive: bool,
 ) -> std::io::Result<()> {
     let status_text = match status {
         200 => "OK",
@@ -1137,16 +1267,25 @@ fn write_http_response(
         }
     }
 
+    let conn_header = if keep_alive {
+        "Connection: keep-alive\r\nKeep-Alive: timeout=5, max=1000\r\n"
+    } else {
+        "Connection: close\r\n"
+    };
+
     let header = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\n{}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\n{}{}Cache-Control: no-store\r\n\r\n",
         status,
         status_text,
         content_type,
         body.len(),
-        cors_headers
+        cors_headers,
+        conn_header
     );
     stream.write_all(header.as_bytes())?;
-    stream.write_all(body)?;
+    if !body.is_empty() {
+        stream.write_all(body)?;
+    }
     stream.flush()
 }
 
@@ -1503,6 +1642,7 @@ fn serve_local_file(
     range_header: Option<&str>,
     origin: Option<&str>,
     scoped_registry: &ScopedFileRegistry,
+    keep_alive: bool,
 ) {
     let mut target_path: Option<String> = None;
     for pair in query_string.split('&') {
@@ -1521,6 +1661,7 @@ fn serve_local_file(
             "text/plain",
             b"Missing path query parameter",
             origin,
+            keep_alive,
         );
         return;
     };
@@ -1535,6 +1676,7 @@ fn serve_local_file(
             "text/plain",
             b"Access denied: protected or sensitive file path",
             origin,
+            keep_alive,
         );
         return;
     }
@@ -1549,18 +1691,33 @@ fn serve_local_file(
             "text/plain",
             b"Access denied: path not granted via dialog or workspace scope",
             origin,
+            keep_alive,
         );
         return;
     }
     if !path_obj.exists() || !path_obj.is_file() {
-        let _ = write_http_response(stream, 404, "text/plain", b"File not found", origin);
+        let _ = write_http_response(
+            stream,
+            404,
+            "text/plain",
+            b"File not found",
+            origin,
+            keep_alive,
+        );
         return;
     }
 
     let mut file = match File::open(path_obj) {
         Ok(f) => f,
         Err(_) => {
-            let _ = write_http_response(stream, 404, "text/plain", b"Cannot open file", origin);
+            let _ = write_http_response(
+                stream,
+                404,
+                "text/plain",
+                b"Cannot open file",
+                origin,
+                keep_alive,
+            );
             return;
         }
     };
@@ -1568,7 +1725,14 @@ fn serve_local_file(
     let total_size = match file.metadata() {
         Ok(m) => m.len(),
         Err(_) => {
-            let _ = write_http_response(stream, 500, "text/plain", b"Metadata error", origin);
+            let _ = write_http_response(
+                stream,
+                500,
+                "text/plain",
+                b"Metadata error",
+                origin,
+                keep_alive,
+            );
             return;
         }
     };
@@ -1585,18 +1749,31 @@ fn serve_local_file(
         }
     }
 
+    let conn_header = if keep_alive {
+        "Connection: keep-alive\r\nKeep-Alive: timeout=5, max=1000\r\n"
+    } else {
+        "Connection: close\r\n"
+    };
+
     if let Some(range_str) = range_header {
         match parse_byte_range(range_str, total_size) {
             Some(Ok((start, end))) => {
                 let length = end - start + 1;
                 if file.seek(SeekFrom::Start(start)).is_err() {
-                    let _ = write_http_response(stream, 500, "text/plain", b"Seek error", origin);
+                    let _ = write_http_response(
+                        stream,
+                        500,
+                        "text/plain",
+                        b"Seek error",
+                        origin,
+                        keep_alive,
+                    );
                     return;
                 }
 
                 let header = format!(
-                    "HTTP/1.1 206 Partial Content\r\nContent-Type: {}\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\n{}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
-                    content_type, length, start, end, total_size, cors_headers
+                    "HTTP/1.1 206 Partial Content\r\nContent-Type: {}\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\n{}{}Cache-Control: no-store\r\n\r\n",
+                    content_type, length, start, end, total_size, cors_headers, conn_header
                 );
                 if stream.write_all(header.as_bytes()).is_err() {
                     return;
@@ -1622,8 +1799,8 @@ fn serve_local_file(
             }
             Some(Err(())) => {
                 let header = format!(
-                    "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{}\r\nContent-Type: text/plain\r\nContent-Length: 0\r\nAccept-Ranges: bytes\r\n{}Connection: close\r\n\r\n",
-                    total_size, cors_headers
+                    "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{}\r\nContent-Type: text/plain\r\nContent-Length: 0\r\nAccept-Ranges: bytes\r\n{}{}Cache-Control: no-store\r\n\r\n",
+                    total_size, cors_headers, conn_header
                 );
                 let _ = stream.write_all(header.as_bytes());
                 let _ = stream.flush();
@@ -1637,8 +1814,8 @@ fn serve_local_file(
 
     // Standard streaming full-file response using 64 KB stack buffer
     let header = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\n{}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
-        content_type, total_size, cors_headers
+        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\n{}{}Cache-Control: no-store\r\n\r\n",
+        content_type, total_size, cors_headers, conn_header
     );
     if stream.write_all(header.as_bytes()).is_err() {
         return;
@@ -1759,8 +1936,14 @@ fn execute_self_test(
         "/__file?path={}",
         url_encode("C:\\arbitrary_forbidden_unscoped.txt")
     );
-    let (status_unscoped, _) =
-        loopback_http_request(port, "GET", &bad_unscoped_path, b"", Some(session_token), &[])?;
+    let (status_unscoped, _) = loopback_http_request(
+        port,
+        "GET",
+        &bad_unscoped_path,
+        b"",
+        Some(session_token),
+        &[],
+    )?;
     if status_unscoped != 403 {
         return Err(PlatformError::Unsupported(format!(
             "ScopedFileRegistry capability gate check failed: unscoped path returned HTTP {} instead of expected 403 Forbidden",
@@ -1797,14 +1980,8 @@ fn execute_self_test(
     }
 
     // 6. Positive Security Gate: SSE Event stream handshake check (ADR-001)
-    let (status_events, events_body) = loopback_http_request(
-        port,
-        "GET",
-        "/__events",
-        b"",
-        Some(session_token),
-        &[],
-    )?;
+    let (status_events, events_body) =
+        loopback_http_request(port, "GET", "/__events", b"", Some(session_token), &[])?;
     if status_events != 200 || !events_body.starts_with(b"event: connected") {
         return Err(PlatformError::Unsupported(format!(
             "Event stream check failed: status={} body={}",
@@ -2392,5 +2569,190 @@ mod tests {
         assert_eq!(local_state["edge"]["fre"]["has_user_seen_fre"], true);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+    #[test]
+    fn test_keep_alive_multiple_requests_on_single_tcp_stream() {
+        use std::io::{BufRead, BufReader, Read, Write};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let server_shutdown = Arc::clone(&shutdown);
+
+        let bundle = EmbeddedUiBundle {
+            app_id: "test-keepalive",
+            app_title: "Test KeepAlive",
+            version: "1.0.0",
+            index_html: "<html><body>Hello KeepAlive</body></html>",
+            app_js: b"console.log('js');",
+            app_css: b"body { margin: 0; }",
+            window_width: 1200,
+            window_height: 800,
+        };
+
+        struct DummyHandler;
+        impl DesktopIpcHandler for DummyHandler {
+            fn handle_command(&self, _cmd: &str, _args: Value) -> Result<Value, String> {
+                Ok(serde_json::json!({"status": "ok"}))
+            }
+            fn self_test_checks(&self) -> Vec<SelfTestCheck> {
+                Vec::new()
+            }
+        }
+
+        let last_hb = Arc::new(AtomicU64::new(0));
+        let connected = Arc::new(AtomicBool::new(false));
+        let reg = Arc::new(ScopedFileRegistry::new());
+        let token = "test_token_12345678";
+        let html = inject_bridge_into_html(bundle.index_html, bundle.app_title, token);
+
+        let server_handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_http_connection(
+                stream,
+                &bundle,
+                &html,
+                &DummyHandler,
+                &last_hb,
+                &connected,
+                &server_shutdown,
+                token,
+                &reg,
+                port,
+            );
+        });
+
+        // Client connects over a SINGLE persistent TcpStream
+        let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+
+        // Request 1: keep-alive
+        let req1 = format!(
+            "GET /assets/app.css HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: keep-alive\r\n\r\n",
+            port
+        );
+        client.write_all(req1.as_bytes()).unwrap();
+        client.flush().unwrap();
+
+        let mut reader = BufReader::new(client.try_clone().unwrap());
+        let mut status_line1 = String::new();
+        reader.read_line(&mut status_line1).unwrap();
+        assert!(
+            status_line1.contains("200 OK"),
+            "Expected 200 OK: {}",
+            status_line1
+        );
+
+        let mut content_len1 = 0usize;
+        let mut has_keep_alive1 = false;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            if line.to_ascii_lowercase().starts_with("content-length:") {
+                content_len1 = line.split_once(':').unwrap().1.trim().parse().unwrap();
+            }
+            if line.to_ascii_lowercase().contains("connection: keep-alive") {
+                has_keep_alive1 = true;
+            }
+        }
+        assert!(
+            has_keep_alive1,
+            "Response 1 must specify Connection: keep-alive"
+        );
+        let mut body1 = vec![0u8; content_len1];
+        reader.read_exact(&mut body1).unwrap();
+        assert_eq!(&body1, b"body { margin: 0; }");
+
+        // Request 2: on the SAME client stream with Connection: close
+        let req2 = format!(
+            "GET /assets/app.js HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+            port
+        );
+        client.write_all(req2.as_bytes()).unwrap();
+        client.flush().unwrap();
+
+        let mut status_line2 = String::new();
+        reader.read_line(&mut status_line2).unwrap();
+        assert!(
+            status_line2.contains("200 OK"),
+            "Expected 200 OK: {}",
+            status_line2
+        );
+
+        let mut content_len2 = 0usize;
+        let mut has_close2 = false;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            if line.to_ascii_lowercase().starts_with("content-length:") {
+                content_len2 = line.split_once(':').unwrap().1.trim().parse().unwrap();
+            }
+            if line.to_ascii_lowercase().contains("connection: close") {
+                has_close2 = true;
+            }
+        }
+        assert!(has_close2, "Response 2 must specify Connection: close");
+        let mut body2 = vec![0u8; content_len2];
+        reader.read_exact(&mut body2).unwrap();
+        assert_eq!(&body2, b"console.log('js');");
+
+        // Request 3: Confirm stream is closed by server (EOF)
+        let mut eof_buf = [0u8; 1];
+        let bytes_read = reader.read(&mut eof_buf).unwrap();
+        assert_eq!(
+            bytes_read, 0,
+            "Server must close stream after Connection: close"
+        );
+
+        shutdown.store(true, Ordering::SeqCst);
+        let _ = server_handle.join();
+    }
+
+    #[test]
+    fn test_unblock_server_listener_terminates_blocking_accept() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let server_shutdown = Arc::clone(&shutdown);
+
+        let handle = std::thread::spawn(move || {
+            while !server_shutdown.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((_stream, _)) => {
+                        if server_shutdown.load(Ordering::SeqCst) {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        // Initially server is blocked on listener.accept()
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!handle.is_finished());
+
+        // Signal shutdown and unblock
+        shutdown.store(true, Ordering::SeqCst);
+        unblock_server_listener(port);
+
+        // Server thread must exit promptly within 500ms
+        let start = Instant::now();
+        while !handle.is_finished() && start.elapsed() < Duration::from_millis(500) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            handle.is_finished(),
+            "Server thread must exit promptly upon unblocking"
+        );
+        let _ = handle.join();
     }
 }
