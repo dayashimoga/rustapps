@@ -1,0 +1,28 @@
+[package]
+name = "antigravity-suite-launcher"
+version = "0.1.0"
+edition = "2021"
+authors = ["Offline Suite Core Team"]
+description = "Antigravity Offline Enterprise Multi-App Suite Launcher & Health Monitor"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+blake3 = "1.5"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
+hex = "0.4"
+
+shared-licensing = { path = "../../shared/licensing" }
+platform-common = { path = "../../platform" }
+
+[lib]
+name = "antigravity_suite_launcher"
+path = "src/lib.rs"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "antigravity-suite-launcher"
+path = "src/main.rs"

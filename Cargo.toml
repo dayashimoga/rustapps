@@ -38,6 +38,7 @@ members = [
     "apps/privacy-media-sanitizer",
     "apps/modbus-can-industrial-debugger",
     "apps/markdown-publishing-press",
+    "apps/antigravity-suite-launcher",
     "tools/license-signer",
     "tests",
     "benchmarks",

@@ -121,6 +121,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
+name = "antigravity-suite-launcher"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chrono",
+ "ed25519-dalek",
+ "hex",
+ "platform-common",
+ "rand",
+ "serde",
+ "serde_json",
+ "shared-licensing",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
