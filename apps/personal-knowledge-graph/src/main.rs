@@ -56,6 +56,18 @@ impl DesktopIpcHandler for KnowledgeDesktopHandler {
                 }),
             },
             SelfTestCheck {
+                command: "compute_pagerank",
+                payload: json!({}),
+            },
+            SelfTestCheck {
+                command: "suggest_wiki_links",
+                payload: json!({ "prefix": "Quantum", "limit": 5 }),
+            },
+            SelfTestCheck {
+                command: "sync_markdown_folder",
+                payload: json!({ "folder_path": "target/self_test_notes" }),
+            },
+            SelfTestCheck {
                 command: "get_license_status",
                 payload: json!({}),
             },

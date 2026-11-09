@@ -5,9 +5,10 @@ use crate::document_parser::DocumentParser;
 use crate::graph_store::{GraphError, GraphStore};
 use crate::knowledge_index::{IndexError, KnowledgeSearchIndex};
 use crate::models::{
-    CitationRecord, GraphMetrics, GraphVisualizationData, KnowledgeEdge, KnowledgeNode, NodeType,
-    RelationType, SearchResult,
+    CitationRecord, FolderSyncSummary, GraphMetrics, GraphVisualizationData, KnowledgeEdge,
+    KnowledgeNode, NodeType, PageRankEntry, RelationType, SearchResult, WikiLinkSuggestion,
 };
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
@@ -151,9 +152,7 @@ impl KnowledgeService {
     }
 
     pub fn get_graph(&self) -> Result<GraphVisualizationData, ServiceError> {
-        let nodes = self.store.get_all_nodes()?;
-        let edges = self.store.get_all_edges()?;
-        Ok(GraphVisualizationData { nodes, edges })
+        Ok(self.store.get_visualization_data_with_pagerank()?)
     }
 
     pub fn get_neighbors(
@@ -256,6 +255,178 @@ impl KnowledgeService {
     pub fn get_citation(&self, node_id: &str) -> Result<Option<CitationRecord>, ServiceError> {
         Ok(self.store.get_citation_for_node(node_id)?)
     }
+
+    /// Computes PageRank centrality rankings for all nodes in the knowledge graph
+    pub fn compute_pagerank(&self) -> Result<Vec<PageRankEntry>, ServiceError> {
+        let all_nodes = self.store.get_all_nodes()?;
+        let title_map: HashMap<String, String> =
+            all_nodes.into_iter().map(|n| (n.id, n.title)).collect();
+
+        let pr_map = self.store.compute_pagerank(0.85, 40)?;
+        let mut entries: Vec<PageRankEntry> = pr_map
+            .into_iter()
+            .map(|(node_id, score)| {
+                let title = title_map
+                    .get(&node_id)
+                    .cloned()
+                    .unwrap_or_else(|| node_id.clone());
+                PageRankEntry {
+                    node_id,
+                    title,
+                    score,
+                    rank: 0,
+                }
+            })
+            .collect();
+
+        entries.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for (i, entry) in entries.iter_mut().enumerate() {
+            entry.rank = i + 1;
+        }
+
+        Ok(entries)
+    }
+
+    /// Autocomplete query matching wiki-links `[[Prefix...]]`
+    pub fn suggest_wiki_links(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<WikiLinkSuggestion>, ServiceError> {
+        Ok(self.store.suggest_wiki_links(prefix, limit)?)
+    }
+
+    /// Two-way synchronization between a local directory of `.md` files and the knowledge graph
+    pub fn sync_markdown_folder(
+        &self,
+        folder_path: &Path,
+    ) -> Result<FolderSyncSummary, ServiceError> {
+        if !folder_path.exists() {
+            std::fs::create_dir_all(folder_path)
+                .map_err(|e| IndexError::Tantivy(tantivy::TantivyError::IoError(Arc::new(e))))?;
+        }
+
+        let mut imported_count = 0usize;
+        let mut updated_count = 0usize;
+        let mut exported_count = 0usize;
+
+        // 1. Ingest .md files from disk into Knowledge Graph
+        let mut disk_files = Vec::new();
+        let mut dir_entries = vec![folder_path.to_path_buf()];
+
+        while let Some(current_dir) = dir_entries.pop() {
+            if let Ok(read_dir) = std::fs::read_dir(&current_dir) {
+                for entry in read_dir.filter_map(|e| e.ok()) {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        dir_entries.push(path);
+                    } else if path.is_file() {
+                        if let Some(ext) = path.extension() {
+                            if ext.eq_ignore_ascii_case("md")
+                                || ext.eq_ignore_ascii_case("markdown")
+                            {
+                                disk_files.push(path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut disk_titles = HashSet::new();
+
+        for file_path in disk_files {
+            let content = match std::fs::read_to_string(&file_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let mut title = None;
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if let Some(h1) = trimmed.strip_prefix("# ") {
+                    let t = h1.trim().to_string();
+                    if !t.is_empty() {
+                        title = Some(t);
+                        break;
+                    }
+                }
+            }
+            let title = title.unwrap_or_else(|| {
+                file_path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "Untitled Note".to_string())
+            });
+
+            disk_titles.insert(title.to_lowercase());
+
+            if let Some(existing) = self.store.get_node_by_title(&title)? {
+                if existing.content != content {
+                    self.save_note(
+                        Some(&existing.id),
+                        &title,
+                        &content,
+                        Some(existing.node_type),
+                        Some(existing.tags),
+                    )?;
+                    updated_count += 1;
+                }
+            } else {
+                self.save_note(None, &title, &content, Some(NodeType::Note), None)?;
+                imported_count += 1;
+            }
+        }
+
+        // 2. Export nodes from Knowledge Graph to disk if missing
+        let all_nodes = self.store.get_all_nodes()?;
+        for node in all_nodes {
+            if !disk_titles.contains(&node.title.to_lowercase()) {
+                let safe_title: String = node
+                    .title
+                    .chars()
+                    .map(|c| {
+                        if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect();
+                let safe_name = safe_title.trim();
+                let file_name = if safe_name.is_empty() {
+                    format!("{}.md", node.id)
+                } else {
+                    format!("{}.md", safe_name)
+                };
+                let target_file = folder_path.join(file_name);
+
+                let mut out = String::with_capacity(node.content.len() + 64);
+                if !node.content.starts_with("# ") {
+                    out.push_str(&format!("# {}\n\n", node.title));
+                }
+                out.push_str(&node.content);
+
+                if std::fs::write(&target_file, out.as_bytes()).is_ok() {
+                    exported_count += 1;
+                }
+            }
+        }
+
+        let total_synced_edges = self.store.get_all_edges()?.len();
+
+        Ok(FolderSyncSummary {
+            folder_path: folder_path.to_string_lossy().to_string(),
+            imported_count,
+            exported_count,
+            updated_count,
+            total_synced_edges,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -312,5 +483,80 @@ mod tests {
 
         let fetched_citation = service.get_citation(&note.id).unwrap().unwrap();
         assert_eq!(fetched_citation.publication_year, Some(2017));
+    }
+
+    #[test]
+    fn test_sync_markdown_folder_two_way() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("vault");
+        std::fs::create_dir_all(&folder).unwrap();
+
+        // Write initial markdown files
+        let doc1 = folder.join("Quantum.md");
+        std::fs::write(
+            &doc1,
+            "# Quantum Computing\n\nStudy of [[Qubits]] and entanglement.",
+        )
+        .unwrap();
+
+        let doc2 = folder.join("Entropy.md");
+        std::fs::write(
+            &doc2,
+            "# Information Entropy\n\nShannon entropy measurements.",
+        )
+        .unwrap();
+
+        let service = KnowledgeService::open_in_memory().unwrap();
+
+        // Create an existing note in the graph referencing Quantum Computing
+        service
+            .save_note(
+                None,
+                "Cryptography",
+                "RSA, ECC, and [[Quantum Computing]] resilience.",
+                Some(NodeType::Note),
+                None,
+            )
+            .unwrap();
+
+        // Perform two-way sync
+        let summary = service.sync_markdown_folder(&folder).unwrap();
+        assert_eq!(summary.imported_count, 1); // Entropy.md is fresh imported
+        assert_eq!(summary.updated_count, 1); // Quantum.md updates existing stub
+        assert_eq!(summary.exported_count, 2); // Cryptography.md and auto-created Qubits.md exported
+
+        // Verify disk files
+        assert!(folder.join("Cryptography.md").exists());
+        assert!(folder.join("Qubits.md").exists());
+
+        // Verify graph nodes
+        let nodes = service.get_graph().unwrap().nodes;
+        let titles: Vec<String> = nodes.into_iter().map(|n| n.title).collect();
+        assert!(titles.contains(&"Quantum Computing".to_string()));
+        assert!(titles.contains(&"Cryptography".to_string()));
+        assert!(titles.contains(&"Qubits".to_string()));
+    }
+
+    #[test]
+    fn test_service_pagerank_and_wiki_suggestions() {
+        let service = KnowledgeService::open_in_memory().unwrap();
+
+        service
+            .save_note(
+                None,
+                "Machine Learning",
+                "Core overview linking to [[Neural Networks]] and [[Deep Learning]].",
+                Some(NodeType::Document),
+                None,
+            )
+            .unwrap();
+
+        let ranking = service.compute_pagerank().unwrap();
+        assert!(!ranking.is_empty());
+        assert_eq!(ranking[0].rank, 1);
+
+        let suggestions = service.suggest_wiki_links("Neural", 5).unwrap();
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].title, "Neural Networks");
     }
 }

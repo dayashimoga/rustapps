@@ -143,6 +143,7 @@ impl GraphStore {
                 metadata,
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
+                pagerank: None,
             }))
         } else {
             Ok(None)
@@ -175,6 +176,7 @@ impl GraphStore {
                 metadata,
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
+                pagerank: None,
             }))
         } else {
             Ok(None)
@@ -235,6 +237,7 @@ impl GraphStore {
                 metadata,
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
+                pagerank: None,
             })
         })?;
 
@@ -466,6 +469,138 @@ impl GraphStore {
             Ok(None)
         }
     }
+
+    /// Computes iterative PageRank centrality over the knowledge graph
+    pub fn compute_pagerank(
+        &self,
+        damping: f64,
+        max_iterations: usize,
+    ) -> Result<HashMap<String, f64>, GraphError> {
+        let all_nodes = self.get_all_nodes()?;
+        let n = all_nodes.len();
+        if n == 0 {
+            return Ok(HashMap::new());
+        }
+
+        let all_edges = self.get_all_edges()?;
+
+        let mut id_to_idx = HashMap::with_capacity(n);
+        let mut idx_to_id = Vec::with_capacity(n);
+        for (i, node) in all_nodes.iter().enumerate() {
+            id_to_idx.insert(node.id.clone(), i);
+            idx_to_id.push(node.id.clone());
+        }
+
+        let mut out_degree = vec![0usize; n];
+        let mut incoming: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+        for edge in all_edges {
+            if let (Some(&src_idx), Some(&tgt_idx)) = (
+                id_to_idx.get(&edge.source_id),
+                id_to_idx.get(&edge.target_id),
+            ) {
+                if src_idx != tgt_idx {
+                    out_degree[src_idx] += 1;
+                    incoming[tgt_idx].push(src_idx);
+                }
+            }
+        }
+
+        let initial_val = 1.0 / (n as f64);
+        let mut pr = vec![initial_val; n];
+        let mut next_pr = vec![0.0f64; n];
+
+        for _ in 0..max_iterations {
+            let mut dangling_sum = 0.0f64;
+            for i in 0..n {
+                if out_degree[i] == 0 {
+                    dangling_sum += pr[i];
+                }
+            }
+
+            let base_score = (1.0 - damping) / (n as f64) + damping * (dangling_sum / (n as f64));
+            let mut max_delta = 0.0f64;
+
+            for i in 0..n {
+                let mut in_sum = 0.0f64;
+                for &pred in &incoming[i] {
+                    let out_d = out_degree[pred];
+                    if out_d > 0 {
+                        in_sum += pr[pred] / (out_d as f64);
+                    }
+                }
+                let new_val = base_score + damping * in_sum;
+                let delta = (new_val - pr[i]).abs();
+                if delta > max_delta {
+                    max_delta = delta;
+                }
+                next_pr[i] = new_val;
+            }
+
+            pr.copy_from_slice(&next_pr);
+            if max_delta < 1e-6 {
+                break;
+            }
+        }
+
+        let mut result = HashMap::with_capacity(n);
+        for (i, id) in idx_to_id.into_iter().enumerate() {
+            result.insert(id, pr[i]);
+        }
+
+        Ok(result)
+    }
+
+    /// Fetches visualization payload with nodes enriched by their computed PageRank score
+    pub fn get_visualization_data_with_pagerank(
+        &self,
+    ) -> Result<GraphVisualizationData, GraphError> {
+        let mut nodes = self.get_all_nodes()?;
+        let edges = self.get_all_edges()?;
+        let pagerank_map = self.compute_pagerank(0.85, 30)?;
+
+        for node in &mut nodes {
+            if let Some(&score) = pagerank_map.get(&node.id) {
+                node.pagerank = Some(score);
+            }
+        }
+
+        Ok(GraphVisualizationData { nodes, edges })
+    }
+
+    /// Autocomplete query matching wiki-links `[[Prefix...]]`
+    pub fn suggest_wiki_links(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::models::WikiLinkSuggestion>, GraphError> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{}%", prefix.trim());
+        let mut stmt = conn.prepare(
+            "SELECT title, node_type, content, tags_json FROM nodes WHERE title LIKE ?1 ORDER BY title LIMIT ?2",
+        )?;
+
+        let rows = stmt.query_map(params![pattern, limit as i64], |row| {
+            let title: String = row.get(0)?;
+            let node_type: String = row.get(1)?;
+            let content: String = row.get(2)?;
+            let tags_json: String = row.get(3)?;
+            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            let snippet: String = content.chars().take(80).collect();
+            Ok(crate::models::WikiLinkSuggestion {
+                title,
+                node_type,
+                snippet,
+                tags,
+            })
+        })?;
+
+        let mut suggestions = Vec::new();
+        for s in rows {
+            suggestions.push(s?);
+        }
+        Ok(suggestions)
+    }
 }
 
 #[cfg(test)]
@@ -542,5 +677,76 @@ mod tests {
 
         let path = store.find_shortest_path("A", "D").unwrap();
         assert_eq!(path, vec!["A", "B", "C", "D"]);
+    }
+
+    #[test]
+    fn test_pagerank_centrality() {
+        let store = GraphStore::open_in_memory().unwrap();
+
+        // Star graph: Hub receives incoming links from Leaf1, Leaf2, Leaf3
+        let hub = KnowledgeNode::new("hub", "Central Concept", NodeType::Concept, "");
+        let l1 = KnowledgeNode::new("l1", "Leaf 1", NodeType::Note, "");
+        let l2 = KnowledgeNode::new("l2", "Leaf 2", NodeType::Note, "");
+        let l3 = KnowledgeNode::new("l3", "Leaf 3", NodeType::Note, "");
+
+        store.insert_node(&hub).unwrap();
+        store.insert_node(&l1).unwrap();
+        store.insert_node(&l2).unwrap();
+        store.insert_node(&l3).unwrap();
+
+        store
+            .insert_edge(&KnowledgeEdge::new("e1", "l1", "hub", RelationType::Cites))
+            .unwrap();
+        store
+            .insert_edge(&KnowledgeEdge::new("e2", "l2", "hub", RelationType::Cites))
+            .unwrap();
+        store
+            .insert_edge(&KnowledgeEdge::new("e3", "l3", "hub", RelationType::Cites))
+            .unwrap();
+
+        let pr = store.compute_pagerank(0.85, 30).unwrap();
+        assert_eq!(pr.len(), 4);
+
+        let hub_score = *pr.get("hub").unwrap();
+        let l1_score = *pr.get("l1").unwrap();
+        assert!(
+            hub_score > l1_score,
+            "Hub score ({}) must be greater than leaf ({})",
+            hub_score,
+            l1_score
+        );
+
+        let vis = store.get_visualization_data_with_pagerank().unwrap();
+        let hub_node = vis.nodes.iter().find(|n| n.id == "hub").unwrap();
+        assert!(hub_node.pagerank.is_some());
+    }
+
+    #[test]
+    fn test_suggest_wiki_links() {
+        let store = GraphStore::open_in_memory().unwrap();
+
+        let n1 = KnowledgeNode::new(
+            "1",
+            "Machine Learning Fundamentals",
+            NodeType::Document,
+            "Intro content",
+        );
+        let n2 = KnowledgeNode::new(
+            "2",
+            "Markov Decision Process",
+            NodeType::Concept,
+            "Reinforcement learning",
+        );
+        let n3 = KnowledgeNode::new("3", "Deep Learning", NodeType::Note, "Neural nets");
+
+        store.insert_node(&n1).unwrap();
+        store.insert_node(&n2).unwrap();
+        store.insert_node(&n3).unwrap();
+
+        let suggestions = store.suggest_wiki_links("Learn", 10).unwrap();
+        assert_eq!(suggestions.len(), 2);
+        let titles: Vec<String> = suggestions.into_iter().map(|s| s.title).collect();
+        assert!(titles.contains(&"Machine Learning Fundamentals".to_string()));
+        assert!(titles.contains(&"Deep Learning".to_string()));
     }
 }

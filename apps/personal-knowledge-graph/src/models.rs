@@ -53,6 +53,8 @@ pub struct KnowledgeNode {
     pub metadata: serde_json::Value,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(default)]
+    pub pagerank: Option<f64>,
 }
 
 impl KnowledgeNode {
@@ -75,8 +77,37 @@ impl KnowledgeNode {
             metadata: serde_json::json!({}),
             created_at: now,
             updated_at: now,
+            pagerank: None,
         }
     }
+}
+
+/// PageRank centrality entry for graph ranking
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PageRankEntry {
+    pub node_id: String,
+    pub title: String,
+    pub score: f64,
+    pub rank: usize,
+}
+
+/// Two-way Markdown folder sync summary
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FolderSyncSummary {
+    pub folder_path: String,
+    pub imported_count: usize,
+    pub exported_count: usize,
+    pub updated_count: usize,
+    pub total_synced_edges: usize,
+}
+
+/// Wiki-link suggestion item for [[ autocomplete
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WikiLinkSuggestion {
+    pub title: String,
+    pub node_type: String,
+    pub snippet: String,
+    pub tags: Vec<String>,
 }
 
 /// Semantic relationship type between two knowledge nodes

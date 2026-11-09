@@ -26,6 +26,103 @@
   let pathTargetId = '';
   let foundPath: any[] = [];
 
+  // Phase 5.1 Enhancements
+  let isSplitPreview = true;
+  let wikiSuggestions: any[] = [];
+  let showSuggestions = false;
+  let syncFeedback = '';
+  let pageRankRankings: any[] = [];
+  let showPageRankModal = false;
+
+  async function loadPageRank() {
+    try {
+      const rankings: any = await invokeIpc('compute_pagerank');
+      pageRankRankings = rankings || [];
+      showPageRankModal = true;
+    } catch (e) {
+      console.error('Failed to compute PageRank:', e);
+    }
+  }
+
+  async function handleSyncFolder() {
+    const folder = prompt('Enter local Markdown vault directory path:', 'notes');
+    if (!folder || !folder.trim()) return;
+
+    try {
+      const summary: any = await invokeIpc('sync_markdown_folder', { folder_path: folder.trim() });
+      syncFeedback = `Synced vault "${folder.trim()}": ${summary.imported_count} imported, ${summary.exported_count} exported, ${summary.updated_count} updated.`;
+      await loadGraph();
+      setTimeout(() => {
+        syncFeedback = '';
+      }, 6000);
+    } catch (e: any) {
+      alert(`Sync failed: ${e.message || e}`);
+    }
+  }
+
+  async function handleContentChange() {
+    const textarea = document.getElementById('note-content-textarea') as HTMLTextAreaElement | null;
+    const cursor = textarea?.selectionStart || 0;
+    const textBefore = editContent.slice(0, cursor);
+    const lastOpen = textBefore.lastIndexOf('[[');
+    const lastClose = textBefore.lastIndexOf(']]');
+
+    if (lastOpen !== -1 && lastOpen > lastClose) {
+      const query = textBefore.slice(lastOpen + 2);
+      if (!query.includes('\n')) {
+        try {
+          const res: any = await invokeIpc('suggest_wiki_links', { prefix: query, limit: 6 });
+          wikiSuggestions = res || [];
+          showSuggestions = wikiSuggestions.length > 0;
+          return;
+        } catch {
+          // ignore
+        }
+      }
+    }
+    showSuggestions = false;
+  }
+
+  function insertWikiSuggestion(title: string) {
+    const textarea = document.getElementById('note-content-textarea') as HTMLTextAreaElement | null;
+    const cursor = textarea?.selectionStart || editContent.length;
+    const textBefore = editContent.slice(0, cursor);
+    const lastOpen = textBefore.lastIndexOf('[[');
+    if (lastOpen !== -1) {
+      const beforeLink = editContent.slice(0, lastOpen);
+      const afterCursor = editContent.slice(cursor);
+      editContent = `${beforeLink}[[${title}]]${afterCursor}`;
+      showSuggestions = false;
+    }
+  }
+
+  function renderPreviewHtml(content: string): string {
+    if (!content) return '<p class="text-slate-500 italic">No content</p>';
+
+    let escaped = content
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    // Replace [[Target|Alias]] and [[Target]]
+    escaped = escaped.replace(/\[\[([^\]\|]+)(?:\|([^\]]+))?\]\]/g, (_, target, alias) => {
+      const label = alias || target;
+      return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-purple-900/50 text-purple-200 border border-purple-700/50 cursor-pointer">[[${label}]]</span>`;
+    });
+
+    // Replace #tags
+    escaped = escaped.replace(/(?:^|\s)#([a-zA-Z0-9_\-]+)/g, (_, tag) => {
+      return ` <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-cyan-950 text-cyan-300 border border-cyan-800/40">#${tag}</span>`;
+    });
+
+    // Replace [@citations]
+    escaped = escaped.replace(/\[@([a-zA-Z0-9_\-]+)\]/g, (_, cite) => {
+      return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-950 text-amber-300 border border-amber-800/40">[@${cite}]</span>`;
+    });
+
+    return escaped.replace(/\n/g, '<br/>');
+  }
+
   async function loadGraph() {
     try {
       const data: any = await invokeIpc('get_graph_visualization');
@@ -259,6 +356,30 @@
 
     <!-- Right Controls -->
     <div class="flex items-center gap-3">
+      {#if syncFeedback}
+        <span class="text-[11px] text-emerald-400 font-medium px-2 py-1 bg-emerald-950/60 border border-emerald-800/40 rounded">
+          {syncFeedback}
+        </span>
+      {/if}
+
+      <button
+        class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 border border-slate-700 shadow-sm"
+        on:click={handleSyncFolder}
+        title="Two-Way Local Markdown Vault Sync (.md)"
+      >
+        <span>📂</span>
+        <span>Sync Vault</span>
+      </button>
+
+      <button
+        class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 border border-slate-700 shadow-sm"
+        on:click={loadPageRank}
+        title="Compute PageRank Centrality Rankings"
+      >
+        <span>📈</span>
+        <span>PageRank</span>
+      </button>
+
       <button
         class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 border border-slate-700 shadow-sm"
         on:click={() => (isCommandPaletteOpen = true)}
@@ -382,16 +503,80 @@
               </div>
             </div>
 
-            <div class="flex-1 flex flex-col gap-1 mt-1">
-              <label for="note-content-textarea" class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                Content (supports [[Wiki-Links]] and [@citations])
-              </label>
-              <textarea
-                id="note-content-textarea"
-                bind:value={editContent}
-                rows="14"
-                class="w-full flex-1 bg-slate-950 border border-slate-700 rounded p-2.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-indigo-500"
-              ></textarea>
+            <div class="flex-1 flex flex-col gap-1 mt-1 relative">
+              <div class="flex items-center justify-between">
+                <label for="note-content-textarea" class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  Content (supports [[Wiki-Links]] and [@citations])
+                </label>
+                <button
+                  type="button"
+                  class="text-[10px] px-2 py-0.5 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  on:click={() => (isSplitPreview = !isSplitPreview)}
+                >
+                  {isSplitPreview ? 'Split Preview: ON' : 'Split Preview: OFF'}
+                </button>
+              </div>
+
+              {#if isSplitPreview}
+                <div class="grid grid-cols-2 gap-2 flex-1">
+                  <div class="relative flex flex-col">
+                    <textarea
+                      id="note-content-textarea"
+                      bind:value={editContent}
+                      on:input={handleContentChange}
+                      rows="14"
+                      class="w-full h-full min-h-[220px] bg-slate-950 border border-slate-700 rounded p-2.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-indigo-500"
+                    ></textarea>
+
+                    {#if showSuggestions && wikiSuggestions.length > 0}
+                      <div class="absolute bottom-2 left-2 right-2 bg-slate-900 border border-indigo-500/60 rounded-lg shadow-xl p-2 z-20 flex flex-col gap-1 max-h-40 overflow-y-auto">
+                        <span class="text-[10px] uppercase font-bold text-indigo-400 px-1">Wiki-Link Autocomplete:</span>
+                        {#each wikiSuggestions as sug}
+                          <button
+                            type="button"
+                            class="text-left text-xs px-2 py-1 rounded hover:bg-indigo-950/70 text-slate-200 flex items-center justify-between"
+                            on:click={() => insertWikiSuggestion(sug.title)}
+                          >
+                            <span class="font-medium">[[{sug.title}]]</span>
+                            <span class="text-[10px] text-slate-500 capitalize">{sug.node_type}</span>
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+
+                  <div class="bg-slate-950 border border-slate-800 rounded p-3 text-xs leading-relaxed text-slate-300 overflow-y-auto min-h-[220px]">
+                    <div class="text-[10px] uppercase font-bold text-slate-500 mb-1 border-b border-slate-800 pb-0.5">Live Preview</div>
+                    {@html renderPreviewHtml(editContent)}
+                  </div>
+                </div>
+              {:else}
+                <div class="relative flex-1 flex flex-col">
+                  <textarea
+                    id="note-content-textarea"
+                    bind:value={editContent}
+                    on:input={handleContentChange}
+                    rows="14"
+                    class="w-full flex-1 bg-slate-950 border border-slate-700 rounded p-2.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-indigo-500"
+                  ></textarea>
+
+                  {#if showSuggestions && wikiSuggestions.length > 0}
+                    <div class="absolute bottom-2 left-2 right-2 bg-slate-900 border border-indigo-500/60 rounded-lg shadow-xl p-2 z-20 flex flex-col gap-1 max-h-40 overflow-y-auto">
+                      <span class="text-[10px] uppercase font-bold text-indigo-400 px-1">Wiki-Link Autocomplete:</span>
+                      {#each wikiSuggestions as sug}
+                        <button
+                          type="button"
+                          class="text-left text-xs px-2 py-1 rounded hover:bg-indigo-950/70 text-slate-200 flex items-center justify-between"
+                          on:click={() => insertWikiSuggestion(sug.title)}
+                        >
+                          <span class="font-medium">[[{sug.title}]]</span>
+                          <span class="text-[10px] text-slate-500 capitalize">{sug.node_type}</span>
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             </div>
           {:else}
             <!-- Read-only View -->
@@ -406,8 +591,8 @@
               </div>
             </div>
 
-            <div class="mt-2 text-xs leading-relaxed text-slate-300 font-mono whitespace-pre-wrap bg-slate-950 p-3 rounded-lg border border-slate-800/60 min-h-[160px]">
-              {selectedNode.content || '(No content)'}
+            <div class="mt-2 text-xs leading-relaxed text-slate-300 bg-slate-950 p-3 rounded-lg border border-slate-800/60 min-h-[160px]">
+              {@html renderPreviewHtml(selectedNode.content || '')}
             </div>
 
             <!-- Shortest Path Finder -->
@@ -482,5 +667,49 @@
     on:close={() => (isLicenseModalOpen = false)}
     on:statusChange={(e) => (currentTier = e.detail.tier.toUpperCase())}
   />
+
+  {#if showPageRankModal}
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl shadow-2xl max-w-lg w-full p-5 flex flex-col gap-4">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-xl">📈</span>
+            <h3 class="text-sm font-bold text-slate-100">PageRank Centrality Rankings</h3>
+          </div>
+          <button
+            class="text-slate-400 hover:text-slate-200 text-sm"
+            on:click={() => (showPageRankModal = false)}
+          >
+            ✕
+          </button>
+        </div>
+
+        <div class="text-xs text-slate-400">
+          Iterative graph centrality analysis (damping d = 0.85). Nodes with high PageRank scores represent pivotal hubs and foundational concepts across your research literature.
+        </div>
+
+        <div class="max-h-72 overflow-y-auto flex flex-col gap-1.5 pr-1">
+          {#each pageRankRankings as r}
+            <div class="flex items-center justify-between p-2 rounded bg-slate-950/60 border border-slate-800/60 text-xs">
+              <div class="flex items-center gap-2">
+                <span class="w-6 text-center font-bold text-slate-500">#{r.rank}</span>
+                <span class="font-medium text-slate-200">{r.title}</span>
+              </div>
+              <span class="font-mono text-indigo-400 font-semibold">{r.score.toFixed(4)}</span>
+            </div>
+          {/each}
+        </div>
+
+        <div class="flex justify-end pt-2 border-t border-slate-800">
+          <button
+            class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-4 py-1.5 rounded font-medium shadow"
+            on:click={() => (showPageRankModal = false)}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 

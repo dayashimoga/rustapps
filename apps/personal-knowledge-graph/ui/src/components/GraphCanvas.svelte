@@ -54,9 +54,10 @@
 
     const newMap = new Map<string, SimNode>();
     nodes.forEach((n, idx) => {
+      const baseR = (n.id === selectedNodeId ? 18 : 10) + Math.min(24, ((n.pagerank || 0.05) * 140));
       const existing = simNodes.get(n.id);
       if (existing) {
-        newMap.set(n.id, { ...existing, title: n.title, type: n.node_type });
+        newMap.set(n.id, { ...existing, title: n.title, type: n.node_type, radius: baseR });
       } else {
         const angle = (idx / Math.max(1, nodes.length)) * Math.PI * 2;
         const radius = Math.min(width, height) * 0.35;
@@ -68,7 +69,7 @@
           y: height / 2 + Math.sin(angle) * radius + (Math.random() - 0.5) * 50,
           vx: 0,
           vy: 0,
-          radius: n.id === selectedNodeId ? 18 : 12,
+          radius: baseR,
         });
       }
     });

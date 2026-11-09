@@ -177,6 +177,34 @@ pub fn dispatch_ipc_command(command: &str, payload: Value) -> Result<Value, Stri
             Ok(json!(citation))
         }
 
+        "compute_pagerank" => {
+            let rankings = service.compute_pagerank().map_err(|e| e.to_string())?;
+            Ok(json!(rankings))
+        }
+
+        "suggest_wiki_links" => {
+            let prefix = payload["prefix"]
+                .as_str()
+                .or_else(|| payload["query"].as_str())
+                .unwrap_or("");
+            let limit = payload["limit"].as_u64().unwrap_or(10) as usize;
+            let suggestions = service
+                .suggest_wiki_links(prefix, limit)
+                .map_err(|e| e.to_string())?;
+            Ok(json!(suggestions))
+        }
+
+        "sync_markdown_folder" => {
+            let folder_str = payload["folder_path"]
+                .as_str()
+                .or_else(|| payload["path"].as_str())
+                .unwrap_or("notes");
+            let summary = service
+                .sync_markdown_folder(std::path::Path::new(folder_str))
+                .map_err(|e| e.to_string())?;
+            Ok(json!(summary))
+        }
+
         "get_license_status" => {
             let status: LicenseStatusReport = licensing.status_report();
             Ok(json!(status))
@@ -231,5 +259,28 @@ mod tests {
 
         let lic_status = dispatch_ipc_command("get_license_status", json!({})).unwrap();
         assert!(lic_status.get("tier").is_some());
+
+        // Test compute_pagerank
+        let pr = dispatch_ipc_command("compute_pagerank", json!({})).unwrap();
+        let pr_arr = pr.as_array().unwrap();
+        assert!(!pr_arr.is_empty());
+
+        // Test suggest_wiki_links
+        let suggestions = dispatch_ipc_command(
+            "suggest_wiki_links",
+            json!({ "prefix": "Quantum", "limit": 5 }),
+        )
+        .unwrap();
+        let sug_arr = suggestions.as_array().unwrap();
+        assert!(!sug_arr.is_empty());
+
+        // Test sync_markdown_folder
+        let temp = tempfile::tempdir().unwrap();
+        let sync_res = dispatch_ipc_command(
+            "sync_markdown_folder",
+            json!({ "folder_path": temp.path().to_string_lossy().to_string() }),
+        )
+        .unwrap();
+        assert!(sync_res["exported_count"].as_u64().unwrap() >= 1);
     }
 }
