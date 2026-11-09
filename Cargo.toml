@@ -35,6 +35,7 @@ members = [
     "apps/crypto-pki-ca-studio",
     "apps/local-rag-contract-auditor",
     "apps/sql-migration-diff-studio",
+    "apps/privacy-media-sanitizer",
     "tools/license-signer",
     "tests",
     "benchmarks",

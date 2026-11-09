@@ -1,0 +1,29 @@
+[package]
+name = "privacy-media-sanitizer"
+version = "0.1.0"
+edition = "2021"
+authors = ["Offline Apps Team"]
+description = "Forensic Air-Gapped Media & Document Privacy Sanitizer: Strips EXIF/XMP/GPS, PDF metadata, and issues Ed25519 audit certificates"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+blake3 = "1.5"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
+hex = "0.4"
+regex = "1.10"
+
+shared-licensing = { path = "../../shared/licensing" }
+platform-common = { path = "../../platform" }
+
+[lib]
+name = "privacy_media_sanitizer"
+path = "src/lib.rs"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "privacy-media-sanitizer"
+path = "src/main.rs"

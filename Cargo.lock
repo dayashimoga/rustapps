@@ -1776,6 +1776,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "privacy-media-sanitizer"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chrono",
+ "ed25519-dalek",
+ "hex",
+ "platform-common",
+ "rand",
+ "regex",
+ "serde",
+ "serde_json",
+ "shared-licensing",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "pro-av-editor"
 version = "0.1.0"
 dependencies = [
