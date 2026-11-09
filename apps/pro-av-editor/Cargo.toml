@@ -42,4 +42,5 @@ shared-model-hub = { path = "../../shared/model-hub" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+shared-licensing = { path = "../../shared/licensing", features = ["signing"] }
 

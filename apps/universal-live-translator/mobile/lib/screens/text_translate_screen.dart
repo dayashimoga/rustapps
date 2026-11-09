@@ -74,7 +74,7 @@ class _TextTranslateScreenState extends State<TextTranslateScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             margin: const EdgeInsets.only(right: 12),
             decoration: BoxDecoration(
-              color: Colors.green.withValues(alpha: 0.2),
+              color: Colors.green.withOpacity(0.2),
               borderRadius: BorderRadius.circular(4),
               border: Border.all(color: Colors.green),
             ),

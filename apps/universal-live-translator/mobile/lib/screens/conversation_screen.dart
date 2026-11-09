@@ -96,8 +96,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
                       color: isA
-                          ? Colors.indigo.withValues(alpha: 0.2)
-                          : Colors.cyan.withValues(alpha: 0.2),
+                          ? Colors.indigo.withOpacity(0.2)
+                          : Colors.cyan.withOpacity(0.2),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
                         color: isA ? Colors.indigoAccent : Colors.cyanAccent,

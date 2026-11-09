@@ -32,4 +32,4 @@ screen-recorder-studio = { path = "../apps/screen-recorder-studio" }
 signal-telemetry-oscilloscope = { path = "../apps/signal-telemetry-oscilloscope" }
 audio-mastering-studio = { path = "../apps/audio-mastering-studio" }
 qr-code-studio = { path = "../apps/qr-code-studio" }
-shared-licensing = { path = "../shared/licensing" }
+shared-licensing = { path = "../shared/licensing", features = ["signing"] }

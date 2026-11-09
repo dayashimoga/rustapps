@@ -40,3 +40,4 @@ shared-licensing = { path = "../../shared/licensing" }
 
 [dev-dependencies]
 tempfile.workspace = true
+shared-licensing = { path = "../../shared/licensing", features = ["signing"] }
