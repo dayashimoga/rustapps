@@ -72,6 +72,40 @@ pub struct EqBand {
     pub q_factor: f32,
 }
 
+/// Export bit depth options for studio broadcast WAV rendering
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum BitDepth {
+    Bit16,
+    #[default]
+    Bit24,
+    Bit32Float,
+}
+
+/// Parameters configuring WAV audio export
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WavExportConfig {
+    pub bit_depth: BitDepth,
+    pub apply_dither: bool,
+    pub normalize_true_peak: bool,
+}
+
+impl Default for WavExportConfig {
+    fn default() -> Self {
+        Self {
+            bit_depth: BitDepth::Bit24,
+            apply_dither: true,
+            normalize_true_peak: true,
+        }
+    }
+}
+
+/// Response coordinate point for frequency response curve plotting
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EqCurvePoint {
+    pub frequency_hz: f32,
+    pub gain_db: f32,
+}
+
 /// Comprehensive mastering DSP chain parameters
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MasteringConfig {

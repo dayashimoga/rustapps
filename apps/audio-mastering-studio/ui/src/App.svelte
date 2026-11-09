@@ -41,6 +41,15 @@
   let isProcessing: boolean = false;
   let isCommandPaletteOpen: boolean = false;
 
+  // Phase 5.6: A/B Loudness-Matched Bypass & Broadcast WAV Export State
+  let listenMode: 'mastered' | 'matched_bypass' | 'original' = 'mastered';
+  let matchedGainDb: number = 0.0;
+  let isExportModalOpen: boolean = false;
+  let exportBitDepth: 'pcm16' | 'pcm24' | 'float32' = 'pcm24';
+  let exportApplyDither: boolean = true;
+  let exportStatusMessage: string = '';
+  let isExporting: boolean = false;
+
   $: commandActions = [
     {
       id: 'remaster-now',
@@ -61,6 +70,32 @@
             limiterCeilingDb: currentProject.mastering_config.limiter_ceiling_db,
           }}));
         }
+      },
+    },
+    {
+      id: 'toggle-ab-bypass',
+      title: 'Toggle Loudness-Matched A/B Bypass',
+      subtitle: `Currently listening to: ${listenMode.toUpperCase()} (unbiased mastering evaluation)`,
+      category: 'Mastering',
+      icon: '🎚️',
+      shortcut: 'B',
+      run: () => {
+        if (listenMode === 'mastered') {
+          setListenMode('matched_bypass');
+        } else {
+          setListenMode('mastered');
+        }
+      },
+    },
+    {
+      id: 'export-wav',
+      title: 'Export Broadcast Master WAV (TPDF Dither)',
+      subtitle: 'Export 24-bit PCM or 32-bit float with triangular probability dither',
+      category: 'Export',
+      icon: '💾',
+      shortcut: '⌘E',
+      run: () => {
+        isExportModalOpen = true;
       },
     },
     {
@@ -98,7 +133,13 @@
       shortcut: '0',
       run: () => {
         if (currentProject) {
-          currentProject.mastering_config.bands.forEach((b: any) => b.gain_db = 0.0);
+          currentProject.mastering_config.bands.forEach((b: any) => {
+            b.gain_db = 0.0;
+            invokeIpc('update_eq_band', {
+              project_id: currentProject?.project_id,
+              band: b,
+            }).catch(() => {});
+          });
         }
       },
     },
@@ -117,9 +158,14 @@
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       isCommandPaletteOpen = !isCommandPaletteOpen;
-    } else if (e.key === 'Escape' && isCommandPaletteOpen) {
-      e.preventDefault();
-      isCommandPaletteOpen = false;
+    } else if (e.key === 'Escape') {
+      if (isCommandPaletteOpen) {
+        e.preventDefault();
+        isCommandPaletteOpen = false;
+      } else if (isExportModalOpen) {
+        e.preventDefault();
+        isExportModalOpen = false;
+      }
     }
   }
 
@@ -133,6 +179,20 @@
       }
     } catch (e) {
       console.error('Failed to load initial mastering studio data:', e);
+    }
+  }
+
+  async function setListenMode(mode: 'mastered' | 'matched_bypass' | 'original') {
+    listenMode = mode;
+    if (mode === 'matched_bypass' && currentProject) {
+      try {
+        const res = await invokeIpc<{ gain_db: number; samples: number[] }>('get_loudness_matched_audio', {
+          project_id: currentProject.project_id,
+        });
+        matchedGainDb = res.gain_db;
+      } catch (e) {
+        console.error('Failed to fetch loudness matched bypass audio:', e);
+      }
     }
   }
 
@@ -158,6 +218,10 @@
 
       currentProject = proj;
       stats = await invokeIpc<StudioStats>('get_studio_stats');
+
+      if (listenMode === 'matched_bypass') {
+        await setListenMode('matched_bypass');
+      }
     } catch (err) {
       console.error('Remaster failed:', err);
     } finally {
@@ -168,6 +232,38 @@
   function handleEqChange(e: CustomEvent) {
     if (currentProject) {
       currentProject.mastering_config.bands = e.detail.bands;
+    }
+  }
+
+  async function handleBandUpdated(e: CustomEvent) {
+    if (!currentProject) return;
+    try {
+      await invokeIpc('update_eq_band', {
+        project_id: currentProject.project_id,
+        band: e.detail,
+      });
+    } catch (err) {
+      console.error('Failed to persist band update:', err);
+    }
+  }
+
+  async function executeExportWav() {
+    if (!currentProject) return;
+    isExporting = true;
+    exportStatusMessage = 'Rendering broadcast master WAV...';
+    try {
+      const outPath = `exports/${currentProject.project_id}_master_${exportBitDepth}.wav`;
+      const res = await invokeIpc<{ status: string; path: string; bytes_written: number }>('export_mastered_wav', {
+        project_id: currentProject.project_id,
+        output_path: outPath,
+        bit_depth: exportBitDepth,
+        apply_dither: exportApplyDither,
+      });
+      exportStatusMessage = `Export Successful! (${(res.bytes_written / 1024).toFixed(1)} KB written with ${exportApplyDither ? 'TPDF dither' : 'truncation'})`;
+    } catch (err: any) {
+      exportStatusMessage = `Export failed: ${err?.message || err}`;
+    } finally {
+      isExporting = false;
     }
   }
 
@@ -189,7 +285,41 @@
       </div>
     </div>
 
+    <!-- Audition & A/B Loudness-Matched Bypass Bar -->
+    <div class="audition-mode-bar">
+      <span class="audition-label">AUDITION:</span>
+      <button
+        class="audition-btn"
+        class:active={listenMode === 'original'}
+        on:click={() => setListenMode('original')}
+      >
+        Raw Mix
+      </button>
+      <button
+        class="audition-btn bypass-btn"
+        class:active={listenMode === 'matched_bypass'}
+        on:click={() => setListenMode('matched_bypass')}
+        title="Evaluates mastering quality with zero loudness bias (adds exact gain delta)"
+      >
+        A: Matched Bypass
+        {#if listenMode === 'matched_bypass'}
+          <span class="gain-badge">{matchedGainDb > 0 ? '+' : ''}{matchedGainDb.toFixed(1)} dB</span>
+        {/if}
+      </button>
+      <button
+        class="audition-btn master-btn"
+        class:active={listenMode === 'mastered'}
+        on:click={() => setListenMode('mastered')}
+      >
+        B: Mastered
+      </button>
+    </div>
+
     <div class="header-stats">
+      <button class="export-nav-btn" on:click={() => (isExportModalOpen = true)} title="Export Master WAV">
+        <span>💾</span> Export WAV
+      </button>
+
       <button class="cmd-palette-btn" on:click={() => (isCommandPaletteOpen = true)} title="Commands (⌘K)">
         <span class="cmd-icon">⌘</span>
         <span>Commands</span>
@@ -235,6 +365,7 @@
           <ParametricEqVisualizer
             bands={currentProject.mastering_config.bands}
             on:change={handleEqChange}
+            on:band_updated={handleBandUpdated}
           />
         </div>
 
@@ -277,6 +408,9 @@
       SAMPLE RATE: {currentProject ? `${currentProject.sample_rate} Hz` : '44100 Hz'}
     </span>
     <span class="status-item">
+      AUDITION: <strong class="listen-mode-tag">{listenMode.toUpperCase()}</strong>
+    </span>
+    <span class="status-item">
       INTEGRATED LOUDNESS: {currentProject ? `${currentProject.mastered_loudness.integrated_lufs.toFixed(1)} LUFS` : '-14.0 LUFS'}
     </span>
     <span class="status-item security">
@@ -284,6 +418,52 @@
     </span>
     <span class="status-item version">v{0.1}</span>
   </footer>
+
+  <!-- Export Broadcast WAV Modal -->
+  {#if isExportModalOpen}
+    <div class="modal-backdrop" on:click={() => (isExportModalOpen = false)} on:keydown={(e) => e.key === 'Escape' && (isExportModalOpen = false)} role="presentation">
+      <div class="modal-card" on:click|stopPropagation role="dialog" aria-modal="true" aria-label="Export Broadcast Master WAV">
+        <div class="modal-header">
+          <h3>EXPORT BROADCAST MASTER WAV</h3>
+          <button class="close-x" on:click={() => (isExportModalOpen = false)}>✕</button>
+        </div>
+        <div class="modal-content">
+          <p class="export-desc">
+            Render sample-accurate Broadcast WAV with triangular probability density dither (TPDF) to eliminate quantization distortion.
+          </p>
+
+          <div class="form-row">
+            <label for="bit-depth-sel">Bit Depth / Encoding:</label>
+            <select id="bit-depth-sel" bind:value={exportBitDepth}>
+              <option value="pcm24">24-bit PCM (Industry Standard Master)</option>
+              <option value="pcm16">16-bit PCM (Red Book Audio CD)</option>
+              <option value="float32">32-bit Float (High Dynamic Range / Archival)</option>
+            </select>
+          </div>
+
+          <div class="form-row checkbox-row">
+            <label class="checkbox-label">
+              <input type="checkbox" bind:checked={exportApplyDither} />
+              <span>Apply TPDF Dither (Recommended for 16-bit and 24-bit exports)</span>
+            </label>
+          </div>
+
+          {#if exportStatusMessage}
+            <div class="status-alert" class:success={exportStatusMessage.includes('Successful')}>
+              {exportStatusMessage}
+            </div>
+          {/if}
+
+          <div class="modal-actions">
+            <button class="cancel-btn" on:click={() => (isExportModalOpen = false)}>Close</button>
+            <button class="confirm-export-btn" disabled={isExporting} on:click={executeExportWav}>
+              {isExporting ? 'Exporting...' : 'Render Master WAV'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <!-- Command Palette -->
   <CommandPalette
@@ -342,12 +522,94 @@
     color: #8b949e;
   }
 
+  .audition-mode-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #0a0d14;
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid #232d3d;
+  }
+
+  .audition-label {
+    font-size: 9px;
+    font-weight: 700;
+    color: #64748b;
+    font-family: var(--font-mono);
+    margin-right: 2px;
+  }
+
+  .audition-btn {
+    background: #161f2e;
+    border: 1px solid #2e3e56;
+    color: #94a3b8;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .audition-btn:hover {
+    color: #f1f5f9;
+    border-color: #475569;
+  }
+
+  .audition-btn.active {
+    background: #2563eb;
+    color: #ffffff;
+    border-color: #3b82f6;
+    font-weight: 700;
+  }
+
+  .audition-btn.bypass-btn.active {
+    background: #d97706;
+    border-color: #f59e0b;
+  }
+
+  .audition-btn.master-btn.active {
+    background: #10b981;
+    border-color: #34d399;
+  }
+
+  .gain-badge {
+    background: rgba(0, 0, 0, 0.4);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 9px;
+  }
+
   .header-stats {
     display: flex;
     align-items: center;
     gap: 10px;
     font-family: var(--font-mono);
     font-size: 11px;
+  }
+
+  .export-nav-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #1e293b;
+    border: 1px solid #3b82f6;
+    color: #93c5fd;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .export-nav-btn:hover {
+    background: #2563eb;
+    color: #ffffff;
   }
 
   .cmd-palette-btn {
@@ -428,6 +690,7 @@
     font-size: 11px;
     font-weight: 700;
     font-family: var(--font-mono);
+    cursor: pointer;
   }
 
   .license-btn:hover {
@@ -494,6 +757,10 @@
     color: #8b949e;
   }
 
+  .listen-mode-tag {
+    color: #38bdf8;
+  }
+
   .status-item.security {
     margin-left: auto;
     color: #34d399;
@@ -503,5 +770,148 @@
   .status-item.version {
     color: var(--accent-gold);
   }
-</style>
 
+  /* Modal Styles */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  .modal-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    width: 440px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+  }
+
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid #30363d;
+    font-family: var(--font-mono);
+  }
+
+  .modal-header h3 {
+    margin: 0;
+    font-size: 12px;
+    color: var(--accent-gold);
+  }
+
+  .close-x {
+    background: none;
+    border: none;
+    color: #8b949e;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .modal-content {
+    padding: 16px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .export-desc {
+    color: #94a3b8;
+    line-height: 1.4;
+  }
+
+  .form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .form-row label {
+    color: #cbd5e1;
+    font-weight: 600;
+  }
+
+  .form-row select {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    color: #f0f6fc;
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 11px;
+  }
+
+  .checkbox-row {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    color: #cbd5e1;
+  }
+
+  .status-alert {
+    padding: 6px 10px;
+    background: #1e293b;
+    border: 1px solid #3b82f6;
+    border-radius: 4px;
+    color: #93c5fd;
+    font-size: 10px;
+  }
+
+  .status-alert.success {
+    background: #064e3b;
+    border-color: #059669;
+    color: #a7f3d0;
+  }
+
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .cancel-btn {
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #c9d1d9;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+  }
+
+  .confirm-export-btn {
+    background: #2563eb;
+    border: 1px solid #3b82f6;
+    color: #ffffff;
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+  }
+
+  .confirm-export-btn:hover:not(:disabled) {
+    background: #1d4ed8;
+  }
+
+  .confirm-export-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+</style>

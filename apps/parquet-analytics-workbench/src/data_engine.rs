@@ -769,7 +769,8 @@ impl DataEngine {
                 use std::io::Write;
                 while let Some(row) = rows_iter.next()? {
                     let mut obj = serde_json::Map::with_capacity(col_count);
-                    for (i, col_name) in columns.iter().enumerate().take(col_count) {
+                    for i in 0..col_count {
+                        let col_name = &columns[i];
                         let val: rusqlite::types::Value = row.get(i)?;
                         let json_val = match val {
                             rusqlite::types::Value::Null => serde_json::Value::Null,
@@ -780,8 +781,9 @@ impl DataEngine {
                         };
                         obj.insert(col_name.clone(), json_val);
                     }
-                    serde_json::to_writer(&mut out_file, &obj)
-                        .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    serde_json::to_writer(&mut out_file, &obj).map_err(|e| {
+                        std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                    })?;
                     out_file.write_all(b"\n")?;
                     exported_rows += 1;
                 }
@@ -834,10 +836,11 @@ impl DataEngine {
         let reader = BufReader::new(file);
         use std::io::BufRead;
 
+        let mut lines = reader.lines();
         let mut sample_objects: Vec<serde_json::Map<String, serde_json::Value>> = Vec::new();
         let mut total_lines = 0usize;
 
-        for line_res in reader.lines() {
+        while let Some(line_res) = lines.next() {
             let line = line_res?;
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -1129,9 +1132,7 @@ mod tests {
         std::fs::write(&events_path, events_csv).unwrap();
 
         let engine = DataEngine::open_in_memory().unwrap();
-        let schema_users = engine
-            .ingest_json_lines("users", "Users", &users_path)
-            .unwrap();
+        let schema_users = engine.ingest_json_lines("users", "Users", &users_path).unwrap();
         assert_eq!(schema_users.total_rows, 3);
 
         let schema_events = engine

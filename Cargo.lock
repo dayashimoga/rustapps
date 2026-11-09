@@ -1946,6 +1946,7 @@ name = "screen-recorder-studio"
 version = "0.1.0"
 dependencies = [
  "platform-common",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

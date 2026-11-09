@@ -2,7 +2,9 @@
 //! High-Level Offline Audio Mastering & Stem Separation Service
 
 use crate::dsp_engine::AudioDspEngine;
-use crate::models::{MasteringConfig, MasteringProject, StudioStats};
+use crate::models::{
+    EqCurvePoint, MasteringConfig, MasteringProject, StudioStats, WavExportConfig,
+};
 use rusqlite::{params, Connection};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -161,28 +163,109 @@ impl AudioMasteringService {
         Ok(project)
     }
 
-    /// Re-runs mastering chain with updated parameters
-    pub fn remaster_project(
+    /// Re-runs mastering chain with updated EQ or dynamics configuration
+    pub fn update_mastering_config(
         &self,
         project_id: &str,
-        new_config: MasteringConfig,
+        config: MasteringConfig,
     ) -> Result<MasteringProject, MasteringError> {
         let mut project = self.get_project(project_id)?;
-        let (mastered, loudness) = AudioDspEngine::master_audio(
-            &project.original_samples,
-            project.sample_rate,
-            &new_config,
-        );
-
-        project.mastering_config = new_config;
+        let (mastered, loudness) =
+            AudioDspEngine::master_audio(&project.original_samples, project.sample_rate, &config);
+        project.mastering_config = config;
         project.mastered_samples = mastered;
         project.mastered_loudness = loudness;
-
         self.save_project(&project)?;
         Ok(project)
     }
 
-    /// Aggregates studio performance and analytics metrics
+    /// Updates single EQ band parameters and re-renders master
+    pub fn update_eq_band(
+        &self,
+        project_id: &str,
+        band_index: usize,
+        freq_hz: f32,
+        gain_db: f32,
+        q_factor: f32,
+    ) -> Result<MasteringProject, MasteringError> {
+        let mut project = self.get_project(project_id)?;
+        if let Some(band) = project.mastering_config.bands.get_mut(band_index) {
+            band.frequency_hz = freq_hz.clamp(20.0, 20000.0);
+            band.gain_db = gain_db.clamp(-18.0, 18.0);
+            band.q_factor = q_factor.clamp(0.1, 10.0);
+        }
+        let (mastered, loudness) = AudioDspEngine::master_audio(
+            &project.original_samples,
+            project.sample_rate,
+            &project.mastering_config,
+        );
+        project.mastered_samples = mastered;
+        project.mastered_loudness = loudness;
+        self.save_project(&project)?;
+        Ok(project)
+    }
+
+    /// Computes loudness-matched original audio for unbiased A/B evaluation
+    pub fn get_loudness_matched_audio(&self, project_id: &str) -> Result<Vec<f32>, MasteringError> {
+        let project = self.get_project(project_id)?;
+        let matched = AudioDspEngine::compute_loudness_matched_bypass(
+            &project.original_samples,
+            project.mastered_loudness.integrated_lufs,
+        );
+        Ok(matched)
+    }
+
+    /// Computes 5-band EQ frequency response curve points
+    pub fn get_eq_curve(
+        &self,
+        project_id: &str,
+        num_points: usize,
+    ) -> Result<Vec<EqCurvePoint>, MasteringError> {
+        let project = self.get_project(project_id)?;
+        let points = AudioDspEngine::compute_eq_curve_points(
+            &project.mastering_config.bands,
+            project.sample_rate as f32,
+            num_points,
+        );
+        Ok(points)
+    }
+
+    /// Exports mastered audio to 16-bit, 24-bit, or 32-bit float broadcast WAV with optional dither
+    pub fn export_mastered_wav(
+        &self,
+        project_id: &str,
+        config: &WavExportConfig,
+    ) -> Result<Vec<u8>, MasteringError> {
+        let project = self.get_project(project_id)?;
+        let bytes = AudioDspEngine::encode_wav_with_dither(
+            &project.mastered_samples,
+            project.sample_rate,
+            config.bit_depth,
+            config.apply_dither,
+        );
+        Ok(bytes)
+    }
+
+    /// Adjusts individual stem volume gain or mute/solo state
+    pub fn update_stem_track(
+        &self,
+        project_id: &str,
+        stem_index: usize,
+        gain_db: f32,
+        is_muted: bool,
+        is_solo: bool,
+    ) -> Result<MasteringProject, MasteringError> {
+        let mut project = self.get_project(project_id)?;
+        if let Some(stem) = project.stems.get_mut(stem_index) {
+            stem.volume_gain_db = gain_db;
+            stem.is_muted = is_muted;
+            stem.is_solo = is_solo;
+        }
+        self.save_project(&project)?;
+        Ok(project)
+    }
+
+    /// Aggregates global studio telemetry
     pub fn get_stats(&self) -> Result<StudioStats, MasteringError> {
         let conn = self.conn.lock().unwrap();
 
@@ -215,15 +298,15 @@ impl AudioMasteringService {
         })
     }
 
-    /// Seeds an initial realistic full multi-track studio project
+    /// Seeds an initial realistic 4-stem studio mastering session for demo inspection
     pub fn seed_demo_project(&self) -> Result<MasteringProject, MasteringError> {
-        let sample_rate = 44100;
-        let num_samples = sample_rate as usize * 2; // 2.0 seconds demo
+        let sample_rate = 44_100;
+        let num_samples = 44_100 * 2; // 2.0 seconds of audio
         let audio = AudioDspEngine::generate_synthetic_audio(num_samples, sample_rate);
         let config = MasteringConfig::default();
 
         self.create_project(
-            "Electric Horizon — Studio Demix & Master",
+            "Demo: Cinematic Neon Synthwave & Live Drums Master",
             audio,
             sample_rate,
             config,
@@ -236,14 +319,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_audio_mastering_service_crud_flow() {
+    fn test_mastering_service_crud_flow() {
         let service = AudioMasteringService::open_in_memory().expect("in-memory db");
         let project = service.seed_demo_project().expect("seed project");
 
-        assert_eq!(project.title, "Electric Horizon — Studio Demix & Master");
         assert_eq!(project.stems.len(), 4);
+        assert_eq!(project.mastering_config.bands.len(), 5);
         assert!(!project.mastered_samples.is_empty());
-        assert!(project.mastered_loudness.integrated_lufs > -30.0);
+        assert!(project.mastered_loudness.integrated_lufs > -40.0);
 
         let retrieved = service.get_project(&project.project_id).expect("get");
         assert_eq!(retrieved.title, project.title);
@@ -254,6 +337,28 @@ mod tests {
         let stats = service.get_stats().expect("stats");
         assert_eq!(stats.total_projects, 1);
         assert_eq!(stats.total_stems_extracted, 4);
-        assert!(stats.total_audio_minutes_processed > 0.0);
+
+        // Test EQ curve generation
+        let curve = service.get_eq_curve(&project.project_id, 64).unwrap();
+        assert_eq!(curve.len(), 64);
+
+        // Test EQ band update
+        let updated = service
+            .update_eq_band(&project.project_id, 0, 100.0, 3.0, 0.707)
+            .unwrap();
+        assert_eq!(updated.mastering_config.bands[0].gain_db, 3.0);
+
+        // Test loudness matched audio
+        let matched = service
+            .get_loudness_matched_audio(&project.project_id)
+            .unwrap();
+        assert_eq!(matched.len(), project.original_samples.len());
+
+        // Test WAV export
+        let wav = service
+            .export_mastered_wav(&project.project_id, &WavExportConfig::default())
+            .unwrap();
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
     }
 }

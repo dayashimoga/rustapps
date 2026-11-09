@@ -48,6 +48,40 @@ impl DesktopIpcHandler for MasteringDesktopHandler {
                 }),
             },
             SelfTestCheck {
+                command: "update_eq_band",
+                payload: json!({
+                    "project_id": "proj-demo",
+                    "band_index": 1,
+                    "frequency_hz": 320.0,
+                    "gain_db": 1.5,
+                    "q_factor": 1.0
+                }),
+            },
+            SelfTestCheck {
+                command: "get_eq_curve",
+                payload: json!({
+                    "project_id": "proj-demo",
+                    "num_points": 32
+                }),
+            },
+            SelfTestCheck {
+                command: "get_loudness_matched_audio",
+                payload: json!({
+                    "project_id": "proj-demo"
+                }),
+            },
+            SelfTestCheck {
+                command: "export_mastered_wav",
+                payload: json!({
+                    "project_id": "proj-demo",
+                    "config": {
+                        "bit_depth": "Bit24",
+                        "apply_dither": true,
+                        "normalize_true_peak": true
+                    }
+                }),
+            },
+            SelfTestCheck {
                 command: "get_license_status",
                 payload: json!({}),
             },

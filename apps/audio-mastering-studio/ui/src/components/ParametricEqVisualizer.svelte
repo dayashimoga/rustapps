@@ -16,6 +16,8 @@
 
   let canvas: HTMLCanvasElement;
   let selectedBand: number = 2; // Default to mid band
+  let isDragging: boolean = false;
+  let draggedBandIndex: number = -1;
 
   function drawEqCurve() {
     if (!canvas) return;
@@ -68,7 +70,7 @@
     ctx.lineWidth = 2.0;
     ctx.beginPath();
 
-    const points = 200;
+    const points = 240;
     for (let i = 0; i <= points; i++) {
       const x = (i / points) * width;
       const f = xToFreq(x, width);
@@ -105,16 +107,16 @@
       const y = centerY - (b.gain_db / 12) * (centerY - 10);
 
       ctx.beginPath();
-      ctx.arc(x, y, i === selectedBand ? 7 : 5, 0, 2 * Math.PI);
+      ctx.arc(x, y, i === selectedBand ? 8 : 5, 0, 2 * Math.PI);
       ctx.fillStyle = i === selectedBand ? '#ffffff' : '#e5a93c';
       ctx.fill();
-      ctx.strokeStyle = '#0e1117';
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = i === selectedBand ? '#f59e0b' : '#0e1117';
+      ctx.lineWidth = i === selectedBand ? 2.5 : 1.5;
       ctx.stroke();
 
       ctx.fillStyle = '#ffffff';
-      ctx.font = '9px monospace';
-      ctx.fillText(`${i + 1}`, x - 2, y + 3);
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText(`${i + 1}`, x - 3, y + 3);
     }
   }
 
@@ -127,17 +129,87 @@
   function xToFreq(x: number, width: number): number {
     const minF = 20;
     const maxF = 20000;
-    const fraction = x / width;
+    const fraction = Math.max(0, Math.min(1, x / width));
     return minF * Math.pow(maxF / minF, fraction);
+  }
+
+  function yToGain(y: number, height: number): number {
+    const centerY = height / 2;
+    const scale = centerY - 10;
+    const gain = -((y - centerY) / scale) * 12;
+    return Math.max(-12, Math.min(12, gain));
   }
 
   function handleSelectBand(index: number) {
     selectedBand = index;
+    drawEqCurve();
   }
 
   function handleParamChange() {
     dispatch('change', { bands });
+    if (bands[selectedBand]) {
+      dispatch('band_updated', bands[selectedBand]);
+    }
     drawEqCurve();
+  }
+
+  function getCanvasPos(e: MouseEvent) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY,
+    };
+  }
+
+  function handleMouseDown(e: MouseEvent) {
+    if (!canvas || !bands || bands.length === 0) return;
+    const { x, y } = getCanvasPos(e);
+    const width = canvas.width;
+    const height = canvas.height;
+    const centerY = height / 2;
+
+    let closestIdx = -1;
+    let minDistance = 20; // 20px hit radius
+
+    bands.forEach((b, idx) => {
+      const bx = freqToX(b.frequency_hz, width);
+      const by = centerY - (b.gain_db / 12) * (centerY - 10);
+      const dist = Math.hypot(x - bx, y - by);
+      if (dist < minDistance) {
+        minDistance = dist;
+        closestIdx = idx;
+      }
+    });
+
+    if (closestIdx !== -1) {
+      isDragging = true;
+      draggedBandIndex = closestIdx;
+      selectedBand = closestIdx;
+      drawEqCurve();
+    }
+  }
+
+  function handleMouseMove(e: MouseEvent) {
+    if (!isDragging || draggedBandIndex === -1 || !bands[draggedBandIndex]) return;
+    const { x, y } = getCanvasPos(e);
+    const newFreq = Math.round(xToFreq(x, canvas.width));
+    const newGain = parseFloat(yToGain(y, canvas.height).toFixed(1));
+
+    bands[draggedBandIndex].frequency_hz = Math.max(20, Math.min(20000, newFreq));
+    bands[draggedBandIndex].gain_db = newGain;
+
+    drawEqCurve();
+    dispatch('change', { bands });
+  }
+
+  function handleMouseUp() {
+    if (isDragging && draggedBandIndex !== -1 && bands[draggedBandIndex]) {
+      dispatch('band_updated', bands[draggedBandIndex]);
+    }
+    isDragging = false;
+    draggedBandIndex = -1;
   }
 
   onMount(() => {
@@ -151,7 +223,7 @@
 
 <div class="eq-visualizer-container">
   <div class="eq-header">
-    <span class="title">5-BAND PARAMETRIC EQUALIZER</span>
+    <span class="title">5-BAND PARAMETRIC EQUALIZER (DRAGGABLE BIQUAD FILTER)</span>
     <div class="band-pills">
       {#each bands as b, idx}
         <button
@@ -159,14 +231,22 @@
           class:active={idx === selectedBand}
           on:click={() => handleSelectBand(idx)}
         >
-          {idx + 1}: {b.frequency_hz >= 1000 ? `${(b.frequency_hz / 1000).toFixed(1)}k` : `${b.frequency_hz.toFixed(0)}Hz`}
+          {idx + 1}: {b.frequency_hz >= 1000 ? `${(b.frequency_hz / 1000).toFixed(1)}k` : `${b.frequency_hz.toFixed(0)}Hz`} ({b.gain_db > 0 ? '+' : ''}{b.gain_db.toFixed(1)}dB)
         </button>
       {/each}
     </div>
   </div>
 
   <div class="canvas-wrap">
-    <canvas bind:this={canvas} width={700} height={180}></canvas>
+    <canvas
+      bind:this={canvas}
+      width={700}
+      height={180}
+      on:mousedown={handleMouseDown}
+      on:mousemove={handleMouseMove}
+      on:mouseup={handleMouseUp}
+      on:mouseleave={handleMouseUp}
+    ></canvas>
   </div>
 
   {#if bands[selectedBand]}
@@ -255,17 +335,26 @@
     border-radius: 3px;
     font-size: 9px;
     font-family: var(--font-mono);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .band-pill:hover {
+    border-color: var(--accent-gold);
+    color: #f8fafc;
   }
 
   .band-pill.active {
     background: var(--accent-gold);
     color: #0e1117;
     font-weight: 700;
+    border-color: var(--accent-gold);
   }
 
   .canvas-wrap {
     padding: 6px;
     background: #0a0d14;
+    cursor: crosshair;
   }
 
   canvas {
@@ -300,6 +389,7 @@
   input[type="range"] {
     flex: 1;
     accent-color: var(--accent-gold);
+    cursor: pointer;
   }
 
   span {
@@ -309,4 +399,3 @@
     font-weight: 600;
   }
 </style>
-

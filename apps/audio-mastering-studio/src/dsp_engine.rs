@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 //! Advanced Audio DSP, AI Spectral Stem Separation & EBU R128 Mastering Engine
 
-use crate::models::{EqBand, LoudnessMetrics, MasteringConfig, StemTrack, StemType};
+use crate::models::{
+    BitDepth, EqBand, EqCurvePoint, LoudnessMetrics, MasteringConfig, StemTrack, StemType,
+};
 use std::f32::consts::PI;
 
 /// Core DSP Engine for 4-Stem Separation, 5-Band Biquad EQ, Dynamics Compression & Loudness Mastering
@@ -123,6 +125,205 @@ impl AudioDspEngine {
 
         let final_loudness = Self::measure_ebu_r128_loudness(&mastered);
         (mastered, final_loudness)
+    }
+
+    /// Computes loudness-matched original audio for unbiased A/B bypass comparison
+    pub fn compute_loudness_matched_bypass(
+        original: &[f32],
+        target_integrated_lufs: f32,
+    ) -> Vec<f32> {
+        if original.is_empty() {
+            return Vec::new();
+        }
+
+        let orig_loudness = Self::measure_ebu_r128_loudness(original);
+        let delta_db = target_integrated_lufs - orig_loudness.integrated_lufs;
+        let gain = 10.0f32.powf(delta_db / 20.0);
+
+        original.iter().map(|&s| s * gain).collect()
+    }
+
+    /// Computes closed-form frequency response curve points (20 Hz - 20 kHz) across 5 EQ bands
+    pub fn compute_eq_curve_points(
+        bands: &[EqBand],
+        sample_rate: f32,
+        num_points: usize,
+    ) -> Vec<EqCurvePoint> {
+        let n = num_points.clamp(32, 512);
+        let mut points = Vec::with_capacity(n);
+
+        let min_f = 20.0f32;
+        let max_f = 20000.0f32.min(sample_rate * 0.48);
+        let ratio = max_f / min_f;
+
+        for i in 0..n {
+            let frac = (i as f32) / ((n - 1) as f32);
+            let freq = min_f * ratio.powf(frac);
+            let omega = 2.0 * PI * freq / sample_rate;
+
+            let mut total_gain_db = 0.0f32;
+
+            for band in bands {
+                if band.gain_db.abs() < 0.01 {
+                    continue;
+                }
+
+                let gain_at_f = Self::evaluate_biquad_gain_db(band, omega);
+                total_gain_db += gain_at_f;
+            }
+
+            points.push(EqCurvePoint {
+                frequency_hz: freq,
+                gain_db: total_gain_db,
+            });
+        }
+
+        points
+    }
+
+    /// Calculates biquad magnitude response |H(e^jω)| in dB for a given band
+    fn evaluate_biquad_gain_db(band: &EqBand, omega: f32) -> f32 {
+        let a = 10.0f32.powf(band.gain_db / 40.0);
+        let q = band.q_factor.max(0.1);
+        let sn = omega.sin();
+        let cs = omega.cos();
+        let alpha = sn / (2.0 * q);
+
+        let (b0, b1, b2, a0, a1, a2) = match band.filter_type.as_str() {
+            "LowShelf" => {
+                let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
+                let b0 = a * ((a + 1.0) - (a - 1.0) * cs + two_sqrt_a_alpha);
+                let b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cs);
+                let b2 = a * ((a + 1.0) - (a - 1.0) * cs - two_sqrt_a_alpha);
+                let a0 = (a + 1.0) + (a - 1.0) * cs + two_sqrt_a_alpha;
+                let a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cs);
+                let a2 = (a + 1.0) + (a - 1.0) * cs - two_sqrt_a_alpha;
+                (b0, b1, b2, a0, a1, a2)
+            }
+            "HighShelf" => {
+                let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
+                let b0 = a * ((a + 1.0) + (a - 1.0) * cs + two_sqrt_a_alpha);
+                let b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cs);
+                let b2 = a * ((a + 1.0) + (a - 1.0) * cs - two_sqrt_a_alpha);
+                let a0 = (a + 1.0) - (a - 1.0) * cs + two_sqrt_a_alpha;
+                let a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cs);
+                let a2 = (a + 1.0) - (a - 1.0) * cs - two_sqrt_a_alpha;
+                (b0, b1, b2, a0, a1, a2)
+            }
+            _ => {
+                let b0 = 1.0 + alpha * a;
+                let b1 = -2.0 * cs;
+                let b2 = 1.0 - alpha * a;
+                let a0 = 1.0 + alpha / a;
+                let a1 = -2.0 * cs;
+                let a2 = 1.0 - alpha / a;
+                (b0, b1, b2, a0, a1, a2)
+            }
+        };
+
+        // |H(e^jω)|^2 = (Re_num^2 + Im_num^2) / (Re_den^2 + Im_den^2)
+        let cos1 = omega.cos();
+        let sin1 = omega.sin();
+        let cos2 = (2.0 * omega).cos();
+        let sin2 = (2.0 * omega).sin();
+
+        let num_re = b0 + b1 * cos1 + b2 * cos2;
+        let num_im = -(b1 * sin1 + b2 * sin2);
+
+        let den_re = a0 + a1 * cos1 + a2 * cos2;
+        let den_im = -(a1 * sin1 + a2 * sin2);
+
+        let num_mag_sq = num_re * num_re + num_im * num_im;
+        let den_mag_sq = den_re * den_re + den_im * den_im;
+
+        let mag_sq = if den_mag_sq > 1e-12 {
+            num_mag_sq / den_mag_sq
+        } else {
+            1.0
+        };
+
+        10.0 * (mag_sq + 1e-12).log10()
+    }
+
+    /// Encodes float samples into broadcast WAV bytes (16-bit, 24-bit, or 32-bit float) with optional TPDF dither
+    pub fn encode_wav_with_dither(
+        samples: &[f32],
+        sample_rate: u32,
+        bit_depth: BitDepth,
+        apply_dither: bool,
+    ) -> Vec<u8> {
+        let num_channels = 1u16;
+        let (audio_format, bits_per_sample) = match bit_depth {
+            BitDepth::Bit16 => (1u16, 16u16),
+            BitDepth::Bit24 => (1u16, 24u16),
+            BitDepth::Bit32Float => (3u16, 32u16),
+        };
+
+        let bytes_per_sample = (bits_per_sample / 8) as usize;
+        let block_align = num_channels * (bits_per_sample / 8);
+        let byte_rate = sample_rate * block_align as u32;
+        let data_size = (samples.len() * bytes_per_sample) as u32;
+        let riff_size = 36 + data_size;
+
+        let mut wav = Vec::with_capacity(44 + data_size as usize);
+
+        // RIFF header
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&riff_size.to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+
+        // fmt subchunk
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&audio_format.to_le_bytes());
+        wav.extend_from_slice(&num_channels.to_le_bytes());
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        wav.extend_from_slice(&byte_rate.to_le_bytes());
+        wav.extend_from_slice(&block_align.to_le_bytes());
+        wav.extend_from_slice(&bits_per_sample.to_le_bytes());
+
+        // data subchunk
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_size.to_le_bytes());
+
+        // Encode samples
+        for (i, &s) in samples.iter().enumerate() {
+            let clamped = s.clamp(-1.0, 1.0);
+
+            // Pseudo-random TPDF (Triangular Probability Density Function) dither generator
+            let dither = if apply_dither {
+                let r1 = ((i * 1664525 + 1013904223) % 1000) as f32 / 1000.0 - 0.5;
+                let r2 = (((i + 1) * 22695477 + 1) % 1000) as f32 / 1000.0 - 0.5;
+                r1 + r2
+            } else {
+                0.0
+            };
+
+            match bit_depth {
+                BitDepth::Bit16 => {
+                    let scale = 32767.0f32;
+                    let val = (clamped * scale + dither).round().clamp(-32768.0, 32767.0) as i16;
+                    wav.extend_from_slice(&val.to_le_bytes());
+                }
+                BitDepth::Bit24 => {
+                    let scale = 8388607.0f32;
+                    let val = (clamped * scale + dither)
+                        .round()
+                        .clamp(-8388608.0, 8388607.0) as i32;
+                    let b0 = (val & 0xFF) as u8;
+                    let b1 = ((val >> 8) & 0xFF) as u8;
+                    let b2 = ((val >> 16) & 0xFF) as u8;
+                    wav.push(b0);
+                    wav.push(b1);
+                    wav.push(b2);
+                }
+                BitDepth::Bit32Float => {
+                    wav.extend_from_slice(&clamped.to_le_bytes());
+                }
+            }
+        }
+
+        wav
     }
 
     /// Measures EBU R128 Loudness (Integrated LUFS, Short-Term, Momentary, True-Peak)
@@ -498,5 +699,50 @@ mod tests {
         assert_eq!(mastered.len(), audio.len());
         assert!(loudness.integrated_lufs > -40.0);
         assert!(loudness.true_peak_dbfs <= config.limiter_ceiling_db + 0.1);
+    }
+
+    #[test]
+    fn test_loudness_matched_bypass() {
+        let audio = AudioDspEngine::generate_synthetic_audio(4410, 44100);
+        let orig_loudness = AudioDspEngine::measure_ebu_r128_loudness(&audio);
+        let target_lufs = -14.0;
+
+        let matched = AudioDspEngine::compute_loudness_matched_bypass(&audio, target_lufs);
+        let matched_loudness = AudioDspEngine::measure_ebu_r128_loudness(&matched);
+
+        assert!((matched_loudness.integrated_lufs - target_lufs).abs() < 0.2);
+        assert_ne!(
+            matched_loudness.integrated_lufs,
+            orig_loudness.integrated_lufs
+        );
+    }
+
+    #[test]
+    fn test_eq_curve_computation() {
+        let config = MasteringConfig::default();
+        let points = AudioDspEngine::compute_eq_curve_points(&config.bands, 44100.0, 64);
+        assert_eq!(points.len(), 64);
+        assert!(points[0].frequency_hz >= 20.0);
+        assert!(points[63].frequency_hz <= 20000.0);
+    }
+
+    #[test]
+    fn test_wav_encoding_with_dither() {
+        let audio = AudioDspEngine::generate_synthetic_audio(100, 44100);
+
+        // 16-bit WAV
+        let wav16 = AudioDspEngine::encode_wav_with_dither(&audio, 44100, BitDepth::Bit16, true);
+        assert_eq!(&wav16[0..4], b"RIFF");
+        assert_eq!(&wav16[8..12], b"WAVE");
+        assert_eq!(wav16.len(), 44 + 100 * 2);
+
+        // 24-bit WAV
+        let wav24 = AudioDspEngine::encode_wav_with_dither(&audio, 44100, BitDepth::Bit24, true);
+        assert_eq!(wav24.len(), 44 + 100 * 3);
+
+        // 32-bit float WAV
+        let wav32 =
+            AudioDspEngine::encode_wav_with_dither(&audio, 44100, BitDepth::Bit32Float, false);
+        assert_eq!(wav32.len(), 44 + 100 * 4);
     }
 }
