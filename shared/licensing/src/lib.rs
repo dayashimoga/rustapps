@@ -48,6 +48,7 @@ pub enum AppId {
     AudioMasteringStudio,
     QrCodeStudio,
     CleanRoomRedactor,
+    LocalDataSynthesizer,
     AllAppsSuite,
 }
 
@@ -74,6 +75,7 @@ impl AppId {
             AppId::AudioMasteringStudio => "audio-mastering-studio",
             AppId::QrCodeStudio => "qr-code-studio",
             AppId::CleanRoomRedactor => "clean-room-redactor",
+            AppId::LocalDataSynthesizer => "local-data-synthesizer",
             AppId::AllAppsSuite => "all-apps-suite",
         }
     }
@@ -115,6 +117,9 @@ impl AppId {
             "qr-code-studio" | "qrcodestudio" | "qr" => Some(AppId::QrCodeStudio),
             "clean-room-redactor" | "cleanroomredactor" | "redactor" => {
                 Some(AppId::CleanRoomRedactor)
+            }
+            "local-data-synthesizer" | "localdatasynthesizer" | "synthesizer" | "synth" => {
+                Some(AppId::LocalDataSynthesizer)
             }
             "all" | "all-apps" | "suite" | "all-apps-suite" | "allappssuite" => {
                 Some(AppId::AllAppsSuite)
