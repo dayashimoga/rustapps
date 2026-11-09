@@ -81,6 +81,15 @@ impl DesktopIpcHandler for QrStudioDesktopHandler {
                     ]
                 }),
             },
+            SelfTestCheck {
+                command: "export_label_sheet",
+                payload: json!({
+                    "items": [
+                        { "payload": "https://label.internal/1", "label": "Label 1" }
+                    ],
+                    "format": "pdf"
+                }),
+            },
         ]
     }
 }

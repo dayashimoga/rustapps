@@ -83,7 +83,13 @@ impl QrStudioService {
             ));
         }
 
-        let style = style_opt.unwrap_or_default();
+        let mut style = style_opt.unwrap_or_default();
+        if let Some(ref text) = style.center_logo_text {
+            if !text.trim().is_empty() {
+                // Automatically enforce High (~30% error recovery) for center logo occlusion
+                style.ecc_level = QrEccLevel::High;
+            }
+        }
         let payload_type = QrPayloadType::detect_from_raw(raw_text);
 
         // Optional encryption or signing transformation
@@ -488,6 +494,38 @@ impl QrStudioService {
         );
 
         Ok(())
+    }
+
+    /// Exports a printable label sheet as PDF or HTML
+    pub fn export_label_sheet(
+        &self,
+        items: &[BatchQrItem],
+        style_opt: Option<&QrStyleConfig>,
+        config_opt: Option<&crate::label_sheet::LabelSheetConfig>,
+        format: &str,
+    ) -> Result<(Vec<u8>, &'static str), QrStudioError> {
+        let default_style = QrStyleConfig {
+            ecc_level: QrEccLevel::High,
+            ..Default::default()
+        };
+        let style = style_opt.unwrap_or(&default_style);
+        let default_cfg = crate::label_sheet::LabelSheetConfig::default();
+        let config = config_opt.unwrap_or(&default_cfg);
+
+        match format.to_ascii_lowercase().as_str() {
+            "html" => {
+                let html_str =
+                    crate::label_sheet::LabelSheetGenerator::generate_html(items, style, config)
+                        .map_err(QrStudioError::EncodingError)?;
+                Ok((html_str.into_bytes(), "text/html"))
+            }
+            _ => {
+                let pdf_bytes =
+                    crate::label_sheet::LabelSheetGenerator::generate_pdf(items, style, config)
+                        .map_err(QrStudioError::EncodingError)?;
+                Ok((pdf_bytes, "application/pdf"))
+            }
+        }
     }
 }
 

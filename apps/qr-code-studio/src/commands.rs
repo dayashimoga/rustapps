@@ -141,6 +141,38 @@ pub fn dispatch_ipc_command(command: &str, payload: Value) -> Result<Value, Stri
             Ok(json!({ "id": id, "deleted": deleted }))
         }
 
+        "export_label_sheet" => {
+            let items: Vec<BatchQrItem> = if let Some(items_val) = payload.get("items") {
+                serde_json::from_value(items_val.clone()).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+
+            let style: Option<QrStyleConfig> = payload
+                .get("style")
+                .and_then(|s| serde_json::from_value(s.clone()).ok());
+            let config: Option<crate::label_sheet::LabelSheetConfig> = payload
+                .get("sheet_config")
+                .and_then(|c| serde_json::from_value(c.clone()).ok());
+            let format = payload["format"].as_str().unwrap_or("pdf");
+
+            let (bytes, content_type) = service
+                .export_label_sheet(&items, style.as_ref(), config.as_ref(), format)
+                .map_err(|e| e.to_string())?;
+
+            let b64 = format!(
+                "data:{};base64,{}",
+                content_type,
+                simple_base64_encode(&bytes)
+            );
+            Ok(json!({
+                "data_base64": b64,
+                "content_type": content_type,
+                "total_labels": items.len(),
+                "size_bytes": bytes.len(),
+            }))
+        }
+
         "get_license_status" => {
             let report: LicenseStatusReport = licensing.status_report();
             Ok(json!(report))
@@ -187,6 +219,39 @@ fn simple_base64_decode(input: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+fn simple_base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = if chunk.len() > 1 {
+            chunk[1] as usize
+        } else {
+            0
+        };
+        let b2 = if chunk.len() > 2 {
+            chunk[2] as usize
+        } else {
+            0
+        };
+
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[(n >> 18) & 63] as char);
+        out.push(TABLE[(n >> 12) & 63] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(n >> 6) & 63] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[n & 63] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,5 +284,36 @@ mod tests {
         )
         .expect("Analyze security");
         assert_eq!(sec_val["risk_level"], "Critical");
+
+        // Test export_label_sheet IPC command (PDF format)
+        let sheet_val = dispatch_ipc_command(
+            "export_label_sheet",
+            json!({
+                "items": [
+                    { "payload": "https://label1.local", "label": "Device 1" },
+                    { "payload": "https://label2.local", "label": "Device 2" }
+                ],
+                "format": "pdf"
+            }),
+        )
+        .expect("Export PDF label sheet");
+        assert_eq!(sheet_val["content_type"], "application/pdf");
+        assert!(sheet_val["data_base64"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:application/pdf;base64,"));
+
+        // Test export_label_sheet IPC command (HTML format)
+        let html_sheet_val = dispatch_ipc_command(
+            "export_label_sheet",
+            json!({
+                "items": [
+                    { "payload": "https://label1.local", "label": "Device 1" }
+                ],
+                "format": "html"
+            }),
+        )
+        .expect("Export HTML label sheet");
+        assert_eq!(html_sheet_val["content_type"], "text/html");
     }
 }
