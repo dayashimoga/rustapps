@@ -37,6 +37,7 @@ members = [
     "apps/sql-migration-diff-studio",
     "apps/privacy-media-sanitizer",
     "apps/modbus-can-industrial-debugger",
+    "apps/markdown-publishing-press",
     "tools/license-signer",
     "tests",
     "benchmarks",
