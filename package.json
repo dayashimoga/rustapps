@@ -5,7 +5,8 @@
   "description": "Production-grade, offline-first standalone desktop and mobile apps in Rust and Svelte",
   "workspaces": [
     "apps/*/ui",
-    "apps/*"
+    "apps/*",
+    "shared/ui-kit"
   ],
   "scripts": {
     "test": "npm run test:unit && npm run test:e2e",

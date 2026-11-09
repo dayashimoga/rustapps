@@ -4,6 +4,34 @@
  * Interfaces with the Rust backend via Tauri v2 or embedded loopback HTTP IPC bridge.
  */
 
+export interface DialogFilter {
+  name: string;
+  extensions: string[];
+}
+
+export interface OpenDialogOptions {
+  title?: string;
+  directory?: boolean;
+  multiple?: boolean;
+  filter?: string;
+  filters?: DialogFilter[];
+  defaultPath?: string;
+}
+
+export interface SaveDialogOptions {
+  title?: string;
+  defaultPath?: string;
+  filter?: string;
+  filters?: DialogFilter[];
+}
+
+export interface FsLocationEntry {
+  name: string;
+  path: string;
+  kind: string;
+  available: boolean;
+}
+
 declare global {
   interface Window {
     __ANTIGRAVITY_TOKEN__?: string;
@@ -11,6 +39,14 @@ declare global {
       invoke?: <T = unknown>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
       core?: {
         invoke: <T = unknown>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+      };
+      dialog?: {
+        open?: (opts?: OpenDialogOptions) => Promise<string | string[] | null>;
+        save?: (opts?: SaveDialogOptions) => Promise<string | null>;
+      };
+      fs?: {
+        getDrivesAndPlaces?: () => Promise<FsLocationEntry[]>;
+        fileUrl?: (localPath: string) => string;
       };
     };
   }

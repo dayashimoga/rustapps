@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   SUPPORTED_LANGUAGES,
   tauriInvoke,
@@ -9,6 +9,47 @@ import {
 } from './types';
 
 describe('Universal Live Translator UI Tests', () => {
+  beforeEach(() => {
+    (globalThis as any).window = {
+      __TAURI__: {
+        invoke: async (cmd: string, args?: any) => {
+          if (cmd === 'detect_language_cmd') {
+            return { language: 'ru', confidence: 0.96 } as LidResult;
+          }
+          if (cmd === 'translate_text_cmd') {
+            const req = args?.request as TranslationRequest;
+            const res: TranslationResponse = {
+              originalText: req.text,
+              translatedText: `${req.text} (traducido)`,
+              sourceLang: req.sourceLang || 'en',
+              targetLang: req.targetLang,
+              confidence: 0.98,
+              latencyMs: 35,
+              detectedSource: false,
+              glossaryTermsApplied: [],
+            };
+            return res;
+          }
+          if (cmd === 'list_phrases_cmd') {
+            const list: PhrasebookItem[] = [
+              {
+                id: '1',
+                sourceText: 'Good morning',
+                targetText: 'Buenos días',
+                sourceLang: 'en',
+                targetLang: 'es',
+                category: 'Greeting',
+                favorite: true,
+                createdAt: Date.now(),
+              },
+            ];
+            return list;
+          }
+          throw new Error(`Unhandled mock command: ${cmd}`);
+        },
+      },
+    };
+  });
   it('should include 32 supported languages with valid metadata', () => {
     expect(SUPPORTED_LANGUAGES.length).toBe(32);
 
