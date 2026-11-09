@@ -52,6 +52,7 @@ pub enum AppId {
     SbomSupplyChainAuditor,
     OfflinePcapWorkbench,
     CryptoPkiCaStudio,
+    LocalRagContractAuditor,
     AllAppsSuite,
 }
 
@@ -82,6 +83,7 @@ impl AppId {
             AppId::SbomSupplyChainAuditor => "sbom-supply-chain-auditor",
             AppId::OfflinePcapWorkbench => "offline-pcap-workbench",
             AppId::CryptoPkiCaStudio => "crypto-pki-ca-studio",
+            AppId::LocalRagContractAuditor => "local-rag-contract-auditor",
             AppId::AllAppsSuite => "all-apps-suite",
         }
     }
@@ -135,6 +137,9 @@ impl AppId {
             }
             "crypto-pki-ca-studio" | "cryptopkicastudio" | "pki-studio" | "ca-studio" | "pki" => {
                 Some(AppId::CryptoPkiCaStudio)
+            }
+            "local-rag-contract-auditor" | "contractauditor" | "contract-auditor" | "legal-rag" => {
+                Some(AppId::LocalRagContractAuditor)
             }
             "all" | "all-apps" | "suite" | "all-apps-suite" | "allappssuite" => {
                 Some(AppId::AllAppsSuite)

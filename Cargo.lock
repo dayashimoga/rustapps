@@ -1289,6 +1289,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "local-rag-contract-auditor"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chrono",
+ "ed25519-dalek",
+ "hex",
+ "platform-common",
+ "rand",
+ "regex",
+ "serde",
+ "serde_json",
+ "shared-licensing",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"

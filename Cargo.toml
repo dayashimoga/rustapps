@@ -33,6 +33,7 @@ members = [
     "apps/sbom-supply-chain-auditor",
     "apps/offline-pcap-workbench",
     "apps/crypto-pki-ca-studio",
+    "apps/local-rag-contract-auditor",
     "tools/license-signer",
     "tests",
     "benchmarks",

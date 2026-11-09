@@ -1,0 +1,29 @@
+[package]
+name = "local-rag-contract-auditor"
+version = "0.1.0"
+edition = "2021"
+authors = ["Offline Apps Team"]
+description = "Air-Gapped Offline Legal & Compliance RAG Contract Reviewer with Clause Risk Scoring, Redlining & Audit Signatures"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+blake3 = "1.5"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
+hex = "0.4"
+regex = "1.10"
+
+shared-licensing = { path = "../../shared/licensing" }
+platform-common = { path = "../../platform" }
+
+[lib]
+name = "local_rag_contract_auditor"
+path = "src/lib.rs"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "local-rag-contract-auditor"
+path = "src/main.rs"
