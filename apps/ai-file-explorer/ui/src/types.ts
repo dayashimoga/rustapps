@@ -232,6 +232,13 @@ export interface SmartFolder {
   is_builtin: boolean;
 }
 
+export interface TablePreviewData {
+  headers: string[];
+  rows: string[][];
+  total_rows: number;
+  total_columns: number;
+}
+
 export interface FilePreviewData {
   path: string;
   file_name: string;
@@ -242,6 +249,7 @@ export interface FilePreviewData {
   is_pdf: boolean;
   is_media: boolean;
   is_archive?: boolean;
+  is_table?: boolean;
   archive_entries?: ArchiveEntryInfo[];
   text_content?: string | null;
   total_lines?: number | null;
@@ -250,5 +258,6 @@ export interface FilePreviewData {
   pdf_author?: string | null;
   blake3_hash?: string | null;
   modified_timestamp_secs: number;
+  table_preview?: TablePreviewData | null;
 }
 

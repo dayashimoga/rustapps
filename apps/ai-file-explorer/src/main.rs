@@ -29,9 +29,10 @@ impl DesktopIpcHandler for ExplorerDesktopHandler {
         let target_dir = if base.join("docs").is_dir() {
             base.join("docs")
         } else {
-            base
+            base.clone()
         };
         let cwd = target_dir.to_string_lossy().to_string();
+        let cargo_toml = base.join("Cargo.toml").to_string_lossy().to_string();
         vec![
             SelfTestCheck {
                 command: "list_drives_and_places_cmd",
@@ -89,6 +90,25 @@ impl DesktopIpcHandler for ExplorerDesktopHandler {
             SelfTestCheck {
                 command: "query_smart_folder_cmd",
                 payload: json!({ "id": "smart-pdf", "path_context": cwd, "limit": 10 }),
+            },
+            SelfTestCheck {
+                command: "quicklook_preview",
+                payload: json!({ "path": cargo_toml }),
+            },
+            SelfTestCheck {
+                command: "archive_files",
+                payload: json!({
+                    "sources": [cargo_toml],
+                    "output_path": "target/self_test_archive.zip"
+                }),
+            },
+            SelfTestCheck {
+                command: "export_compliance_report",
+                payload: json!({
+                    "target_dir": cwd,
+                    "output_path": "target/self_test_compliance.pdf",
+                    "format": "pdf"
+                }),
             },
             SelfTestCheck {
                 command: "get_license_status_cmd",

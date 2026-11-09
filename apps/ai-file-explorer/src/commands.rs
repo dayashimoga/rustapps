@@ -801,6 +801,22 @@ pub struct ArchiveEntryInfo {
     pub is_dir: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TablePreviewData {
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub total_rows: usize,
+    pub total_columns: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ArchiveFilesResult {
+    pub output_path: String,
+    pub archived_count: usize,
+    pub total_uncompressed_bytes: u64,
+    pub total_compressed_bytes: u64,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FilePreviewData {
     pub path: String,
@@ -812,6 +828,8 @@ pub struct FilePreviewData {
     pub is_pdf: bool,
     pub is_media: bool,
     pub is_archive: bool,
+    #[serde(default)]
+    pub is_table: bool,
     pub archive_entries: Vec<ArchiveEntryInfo>,
     pub text_content: Option<String>,
     pub total_lines: Option<usize>,
@@ -820,6 +838,8 @@ pub struct FilePreviewData {
     pub pdf_author: Option<String>,
     pub blake3_hash: Option<String>,
     pub modified_timestamp_secs: u64,
+    #[serde(default)]
+    pub table_preview: Option<TablePreviewData>,
 }
 
 /// Compute 256-bit BLAKE3 hash via a 64KB stack buffer stream (O(1) memory for any size)
@@ -1036,6 +1056,67 @@ pub fn get_file_preview_cmd(path: String) -> Result<FilePreviewData, String> {
         None
     };
 
+    let is_table = ext == "csv" || ext == "tsv" || ext == "sqlite" || ext == "db";
+    let mut table_preview = None;
+
+    if (ext == "csv" || ext == "tsv") && size_bytes > 0 {
+        if let Ok(bytes) = std::fs::read(p) {
+            let sample = String::from_utf8_lossy(&bytes[..bytes.len().min(64 * 1024)]);
+            let delimiter = if ext == "tsv" { '\t' } else { ',' };
+            let mut lines = sample.lines();
+            if let Some(header_line) = lines.next() {
+                let headers: Vec<String> = header_line
+                    .split(delimiter)
+                    .map(|s| s.trim().trim_matches('"').to_string())
+                    .collect();
+                let mut rows = Vec::new();
+                for line in lines.take(25) {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let row: Vec<String> = line
+                        .split(delimiter)
+                        .map(|s| s.trim().trim_matches('"').to_string())
+                        .collect();
+                    if !row.is_empty() {
+                        rows.push(row);
+                    }
+                }
+                let total_cols = headers.len();
+                let total_rows = rows.len();
+                table_preview = Some(TablePreviewData {
+                    headers,
+                    rows,
+                    total_rows,
+                    total_columns: total_cols,
+                });
+            }
+        }
+    } else if (ext == "sqlite" || ext == "db") && size_bytes >= 100 {
+        if let Ok(db) = shared_storage::Database::open(p) {
+            let _ = db.with_connection(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name LIMIT 25",
+                )?;
+                let mut rows = Vec::new();
+                let mut rows_iter = stmt.query([])?;
+                while let Some(row) = rows_iter.next()? {
+                    let name: String = row.get(0)?;
+                    let tbl_type: String = row.get(1)?;
+                    rows.push(vec![name, tbl_type]);
+                }
+                let total_rows = rows.len();
+                table_preview = Some(TablePreviewData {
+                    headers: vec!["Schema Object Name".to_string(), "Object Type".to_string()],
+                    rows,
+                    total_rows,
+                    total_columns: 2,
+                });
+                Ok(())
+            });
+        }
+    }
+
     Ok(FilePreviewData {
         path,
         file_name,
@@ -1046,6 +1127,7 @@ pub fn get_file_preview_cmd(path: String) -> Result<FilePreviewData, String> {
         is_pdf,
         is_media,
         is_archive,
+        is_table,
         archive_entries,
         text_content,
         total_lines,
@@ -1054,6 +1136,183 @@ pub fn get_file_preview_cmd(path: String) -> Result<FilePreviewData, String> {
         pdf_author,
         blake3_hash,
         modified_timestamp_secs,
+        table_preview,
+    })
+}
+
+fn crc32_ieee(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// Compress selected files or folders into a standard ZIP archive (Dual-Pane Batch Operation)
+pub fn archive_files_cmd(
+    sources: Vec<String>,
+    output_zip: String,
+) -> Result<ArchiveFilesResult, String> {
+    use flate2::write::DeflateEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+
+    let out_p = Path::new(&output_zip);
+    if let Some(parent) = out_p.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+
+    struct ZipEntryRecord {
+        name_bytes: Vec<u8>,
+        crc32: u32,
+        compressed_size: u32,
+        uncompressed_size: u32,
+        local_header_offset: u32,
+        compression_method: u16,
+    }
+
+    let mut zip_data = Vec::with_capacity(65536);
+    let mut entries = Vec::new();
+    let mut archived_count = 0usize;
+    let mut total_uncompressed_bytes = 0u64;
+    let mut total_compressed_bytes = 0u64;
+
+    for src_str in sources {
+        let src = Path::new(&src_str);
+        if !src.exists() {
+            continue;
+        }
+
+        let mut files_to_add = Vec::new();
+        if src.is_dir() {
+            for entry in walkdir::WalkDir::new(src)
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
+                if entry.file_type().is_file() {
+                    let rel_path = entry
+                        .path()
+                        .strip_prefix(src.parent().unwrap_or(src))
+                        .unwrap_or(entry.path());
+                    let norm_name = rel_path.to_string_lossy().replace('\\', "/");
+                    files_to_add.push((entry.path().to_path_buf(), norm_name));
+                }
+            }
+        } else {
+            let file_name = src
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "file".to_string());
+            files_to_add.push((src.to_path_buf(), file_name));
+        }
+
+        for (file_path, entry_name) in files_to_add {
+            let file_bytes = match std::fs::read(&file_path) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+
+            let uncompressed_size = file_bytes.len() as u32;
+            total_uncompressed_bytes += uncompressed_size as u64;
+            let crc = crc32_ieee(&file_bytes);
+
+            let (compression_method, payload) = if uncompressed_size == 0 {
+                (0u16, Vec::new())
+            } else {
+                let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+                let _ = encoder.write_all(&file_bytes);
+                match encoder.finish() {
+                    Ok(compressed) if compressed.len() < file_bytes.len() => (8u16, compressed),
+                    _ => (0u16, file_bytes),
+                }
+            };
+
+            let compressed_size = payload.len() as u32;
+            total_compressed_bytes += compressed_size as u64;
+
+            let name_bytes = entry_name.into_bytes();
+            let local_header_offset = zip_data.len() as u32;
+
+            zip_data.extend_from_slice(b"PK\x03\x04");
+            zip_data.extend_from_slice(&20u16.to_le_bytes());
+            zip_data.extend_from_slice(&0u16.to_le_bytes());
+            zip_data.extend_from_slice(&compression_method.to_le_bytes());
+            zip_data.extend_from_slice(&0u16.to_le_bytes());
+            zip_data.extend_from_slice(&0u16.to_le_bytes());
+            zip_data.extend_from_slice(&crc.to_le_bytes());
+            zip_data.extend_from_slice(&compressed_size.to_le_bytes());
+            zip_data.extend_from_slice(&uncompressed_size.to_le_bytes());
+            zip_data.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+            zip_data.extend_from_slice(&0u16.to_le_bytes());
+            zip_data.extend_from_slice(&name_bytes);
+            zip_data.extend_from_slice(&payload);
+
+            entries.push(ZipEntryRecord {
+                name_bytes,
+                crc32: crc,
+                compressed_size,
+                uncompressed_size,
+                local_header_offset,
+                compression_method,
+            });
+            archived_count += 1;
+        }
+    }
+
+    if entries.is_empty() {
+        return Err("No valid files found to archive".to_string());
+    }
+
+    let cd_offset = zip_data.len() as u32;
+    for entry in &entries {
+        zip_data.extend_from_slice(b"PK\x01\x02");
+        zip_data.extend_from_slice(&20u16.to_le_bytes());
+        zip_data.extend_from_slice(&20u16.to_le_bytes());
+        zip_data.extend_from_slice(&0u16.to_le_bytes());
+        zip_data.extend_from_slice(&entry.compression_method.to_le_bytes());
+        zip_data.extend_from_slice(&0u16.to_le_bytes());
+        zip_data.extend_from_slice(&0u16.to_le_bytes());
+        zip_data.extend_from_slice(&entry.crc32.to_le_bytes());
+        zip_data.extend_from_slice(&entry.compressed_size.to_le_bytes());
+        zip_data.extend_from_slice(&entry.uncompressed_size.to_le_bytes());
+        zip_data.extend_from_slice(&(entry.name_bytes.len() as u16).to_le_bytes());
+        zip_data.extend_from_slice(&0u16.to_le_bytes());
+        zip_data.extend_from_slice(&0u16.to_le_bytes());
+        zip_data.extend_from_slice(&0u16.to_le_bytes());
+        zip_data.extend_from_slice(&0u16.to_le_bytes());
+        zip_data.extend_from_slice(&0u32.to_le_bytes());
+        zip_data.extend_from_slice(&entry.local_header_offset.to_le_bytes());
+        zip_data.extend_from_slice(&entry.name_bytes);
+    }
+
+    let cd_size = (zip_data.len() as u32) - cd_offset;
+
+    zip_data.extend_from_slice(b"PK\x05\x06");
+    zip_data.extend_from_slice(&0u16.to_le_bytes());
+    zip_data.extend_from_slice(&0u16.to_le_bytes());
+    zip_data.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    zip_data.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    zip_data.extend_from_slice(&cd_size.to_le_bytes());
+    zip_data.extend_from_slice(&cd_offset.to_le_bytes());
+    zip_data.extend_from_slice(&0u16.to_le_bytes());
+
+    std::fs::write(out_p, &zip_data)
+        .map_err(|e| format!("Failed to write zip archive {}: {}", output_zip, e))?;
+
+    Ok(ArchiveFilesResult {
+        output_path: output_zip,
+        archived_count,
+        total_uncompressed_bytes,
+        total_compressed_bytes,
     })
 }
 
@@ -1108,7 +1367,7 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let listing = list_directory_cmd(path)?;
             serde_json::to_value(listing).map_err(|e| e.to_string())
         }
-        "get_file_preview_cmd" => {
+        "get_file_preview_cmd" | "quicklook_preview" | "get_file_preview" => {
             let path = args
                 .get("path")
                 .and_then(|v| v.as_str())
@@ -1308,28 +1567,33 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let res = scan_compliance_cmd(path)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
-        "export_compliance_report_cmd" => {
+        "export_compliance_report_cmd" | "export_compliance_report" => {
             let target_dir = resolve_valid_path(
                 args.get("target_dir")
                     .or_else(|| args.get("targetDir"))
                     .or_else(|| args.get("path"))
                     .and_then(|v| v.as_str()),
             );
-            let output_path = args
-                .get("output_path")
-                .or_else(|| args.get("outputPath"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("compliance_report.csv")
-                .to_string();
             let format = args
                 .get("format")
                 .and_then(|v| v.as_str())
                 .unwrap_or("csv")
                 .to_string();
+            let default_name = if format.eq_ignore_ascii_case("pdf") {
+                "compliance_report.pdf"
+            } else {
+                "compliance_report.csv"
+            };
+            let output_path = args
+                .get("output_path")
+                .or_else(|| args.get("outputPath"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(default_name)
+                .to_string();
             let count = export_compliance_report_cmd(target_dir, output_path, format)?;
             Ok(json!({ "exported_findings": count }))
         }
-        "copy_files_cmd" => {
+        "copy_files_cmd" | "file_copy_batch" => {
             let sources: Vec<String> = args
                 .get("sources")
                 .and_then(|v| v.as_array())
@@ -1347,7 +1611,7 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let res = copy_files_cmd(sources, destination_dir)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
-        "move_files_cmd" => {
+        "move_files_cmd" | "file_move_batch" => {
             let sources: Vec<String> = args
                 .get("sources")
                 .and_then(|v| v.as_array())
@@ -1365,7 +1629,7 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let res = move_files_cmd(sources, destination_dir)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
-        "create_directory_cmd" => {
+        "create_directory_cmd" | "create_directory" => {
             let parent_dir = resolve_valid_path(
                 args.get("parent_dir")
                     .or_else(|| args.get("parentDir"))
@@ -1380,6 +1644,27 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
                 .to_string();
             let res = create_directory_cmd(parent_dir, dir_name)?;
             Ok(json!({ "created_path": res }))
+        }
+        "archive_files_cmd" | "archive_files" => {
+            let sources: Vec<String> = args
+                .get("sources")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let output_path = args
+                .get("output_path")
+                .or_else(|| args.get("outputPath"))
+                .or_else(|| args.get("output_zip"))
+                .or_else(|| args.get("outputZip"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("archive.zip")
+                .to_string();
+            let res = archive_files_cmd(sources, output_path)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "get_smart_folders_cmd" => {
             let res = get_smart_folders_cmd()?;
@@ -1761,5 +2046,92 @@ mod tests {
         let err = dispatch_ipc_command("activate_license", json!({ "license_json": forged_json }))
             .unwrap_err();
         assert!(err.contains("signature") || err.contains("InvalidSignature"));
+    }
+
+    #[test]
+    fn test_commands_archive_files_and_quicklook_table_preview() {
+        let dir = tempdir().unwrap();
+        let txt_file = dir.path().join("readme.txt");
+        std::fs::write(&txt_file, b"Sample readme contents").unwrap();
+
+        let csv_file = dir.path().join("users.csv");
+        std::fs::write(
+            &csv_file,
+            b"id,name,department\n1,Alice,DevOps\n2,Bob,Security\n",
+        )
+        .unwrap();
+
+        let zip_out = dir.path().join("bundle.zip");
+
+        // 1. Archive files command
+        let res = archive_files_cmd(
+            vec![
+                txt_file.to_string_lossy().to_string(),
+                csv_file.to_string_lossy().to_string(),
+            ],
+            zip_out.to_string_lossy().to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(res.archived_count, 2);
+        assert!(zip_out.exists());
+
+        // 2. Inspect archive entries
+        let entries = inspect_archive_cmd(zip_out.to_string_lossy().to_string()).unwrap();
+        assert_eq!(entries.len(), 2);
+
+        // 3. QuickLook preview on CSV file
+        let preview = get_file_preview_cmd(csv_file.to_string_lossy().to_string()).unwrap();
+        assert!(preview.is_table);
+        let table = preview.table_preview.expect("Table preview should exist");
+        assert_eq!(table.headers, vec!["id", "name", "department"]);
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(table.rows[0], vec!["1", "Alice", "DevOps"]);
+
+        // 4. Test IPC aliases
+        let ql_val = dispatch_ipc_command(
+            "quicklook_preview",
+            json!({ "path": csv_file.to_string_lossy().to_string() }),
+        )
+        .unwrap();
+        assert_eq!(ql_val["is_table"], true);
+
+        let zip2_out = dir.path().join("bundle2.zip");
+        let arch_val = dispatch_ipc_command(
+            "archive_files",
+            json!({
+                "sources": [txt_file.to_string_lossy().to_string()],
+                "output_path": zip2_out.to_string_lossy().to_string(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(arch_val["archived_count"], 1);
+        assert!(zip2_out.exists());
+    }
+
+    #[test]
+    fn test_commands_export_compliance_report_pdf() {
+        let dir = tempdir().unwrap();
+        let target_dir = dir.path().join("scan_target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let pii_file = target_dir.join("keys.env");
+        std::fs::write(&pii_file, "aws_key = AKIAIOSFODNN7EXAMPLE\n").unwrap();
+
+        let pdf_out = dir.path().join("audit_report.pdf");
+        let res = dispatch_ipc_command(
+            "export_compliance_report",
+            json!({
+                "target_dir": target_dir.to_string_lossy().to_string(),
+                "output_path": pdf_out.to_string_lossy().to_string(),
+                "format": "pdf",
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(res["exported_findings"], 1);
+        assert!(pdf_out.exists());
+        let pdf_bytes = std::fs::read(&pdf_out).unwrap();
+        assert!(pdf_bytes.starts_with(b"%PDF-1.4"));
+        assert!(pdf_bytes.ends_with(b"%%EOF\n"));
     }
 }

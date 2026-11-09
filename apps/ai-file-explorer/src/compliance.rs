@@ -300,6 +300,290 @@ fn luhn_check(num_str: &str) -> bool {
     sum % 10 == 0
 }
 
+/// Generates a certified vector PDF 1.4 Data Loss Prevention (DLP) compliance audit report
+pub fn generate_compliance_pdf_report(summary: &ComplianceScanSummary) -> Vec<u8> {
+    use std::fmt::Write as FmtWrite;
+
+    let items_per_page = 16usize;
+    let total_pages = (summary.findings.len().div_ceil(items_per_page)).max(1);
+
+    // PDF Objects list to track byte offsets for xref
+    let mut pdf = Vec::with_capacity(32768);
+    pdf.extend_from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+
+    let mut obj_offsets: Vec<usize> = Vec::new();
+
+    // Obj 1: Catalog
+    obj_offsets.push(pdf.len());
+    pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+    // Obj 2: Pages
+    obj_offsets.push(pdf.len());
+    let mut kids = String::from("[");
+    for i in 0..total_pages {
+        let page_obj_id = 3 + i * 2;
+        let _ = write!(kids, "{} 0 R ", page_obj_id);
+    }
+    kids.push(']');
+    let pages_dict = format!(
+        "2 0 obj\n<< /Type /Pages /Kids {} /Count {} >>\nendobj\n",
+        kids, total_pages
+    );
+    pdf.extend_from_slice(pages_dict.as_bytes());
+
+    let font_regular_id = 3 + total_pages * 2;
+    let font_bold_id = font_regular_id + 1;
+
+    // For each page: Page object and Content stream object
+    for page_idx in 0..total_pages {
+        let page_obj_id = 3 + page_idx * 2;
+        let content_obj_id = page_obj_id + 1;
+
+        // Page Object
+        obj_offsets.push(pdf.len());
+        let page_dict = format!(
+            "{} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {} 0 R /Resources << /Font << /F1 {} 0 R /F2 {} 0 R >> >> >>\nendobj\n",
+            page_obj_id, content_obj_id, font_regular_id, font_bold_id
+        );
+        pdf.extend_from_slice(page_dict.as_bytes());
+
+        // Build content stream for this page
+        let mut stream = String::with_capacity(4096);
+
+        // Header Dark Banner (612 wide, 60 tall)
+        stream.push_str("0.06 0.09 0.16 rg\n18 718 576 56 re f\n");
+
+        // Header Accent Strip
+        stream.push_str("0.24 0.44 0.89 rg\n18 714 576 4 re f\n");
+
+        // Header Text
+        stream.push_str("1.0 1.0 1.0 rg\n");
+        stream.push_str("BT /F2 14 Tf 32 750 Td (ANTIGRAVITY DATA LOSS PREVENTION \\(DLP\\) AUDIT REPORT) Tj ET\n");
+        stream.push_str("0.75 0.82 0.95 rg\n");
+        stream.push_str("BT /F1 9 Tf 32 732 Td (100% Offline Air-Gapped Sensitive Data & Secret Scan Certificate) Tj ET\n");
+
+        // Metadata box (710 down to 640)
+        stream.push_str("0.96 0.97 0.98 rg\n18 644 576 60 re f\n");
+        stream.push_str("0.85 0.88 0.92 RG 1 w\n18 644 576 60 re S\n");
+
+        // Metrics text
+        stream.push_str("0.1 0.15 0.25 rg\n");
+        let _ = writeln!(
+            stream,
+            "BT /F2 10 Tf 30 686 Td (Scanned Files: {}) Tj ET",
+            summary.scanned_files_count
+        );
+        let _ = writeln!(
+            stream,
+            "BT /F2 10 Tf 160 686 Td (Total Findings: {}) Tj ET",
+            summary.findings_count
+        );
+        let _ = writeln!(
+            stream,
+            "BT /F2 10 Tf 310 686 Td (Scan Time: {:.1} ms) Tj ET",
+            summary.scan_duration_ms
+        );
+
+        // Breakdown counts
+        stream.push_str("0.85 0.15 0.15 rg\n");
+        let _ = writeln!(
+            stream,
+            "BT /F2 9 Tf 30 660 Td (Critical: {}) Tj ET",
+            summary.critical_count
+        );
+        stream.push_str("0.85 0.45 0.05 rg\n");
+        let _ = writeln!(
+            stream,
+            "BT /F2 9 Tf 130 660 Td (High: {}) Tj ET",
+            summary.high_count
+        );
+        stream.push_str("0.65 0.60 0.10 rg\n");
+        let _ = writeln!(
+            stream,
+            "BT /F2 9 Tf 210 660 Td (Medium: {}) Tj ET",
+            summary.medium_count
+        );
+        stream.push_str("0.4 0.45 0.5 rg\n");
+        stream.push_str("BT /F1 9 Tf 310 660 Td (Tier: Business / Enterprise Certified) Tj ET\n");
+
+        // Table Header (y = 616, height = 20)
+        stream.push_str("0.15 0.20 0.30 rg\n18 616 576 20 re f\n");
+        stream.push_str("1.0 1.0 1.0 rg\n");
+        stream.push_str("BT /F2 8.5 Tf 24 622 Td (ID) Tj ET\n");
+        stream.push_str("BT /F2 8.5 Tf 60 622 Td (SEVERITY) Tj ET\n");
+        stream.push_str("BT /F2 8.5 Tf 130 622 Td (DATA TYPE) Tj ET\n");
+        stream.push_str("BT /F2 8.5 Tf 240 622 Td (FILE LOCATION) Tj ET\n");
+        stream.push_str("BT /F2 8.5 Tf 430 622 Td (REDACTED EVIDENCE) Tj ET\n");
+
+        // Findings Rows
+        let start_idx = page_idx * items_per_page;
+        let end_idx = (start_idx + items_per_page).min(summary.findings.len());
+
+        if summary.findings.is_empty() {
+            // Compliant clean banner
+            stream.push_str("0.92 0.98 0.93 rg\n18 550 576 50 re f\n");
+            stream.push_str("0.15 0.65 0.25 rg\n");
+            stream.push_str("BT /F2 12 Tf 40 570 Td (COMPLIANCE VERIFIED: ZERO SENSITIVE PATTERNS OR LEAKS DETECTED) Tj ET\n");
+        } else {
+            let mut y_cursor = 594.0f32;
+            for (row_idx, finding) in summary.findings[start_idx..end_idx].iter().enumerate() {
+                // Zebra row background
+                if row_idx % 2 == 1 {
+                    stream.push_str(&format!(
+                        "0.97 0.98 0.99 rg\n18 {:.1} 576 20 re f\n",
+                        y_cursor
+                    ));
+                }
+                stream.push_str(&format!(
+                    "0.90 0.92 0.95 RG 0.5 w\n18 {:.1} 576 20 re S\n",
+                    y_cursor
+                ));
+
+                let text_y = y_cursor + 6.0;
+
+                // ID
+                stream.push_str("0.3 0.35 0.4 rg\n");
+                let _ = writeln!(
+                    stream,
+                    "BT /F1 8 Tf 24 {:.1} Td ({}) Tj ET",
+                    text_y,
+                    sanitize_pdf_str(&finding.id)
+                );
+
+                // Severity Badge
+                match finding.severity {
+                    FindingSeverity::Critical => stream.push_str("0.85 0.15 0.15 rg\n"),
+                    FindingSeverity::High => stream.push_str("0.85 0.45 0.05 rg\n"),
+                    FindingSeverity::Medium => stream.push_str("0.70 0.60 0.10 rg\n"),
+                }
+                let _ = writeln!(
+                    stream,
+                    "BT /F2 8 Tf 60 {:.1} Td ({:?}) Tj ET",
+                    text_y, finding.severity
+                );
+
+                // Data Type
+                stream.push_str("0.1 0.15 0.2 rg\n");
+                let type_name = match finding.data_type {
+                    SensitiveDataType::PrivateKey => "Private Key",
+                    SensitiveDataType::AwsAccessKey => "AWS Secret/Key",
+                    SensitiveDataType::Ssn => "US SSN",
+                    SensitiveDataType::CreditCard => "Credit Card (Luhn)",
+                    SensitiveDataType::ConnectionStringPassword => "DB Conn Password",
+                };
+                let _ = writeln!(
+                    stream,
+                    "BT /F1 8 Tf 130 {:.1} Td ({}) Tj ET",
+                    text_y, type_name
+                );
+
+                // File Location (truncate if too long)
+                let path_display = format!(
+                    "{}:{}",
+                    finding
+                        .file_path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("?"),
+                    finding.line_number
+                );
+                let _ = writeln!(
+                    stream,
+                    "BT /F1 7.5 Tf 240 {:.1} Td ({}) Tj ET",
+                    text_y,
+                    sanitize_pdf_str(&path_display)
+                );
+
+                // Redacted preview
+                let mut preview = finding.redacted_preview.clone();
+                if preview.len() > 30 {
+                    preview.truncate(27);
+                    preview.push_str("...");
+                }
+                stream.push_str("0.4 0.2 0.2 rg\n");
+                let _ = writeln!(
+                    stream,
+                    "BT /F1 7.5 Tf 430 {:.1} Td ({}) Tj ET",
+                    text_y,
+                    sanitize_pdf_str(&preview)
+                );
+
+                y_cursor -= 22.0;
+            }
+        }
+
+        // Footer
+        stream.push_str("0.8 0.82 0.85 RG 0.5 w\n18 36 576 0.5 re S\n");
+        stream.push_str("0.5 0.55 0.6 rg\n");
+        let _ = writeln!(
+            stream,
+            "BT /F1 7.5 Tf 24 24 Td (Page {} of {} | Antigravity Offline Suite | Air-Gapped DLP Engine) Tj ET",
+            page_idx + 1,
+            total_pages
+        );
+
+        // Content Stream Object
+        obj_offsets.push(pdf.len());
+        let stream_bytes = stream.as_bytes();
+        let content_header = format!(
+            "{} 0 obj\n<< /Length {} >>\nstream\n",
+            content_obj_id,
+            stream_bytes.len()
+        );
+        pdf.extend_from_slice(content_header.as_bytes());
+        pdf.extend_from_slice(stream_bytes);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+    }
+
+    // Font 1: Helvetica (Regular)
+    obj_offsets.push(pdf.len());
+    let font1_dict = format!(
+        "{} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        font_regular_id
+    );
+    pdf.extend_from_slice(font1_dict.as_bytes());
+
+    // Font 2: Helvetica-Bold
+    obj_offsets.push(pdf.len());
+    let font2_dict = format!(
+        "{} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj\n",
+        font_bold_id
+    );
+    pdf.extend_from_slice(font2_dict.as_bytes());
+
+    // Xref Table
+    let xref_offset = pdf.len();
+    let total_objs = obj_offsets.len() + 1;
+    let mut xref = format!("xref\n0 {}\n0000000000 65535 f \n", total_objs);
+    for off in &obj_offsets {
+        let _ = writeln!(xref, "{:010} 00000 n ", off);
+    }
+    pdf.extend_from_slice(xref.as_bytes());
+
+    // Trailer
+    let trailer = format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+        total_objs, xref_offset
+    );
+    pdf.extend_from_slice(trailer.as_bytes());
+
+    pdf
+}
+
+fn sanitize_pdf_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '(' => out.push_str("\\("),
+            ')' => out.push_str("\\)"),
+            '\\' => out.push_str("\\\\"),
+            c if c.is_ascii_graphic() || c == ' ' => out.push(c),
+            _ => out.push(' '),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,5 +637,73 @@ mod tests {
         let findings = scanner.scan_file(&secret_file, &biz_gate).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].data_type, SensitiveDataType::AwsAccessKey);
+    }
+
+    #[test]
+    fn test_generate_compliance_pdf_report() {
+        let findings = vec![
+            SensitiveFinding {
+                id: "comp-1".to_string(),
+                data_type: SensitiveDataType::AwsAccessKey,
+                severity: FindingSeverity::Critical,
+                file_path: PathBuf::from("src/secret.env"),
+                line_number: 12,
+                redacted_preview: "AKIA****************".to_string(),
+            },
+            SensitiveFinding {
+                id: "comp-2".to_string(),
+                data_type: SensitiveDataType::CreditCard,
+                severity: FindingSeverity::Critical,
+                file_path: PathBuf::from("data/users.csv"),
+                line_number: 84,
+                redacted_preview: "****-****-****-1234".to_string(),
+            },
+            SensitiveFinding {
+                id: "comp-3".to_string(),
+                data_type: SensitiveDataType::Ssn,
+                severity: FindingSeverity::High,
+                file_path: PathBuf::from("records/patients.txt"),
+                line_number: 45,
+                redacted_preview: "***-**-****".to_string(),
+            },
+        ];
+
+        let summary = ComplianceScanSummary {
+            scanned_files_count: 142,
+            findings_count: 3,
+            critical_count: 2,
+            high_count: 1,
+            medium_count: 0,
+            findings,
+            scan_duration_ms: 18.5,
+        };
+
+        let pdf = generate_compliance_pdf_report(&summary);
+        assert!(pdf.starts_with(b"%PDF-1.4"));
+        assert!(pdf.ends_with(b"%%EOF\n"));
+        let pdf_str = String::from_utf8_lossy(&pdf);
+        assert!(pdf_str.contains("ANTIGRAVITY DATA LOSS PREVENTION"));
+        assert!(pdf_str.contains("Critical: 2"));
+        assert!(pdf_str.contains("High: 1"));
+        assert!(pdf_str.contains("AKIA"));
+    }
+
+    #[test]
+    fn test_generate_compliance_pdf_report_empty() {
+        let summary = ComplianceScanSummary {
+            scanned_files_count: 50,
+            findings_count: 0,
+            critical_count: 0,
+            high_count: 0,
+            medium_count: 0,
+            findings: Vec::new(),
+            scan_duration_ms: 4.2,
+        };
+
+        let pdf = generate_compliance_pdf_report(&summary);
+        assert!(pdf.starts_with(b"%PDF-1.4"));
+        assert!(pdf.ends_with(b"%%EOF\n"));
+        let pdf_str = String::from_utf8_lossy(&pdf);
+        assert!(pdf_str.contains("COMPLIANCE VERIFIED"));
     }
 }

@@ -429,7 +429,7 @@ impl FileExplorerService {
         Ok(self.compliance_scanner.scan_file(path.as_ref(), gate)?)
     }
 
-    /// Export compliance scan summary as CSV or JSON report to a file
+    /// Export compliance scan summary as CSV, JSON, or vector PDF report to a file
     pub fn export_compliance_report<P: AsRef<Path>>(
         &self,
         summary: &crate::compliance::ComplianceScanSummary,
@@ -437,6 +437,14 @@ impl FileExplorerService {
         format: &str,
     ) -> Result<usize, ServiceError> {
         let output_path = output_path.as_ref();
+        if format.eq_ignore_ascii_case("pdf") {
+            let pdf_bytes = crate::compliance::generate_compliance_pdf_report(summary);
+            std::fs::write(output_path, &pdf_bytes).map_err(|e| {
+                ServiceError::Internal(format!("Failed to write compliance PDF report: {}", e))
+            })?;
+            return Ok(summary.findings_count);
+        }
+
         let content = match format.to_lowercase().as_str() {
             "json" => serde_json::to_string_pretty(summary)
                 .map_err(|e| ServiceError::Internal(e.to_string()))?,

@@ -305,6 +305,20 @@
       const tabs: ActiveTab[] = ['browser', 'content_search', 'screenshots', 'duplicates', 'treemap', 'batch_rename', 'compliance'];
       const targetTab = tabs[parseInt(e.key, 10) - 1];
       if (targetTab) activeTab = targetTab;
+    } else if (e.code === 'Space' || e.key === ' ') {
+      e.preventDefault();
+      if (previewItem) {
+        previewItem = null;
+      } else {
+        const activeItems = activePane === 'left' ? currentFolderItems : rightFolderItems;
+        const activeSelection = activePane === 'left' ? selectedPaths : rightSelectedPaths;
+        if (activeSelection.length > 0) {
+          const found = activeItems.find((i) => i.path === activeSelection[0]);
+          if (found) previewItem = found;
+        } else if (activeItems.length > 0) {
+          previewItem = activeItems[0];
+        }
+      }
     } else if (isDualPaneMode && e.key === 'Tab') {
       e.preventDefault();
       activePane = activePane === 'left' ? 'right' : 'left';
@@ -320,6 +334,9 @@
     } else if (isDualPaneMode && e.key === 'F8') {
       e.preventDefault();
       handleCommanderDelete();
+    } else if (isDualPaneMode && e.key === 'F9') {
+      e.preventDefault();
+      handleCommanderArchive();
     } else if ((e.altKey && e.key === 'ArrowUp') || e.key === 'Backspace') {
       e.preventDefault();
       handleNavigateUp();
@@ -501,6 +518,38 @@
       }
     } catch (err) {
       commanderFeedback = `Delete failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  async function handleCommanderArchive() {
+    commanderFeedback = '';
+    const srcPaths = activePane === 'left' ? selectedPaths : rightSelectedPaths;
+    const destDir = activePane === 'left' ? rightPath : currentPath;
+
+    if (srcPaths.length === 0) {
+      commanderFeedback = 'No files selected to archive. Select files in the active pane first.';
+      return;
+    }
+
+    const archiveName = prompt('Enter ZIP archive name:', 'archive.zip');
+    if (!archiveName || !archiveName.trim()) return;
+
+    const baseName = archiveName.trim().endsWith('.zip') ? archiveName.trim() : `${archiveName.trim()}.zip`;
+    const outZip = `${destDir}\\${baseName}`;
+
+    try {
+      const res = await invokeTauri<{ output_path: string; archived_count: number; total_compressed_bytes: number }>(
+        'archive_files',
+        {
+          sources: srcPaths,
+          output_path: outZip,
+        }
+      );
+      commanderFeedback = `Archived ${res.archived_count} item(s) (${(res.total_compressed_bytes / 1024).toFixed(1)} KB) to ${baseName}`;
+      if (activePane === 'left') await loadRightDirectory(rightPath);
+      else await loadDirectory(currentPath);
+    } catch (err) {
+      commanderFeedback = `Archive failed: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
 
@@ -995,6 +1044,9 @@
               </button>
               <button class="commander-fn-btn del-btn" on:click={handleCommanderDelete}>
                 <kbd>F8</kbd> Delete
+              </button>
+              <button class="commander-fn-btn archive-btn" on:click={handleCommanderArchive}>
+                <kbd>F9</kbd> Archive (.zip)
               </button>
               {#if commanderFeedback}
                 <span class="commander-feedback-pill">{commanderFeedback}</span>

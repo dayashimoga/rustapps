@@ -236,6 +236,40 @@
           {/if}
         </div>
 
+      <!-- Table Viewer (.csv, .tsv, .sqlite, .db) -->
+      {:else if preview.is_table && preview.table_preview}
+        <div class="archive-viewer-box">
+          <div class="archive-header">
+            <span class="archive-icon">📊</span>
+            <div>
+              <h4>Table & Schema Preview</h4>
+              <p class="archive-sub">
+                {preview.table_preview.total_rows} rows &bull; {preview.table_preview.total_columns} columns
+              </p>
+            </div>
+          </div>
+          <div class="archive-table-container">
+            <table class="archive-table">
+              <thead>
+                <tr>
+                  {#each preview.table_preview.headers as header}
+                    <th>{header}</th>
+                  {/each}
+                </tr>
+              </thead>
+              <tbody>
+                {#each preview.table_preview.rows as row}
+                  <tr>
+                    {#each row as cell}
+                      <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{cell}</td>
+                    {/each}
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
       <!-- Binary / Fallback File -->
       {:else}
         <div class="binary-viewer-box">
