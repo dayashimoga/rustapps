@@ -7,11 +7,16 @@
 pub mod audio_dsp;
 pub mod embeddings;
 pub mod image_decoder;
+pub mod model_bridge;
 pub mod ocr_engine;
 pub mod tokenizer;
 
 pub use audio_dsp::{MelSpectrogramExtractor, SpeechSegment, VadEngine};
 pub use embeddings::{ConceptEmbeddingEngine, DenseEmbedding, EMBEDDING_DIM};
 pub use image_decoder::{encode_gray_to_bmp, DecodedImage, ImageDecodeError, ImageDecoder};
+pub use model_bridge::{
+    encode_neural_embedding_pack, AdaptiveEmbeddingEngine, ModelBridgeError, Tier1NeuralEmbedder,
+    MODEL_PACK_MAGIC,
+};
 pub use ocr_engine::{render_text_to_gray_image, GlyphTable, OcrResult, TemplateOcrEngine};
 pub use tokenizer::BpeTokenizer;

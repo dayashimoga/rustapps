@@ -11,7 +11,10 @@ serde.workspace = true
 serde_json.workspace = true
 flate2.workspace = true
 image.workspace = true
+shared-storage.workspace = true
+shared-model-hub.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+sha2.workspace = true
 

@@ -2031,6 +2031,9 @@ dependencies = [
  "image",
  "serde",
  "serde_json",
+ "sha2",
+ "shared-model-hub",
+ "shared-storage",
  "tempfile",
  "thiserror 2.0.21",
 ]
