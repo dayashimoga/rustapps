@@ -34,6 +34,7 @@ members = [
     "apps/offline-pcap-workbench",
     "apps/crypto-pki-ca-studio",
     "apps/local-rag-contract-auditor",
+    "apps/sql-migration-diff-studio",
     "tools/license-signer",
     "tests",
     "benchmarks",

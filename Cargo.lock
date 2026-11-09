@@ -2478,6 +2478,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "sql-migration-diff-studio"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chrono",
+ "ed25519-dalek",
+ "hex",
+ "platform-common",
+ "rand",
+ "regex",
+ "serde",
+ "serde_json",
+ "shared-licensing",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

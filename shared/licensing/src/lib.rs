@@ -53,6 +53,10 @@ pub enum AppId {
     OfflinePcapWorkbench,
     CryptoPkiCaStudio,
     LocalRagContractAuditor,
+    SqlMigrationDiffStudio,
+    PrivacyMediaSanitizer,
+    ModbusCanIndustrialDebugger,
+    MarkdownPublishingPress,
     AllAppsSuite,
 }
 
@@ -84,6 +88,10 @@ impl AppId {
             AppId::OfflinePcapWorkbench => "offline-pcap-workbench",
             AppId::CryptoPkiCaStudio => "crypto-pki-ca-studio",
             AppId::LocalRagContractAuditor => "local-rag-contract-auditor",
+            AppId::SqlMigrationDiffStudio => "sql-migration-diff-studio",
+            AppId::PrivacyMediaSanitizer => "privacy-media-sanitizer",
+            AppId::ModbusCanIndustrialDebugger => "modbus-can-industrial-debugger",
+            AppId::MarkdownPublishingPress => "markdown-publishing-press",
             AppId::AllAppsSuite => "all-apps-suite",
         }
     }
@@ -141,6 +149,20 @@ impl AppId {
             "local-rag-contract-auditor" | "contractauditor" | "contract-auditor" | "legal-rag" => {
                 Some(AppId::LocalRagContractAuditor)
             }
+            "sql-migration-diff-studio" | "sqlmigrationdiffstudio" | "sql-studio" | "schema-diff" => {
+                Some(AppId::SqlMigrationDiffStudio)
+            }
+            "privacy-media-sanitizer" | "privacymediasanitizer" | "media-sanitizer" | "sanitizer" => {
+                Some(AppId::PrivacyMediaSanitizer)
+            }
+            "modbus-can-industrial-debugger"
+            | "modbuscanindustrialdebugger"
+            | "industrial-debugger"
+            | "modbus" => Some(AppId::ModbusCanIndustrialDebugger),
+            "markdown-publishing-press"
+            | "markdownpublishingpress"
+            | "publishing-press"
+            | "press" => Some(AppId::MarkdownPublishingPress),
             "all" | "all-apps" | "suite" | "all-apps-suite" | "allappssuite" => {
                 Some(AppId::AllAppsSuite)
             }
