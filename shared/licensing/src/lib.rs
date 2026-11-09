@@ -51,6 +51,7 @@ pub enum AppId {
     LocalDataSynthesizer,
     SbomSupplyChainAuditor,
     OfflinePcapWorkbench,
+    CryptoPkiCaStudio,
     AllAppsSuite,
 }
 
@@ -80,6 +81,7 @@ impl AppId {
             AppId::LocalDataSynthesizer => "local-data-synthesizer",
             AppId::SbomSupplyChainAuditor => "sbom-supply-chain-auditor",
             AppId::OfflinePcapWorkbench => "offline-pcap-workbench",
+            AppId::CryptoPkiCaStudio => "crypto-pki-ca-studio",
             AppId::AllAppsSuite => "all-apps-suite",
         }
     }
@@ -130,6 +132,9 @@ impl AppId {
             }
             "offline-pcap-workbench" | "pcapworkbench" | "pcap" | "wireshark-lite" => {
                 Some(AppId::OfflinePcapWorkbench)
+            }
+            "crypto-pki-ca-studio" | "cryptopkicastudio" | "pki-studio" | "ca-studio" | "pki" => {
+                Some(AppId::CryptoPkiCaStudio)
             }
             "all" | "all-apps" | "suite" | "all-apps-suite" | "allappssuite" => {
                 Some(AppId::AllAppsSuite)

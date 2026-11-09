@@ -32,6 +32,7 @@ members = [
     "apps/local-data-synthesizer",
     "apps/sbom-supply-chain-auditor",
     "apps/offline-pcap-workbench",
+    "apps/crypto-pki-ca-studio",
     "tools/license-signer",
     "tests",
     "benchmarks",
