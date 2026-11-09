@@ -26,10 +26,63 @@ impl DesktopIpcHandler for ProAvDesktopHandler {
         dispatch_ipc_command(command, args)
     }
 
+    fn handle_binary_command(
+        &self,
+        command: &str,
+        header: Value,
+        payload: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        match command {
+            "render_frame_bin" | "stream_frame_bin" => {
+                let timestamp_ms = header
+                    .get("timestampMs")
+                    .or_else(|| header.get("timestamp_ms"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let width = header.get("width").and_then(|v| v.as_u64()).unwrap_or(640) as u32;
+                let height = header.get("height").and_then(|v| v.as_u64()).unwrap_or(360) as u32;
+                pave_core::commands::render_frame_bin_cmd(timestamp_ms, width, height)
+            }
+            _ => Ok(payload.to_vec()),
+        }
+    }
+
     fn self_test_checks(&self) -> Vec<SelfTestCheck> {
         vec![
             SelfTestCheck {
                 command: "get_project_state_cmd",
+                payload: json!({}),
+            },
+            SelfTestCheck {
+                command: "set_work_area_in_cmd",
+                payload: json!({ "timestampMs": 500 }),
+            },
+            SelfTestCheck {
+                command: "set_work_area_out_cmd",
+                payload: json!({ "timestampMs": 2500 }),
+            },
+            SelfTestCheck {
+                command: "get_work_area_cmd",
+                payload: json!({}),
+            },
+            SelfTestCheck {
+                command: "shuttle_playback_cmd",
+                payload: json!({ "action": "forward" }),
+            },
+            SelfTestCheck {
+                command: "get_shuttle_speed_cmd",
+                payload: json!({}),
+            },
+            SelfTestCheck {
+                command: "clear_work_area_cmd",
+                payload: json!({}),
+            },
+            SelfTestCheck {
+                command: "undo_timeline_cmd",
+                payload: json!({}),
+            },
+            SelfTestCheck {
+                command: "redo_timeline_cmd",
                 payload: json!({}),
             },
             SelfTestCheck {

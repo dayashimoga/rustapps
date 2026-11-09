@@ -27,6 +27,8 @@
   let pendingRenderMs: number | null = null;
 
   let previewBmpBase64: string | null = null;
+  let workAreaInMs: number | null = null;
+  let workAreaOutMs: number | null = null;
   let showMiniScopes: boolean = false;
   let showSafeAreas: boolean = false;
   let showCenterCross: boolean = false;
@@ -300,6 +302,15 @@
     } else if (e.code === 'KeyJ') {
       e.preventDefault();
       cycleShuttleReverse();
+    } else if (e.code === 'KeyI' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      setInPoint(playheadMs);
+    } else if (e.code === 'KeyO' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      setOutPoint(playheadMs);
+    } else if (e.code === 'KeyX' && e.altKey) {
+      e.preventDefault();
+      clearWorkArea();
     } else if (e.code === 'ArrowLeft') {
       e.preventDefault();
       stepFrames(-1);
@@ -312,6 +323,45 @@
     } else if (e.code === 'End') {
       e.preventDefault();
       seekTo(durationMs);
+    }
+  }
+
+  async function setInPoint(ms: number) {
+    try {
+      const res = await tauriInvoke<{ in_ms: number | null; out_ms: number | null }>(
+        'set_work_area_in_cmd',
+        { timestampMs: ms }
+      );
+      workAreaInMs = res.in_ms;
+      workAreaOutMs = res.out_ms;
+    } catch (err) {
+      console.error('Failed to set In point:', err);
+    }
+  }
+
+  async function setOutPoint(ms: number) {
+    try {
+      const res = await tauriInvoke<{ in_ms: number | null; out_ms: number | null }>(
+        'set_work_area_out_cmd',
+        { timestampMs: ms }
+      );
+      workAreaInMs = res.in_ms;
+      workAreaOutMs = res.out_ms;
+    } catch (err) {
+      console.error('Failed to set Out point:', err);
+    }
+  }
+
+  async function clearWorkArea() {
+    try {
+      const res = await tauriInvoke<{ in_ms: number | null; out_ms: number | null }>(
+        'clear_work_area_cmd',
+        {}
+      );
+      workAreaInMs = res.in_ms;
+      workAreaOutMs = res.out_ms;
+    } catch (err) {
+      console.error('Failed to clear work area:', err);
     }
   }
 
@@ -821,14 +871,52 @@
       </button>
       <button type="button" class="transport-btn" on:click={() => stepFrames(1)} title="Next Frame (Right Arrow)">▶</button>
       <button type="button" class="transport-btn" on:click={() => seekTo(durationMs)} title="Go to End (End)">⏭</button>
+
+      <span class="transport-divider"></span>
+      <button
+        type="button"
+        class="transport-btn mark-btn"
+        class:marked={workAreaInMs !== null}
+        on:click={() => setInPoint(playheadMs)}
+        title="Mark In Point (I)"
+      >
+        [ I
+      </button>
+      <button
+        type="button"
+        class="transport-btn mark-btn"
+        class:marked={workAreaOutMs !== null}
+        on:click={() => setOutPoint(playheadMs)}
+        title="Mark Out Point (O)"
+      >
+        O ]
+      </button>
+      {#if workAreaInMs !== null || workAreaOutMs !== null}
+        <button
+          type="button"
+          class="transport-btn clear-wa-btn"
+          on:click={clearWorkArea}
+          title="Clear Work Area Range (Alt+X)"
+        >
+          ⨂
+        </button>
+      {/if}
     </div>
 
     <div class="transport-center">
       <span class="smpte-display">{timecodeStr}</span>
       <span class="duration-display">/ {formatTimecode(durationMs, fps)}</span>
+      {#if workAreaInMs !== null || workAreaOutMs !== null}
+        <span class="workarea-badge">
+          Range: {workAreaInMs !== null ? formatTimecode(workAreaInMs, fps) : '--'} → {workAreaOutMs !== null ? formatTimecode(workAreaOutMs, fps) : '--'}
+        </span>
+      {/if}
     </div>
 
     <div class="transport-right">
+      {#if isPlaying && playbackSpeed !== 1.0}
+        <span class="shuttle-speed-pill">{playbackSpeed > 0 ? `+${playbackSpeed}x` : `${playbackSpeed}x`}</span>
+      {/if}
       <div class="shuttle-shortcuts" title="J-K-L Shuttle Keyboard Shortcuts">
         <span class="shortcut-pill">J: Rev</span>
         <span class="shortcut-pill">K: Pause</span>
@@ -1094,6 +1182,50 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+  }
+
+  .transport-divider {
+    width: 1px;
+    height: 18px;
+    background: #30363d;
+    margin: 0 4px;
+  }
+
+  .mark-btn {
+    font-weight: 700;
+    font-family: var(--font-mono, monospace);
+  }
+
+  .mark-btn.marked {
+    border-color: #38bdf8;
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.15);
+  }
+
+  .clear-wa-btn {
+    color: #f87171;
+  }
+
+  .workarea-badge {
+    font-size: 0.7rem;
+    font-family: var(--font-mono, monospace);
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.12);
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid rgba(56, 189, 248, 0.3);
+    margin-left: 6px;
+  }
+
+  .shuttle-speed-pill {
+    font-size: 0.7rem;
+    font-family: var(--font-mono, monospace);
+    font-weight: 700;
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.15);
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid rgba(245, 158, 11, 0.4);
   }
 
   .shuttle-shortcuts {

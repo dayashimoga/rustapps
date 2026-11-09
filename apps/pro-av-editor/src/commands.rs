@@ -7,7 +7,8 @@ use crate::audio_engine::LoudnessMeterData;
 use crate::color::VideoScopeData;
 use crate::models::{
     AudioSyncResult, BlendMode, ChromaKeySettings, Clip, ColorGradingSettings, FrameRate,
-    MasterExportSummary, ProxyGenerationResult, TimelineProject, TrackType, Transform2D,
+    MasterExportSummary, ProxyGenerationResult, ShuttleSpeed, TimelineProject, TrackType,
+    Transform2D, WorkAreaRange,
 };
 use crate::service::EditorService;
 use crate::templates::{ExportPreset, ProjectTemplate};
@@ -240,6 +241,66 @@ pub fn render_preview_frame_cmd(
         }
     }
     String::from_utf8(enc).map_err(|e| e.to_string())
+}
+
+/// Undo last timeline edit operation
+pub fn undo_timeline_cmd() -> Result<bool, String> {
+    undo_cmd()
+}
+
+/// Redo last undone timeline edit operation
+pub fn redo_timeline_cmd() -> Result<bool, String> {
+    redo_cmd()
+}
+
+/// Set work-area in-point marker (I shortcut)
+pub fn set_work_area_in_cmd(timestamp_ms: Option<u64>) -> Result<WorkAreaRange, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.set_in_point(timestamp_ms).map_err(|e| e.to_string())
+}
+
+/// Set work-area out-point marker (O shortcut)
+pub fn set_work_area_out_cmd(timestamp_ms: Option<u64>) -> Result<WorkAreaRange, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.set_out_point(timestamp_ms).map_err(|e| e.to_string())
+}
+
+/// Clear work-area in/out range
+pub fn clear_work_area_cmd() -> Result<WorkAreaRange, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.clear_work_area().map_err(|e| e.to_string())
+}
+
+/// Get current work-area in/out range
+pub fn get_work_area_cmd() -> Result<WorkAreaRange, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.get_work_area().map_err(|e| e.to_string())
+}
+
+/// Control J/K/L shuttle transport speed
+pub fn shuttle_playback_cmd(action: String) -> Result<ShuttleSpeed, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.shuttle_control(&action).map_err(|e| e.to_string())
+}
+
+/// Get current shuttle playback speed
+pub fn get_shuttle_speed_cmd() -> Result<ShuttleSpeed, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.get_shuttle_speed().map_err(|e| e.to_string())
+}
+
+/// Render frame as raw RGBA byte buffer for binary IPC fast-path
+pub fn render_frame_bin_cmd(timestamp_ms: u64, width: u32, height: u32) -> Result<Vec<u8>, String> {
+    let service = get_service();
+    let svc = service.lock().map_err(|e| e.to_string())?;
+    svc.render_frame_rgba_raw(timestamp_ms, width, height)
+        .map_err(|e| e.to_string())
 }
 
 /// Compute broadcast video scopes (Histogram, Waveform, Vectorscope)
@@ -821,14 +882,51 @@ pub fn dispatch_ipc_command(cmd: &str, args: Value) -> Result<Value, String> {
             let res = get_project_state_cmd()?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
-        "undo_cmd" => {
+        "undo_cmd" | "undo_timeline_cmd" | "undo" => {
             let _ = undo_cmd()?;
             let res = get_project_state_cmd()?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
-        "redo_cmd" => {
+        "redo_cmd" | "redo_timeline_cmd" | "redo" => {
             let _ = redo_cmd()?;
             let res = get_project_state_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "set_work_area_in_cmd" | "set_in_point" => {
+            let timestamp_ms = args
+                .get("timestampMs")
+                .or_else(|| args.get("timestamp_ms"))
+                .and_then(|v| v.as_u64());
+            let res = set_work_area_in_cmd(timestamp_ms)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "set_work_area_out_cmd" | "set_out_point" => {
+            let timestamp_ms = args
+                .get("timestampMs")
+                .or_else(|| args.get("timestamp_ms"))
+                .and_then(|v| v.as_u64());
+            let res = set_work_area_out_cmd(timestamp_ms)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "clear_work_area_cmd" | "clear_work_area" => {
+            let res = clear_work_area_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "get_work_area_cmd" | "get_work_area" => {
+            let res = get_work_area_cmd()?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "shuttle_playback_cmd" | "shuttle_control" => {
+            let action = args
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("pause")
+                .to_string();
+            let res = shuttle_playback_cmd(action)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "get_shuttle_speed_cmd" | "get_shuttle_speed" => {
+            let res = get_shuttle_speed_cmd()?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "render_preview_frame_cmd" => {
@@ -1211,5 +1309,54 @@ mod tests {
         let err = dispatch_ipc_command("activate_license", json!({ "license_json": forged_json }))
             .unwrap_err();
         assert!(err.contains("signature") || err.contains("InvalidSignature"));
+    }
+
+    #[test]
+    fn test_work_area_shuttle_and_binary_frame_commands() {
+        // 1. Work Area In / Out
+        let in_val =
+            dispatch_ipc_command("set_work_area_in_cmd", json!({ "timestampMs": 500 })).unwrap();
+        assert_eq!(in_val["in_ms"], 500);
+
+        let out_val =
+            dispatch_ipc_command("set_work_area_out_cmd", json!({ "timestampMs": 3500 })).unwrap();
+        assert_eq!(out_val["out_ms"], 3500);
+
+        let get_wa = dispatch_ipc_command("get_work_area_cmd", json!({})).unwrap();
+        assert_eq!(get_wa["in_ms"], 500);
+        assert_eq!(get_wa["out_ms"], 3500);
+
+        let clear_wa = dispatch_ipc_command("clear_work_area_cmd", json!({})).unwrap();
+        assert!(clear_wa["in_ms"].is_null());
+        assert!(clear_wa["out_ms"].is_null());
+
+        // 2. Shuttle Playback (J/K/L)
+        let s_fwd1 =
+            dispatch_ipc_command("shuttle_playback_cmd", json!({ "action": "forward" })).unwrap();
+        assert_eq!(s_fwd1, "Forward1x");
+
+        let s_fwd2 =
+            dispatch_ipc_command("shuttle_playback_cmd", json!({ "action": "l" })).unwrap();
+        assert_eq!(s_fwd2, "Forward2x");
+
+        let s_pause =
+            dispatch_ipc_command("shuttle_playback_cmd", json!({ "action": "k" })).unwrap();
+        assert_eq!(s_pause, "Paused");
+
+        let s_rev = dispatch_ipc_command("shuttle_playback_cmd", json!({ "action": "j" })).unwrap();
+        assert_eq!(s_rev, "Reverse1x");
+
+        let cur_speed = dispatch_ipc_command("get_shuttle_speed_cmd", json!({})).unwrap();
+        assert_eq!(cur_speed, "Reverse1x");
+
+        // 3. Binary RGBA Frame buffer
+        let raw_rgba = render_frame_bin_cmd(0, 16, 9).unwrap();
+        assert_eq!(raw_rgba.len(), 16 * 9 * 4); // 576 bytes
+
+        // 4. Undo and Redo
+        let undo_res = dispatch_ipc_command("undo_timeline_cmd", json!({})).unwrap();
+        assert!(undo_res.is_object());
+        let redo_res = dispatch_ipc_command("redo_timeline_cmd", json!({})).unwrap();
+        assert!(redo_res.is_object());
     }
 }

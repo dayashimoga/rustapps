@@ -117,6 +117,81 @@ impl Timecode {
 }
 
 // ---------------------------------------------------------------------------
+// Shuttle Transport & Work-Area In/Out Range
+// ---------------------------------------------------------------------------
+
+/// Shuttle playback speeds for J/K/L transport controls
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ShuttleSpeed {
+    Reverse8x,
+    Reverse4x,
+    Reverse2x,
+    Reverse1x,
+    #[default]
+    Paused,
+    Forward1x,
+    Forward2x,
+    Forward4x,
+    Forward8x,
+}
+
+impl ShuttleSpeed {
+    pub fn as_multiplier(&self) -> f32 {
+        match self {
+            Self::Reverse8x => -8.0,
+            Self::Reverse4x => -4.0,
+            Self::Reverse2x => -2.0,
+            Self::Reverse1x => -1.0,
+            Self::Paused => 0.0,
+            Self::Forward1x => 1.0,
+            Self::Forward2x => 2.0,
+            Self::Forward4x => 4.0,
+            Self::Forward8x => 8.0,
+        }
+    }
+
+    /// Step reverse (J key behavior): if paused or forward -> Reverse1x; otherwise increases reverse speed up to 8x
+    pub fn step_reverse(&self) -> Self {
+        match self {
+            Self::Forward8x
+            | Self::Forward4x
+            | Self::Forward2x
+            | Self::Forward1x
+            | Self::Paused => Self::Reverse1x,
+            Self::Reverse1x => Self::Reverse2x,
+            Self::Reverse2x => Self::Reverse4x,
+            Self::Reverse4x | Self::Reverse8x => Self::Reverse8x,
+        }
+    }
+
+    /// Step pause (K key behavior): immediately pauses playback
+    pub fn pause(&self) -> Self {
+        Self::Paused
+    }
+
+    /// Step forward (L key behavior): if paused or reverse -> Forward1x; otherwise increases forward speed up to 8x
+    pub fn step_forward(&self) -> Self {
+        match self {
+            Self::Reverse8x
+            | Self::Reverse4x
+            | Self::Reverse2x
+            | Self::Reverse1x
+            | Self::Paused => Self::Forward1x,
+            Self::Forward1x => Self::Forward2x,
+            Self::Forward2x => Self::Forward4x,
+            Self::Forward4x | Self::Forward8x => Self::Forward8x,
+        }
+    }
+}
+
+/// Work-area range markers for in-point and out-point export & playback restriction
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WorkAreaRange {
+    pub in_ms: Option<u64>,
+    pub out_ms: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
 // Keyframe Animation Curves
 // ---------------------------------------------------------------------------
 

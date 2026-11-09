@@ -9,7 +9,8 @@
 //! - Atomic `.avedproj` project serialization with BLAKE3 checksums
 
 use crate::models::{
-    Clip, ProjectSettings, TimelineMarker, TimelineProject, Track, TrackType, Transition,
+    Clip, ProjectSettings, ShuttleSpeed, TimelineMarker, TimelineProject, Track, TrackType,
+    Transition, WorkAreaRange,
 };
 use std::fs::File;
 use std::io::{Read, Write};
@@ -386,6 +387,8 @@ pub struct TimelineEngine {
     history: CommandHistory,
     playhead_ms: u64,
     snap_tolerance_ms: u64,
+    work_area: WorkAreaRange,
+    shuttle_speed: ShuttleSpeed,
 }
 
 impl TimelineEngine {
@@ -395,6 +398,8 @@ impl TimelineEngine {
             history: CommandHistory::new(100),
             playhead_ms: 0,
             snap_tolerance_ms: 100, // ~3-6 frames default snapping window
+            work_area: WorkAreaRange::default(),
+            shuttle_speed: ShuttleSpeed::default(),
         }
     }
 
@@ -436,6 +441,45 @@ impl TimelineEngine {
 
     pub fn set_snap_tolerance_ms(&mut self, ms: u64) {
         self.snap_tolerance_ms = ms;
+    }
+
+    pub fn set_in_point(&mut self, timestamp_ms: Option<u64>) {
+        self.work_area.in_ms = timestamp_ms;
+    }
+
+    pub fn set_out_point(&mut self, timestamp_ms: Option<u64>) {
+        self.work_area.out_ms = timestamp_ms;
+    }
+
+    pub fn clear_work_area(&mut self) {
+        self.work_area = WorkAreaRange::default();
+    }
+
+    pub fn work_area(&self) -> WorkAreaRange {
+        self.work_area
+    }
+
+    pub fn shuttle_speed(&self) -> ShuttleSpeed {
+        self.shuttle_speed
+    }
+
+    pub fn set_shuttle_speed(&mut self, speed: ShuttleSpeed) {
+        self.shuttle_speed = speed;
+    }
+
+    pub fn shuttle_reverse(&mut self) -> ShuttleSpeed {
+        self.shuttle_speed = self.shuttle_speed.step_reverse();
+        self.shuttle_speed
+    }
+
+    pub fn shuttle_pause(&mut self) -> ShuttleSpeed {
+        self.shuttle_speed = self.shuttle_speed.pause();
+        self.shuttle_speed
+    }
+
+    pub fn shuttle_forward(&mut self) -> ShuttleSpeed {
+        self.shuttle_speed = self.shuttle_speed.step_forward();
+        self.shuttle_speed
     }
 
     // -----------------------------------------------------------------------

@@ -14,8 +14,8 @@ use crate::compositor::{CompositorError, LayerCompositor, VideoFrame};
 use crate::models::{
     AnimatedProperty, AudioSyncResult, BlendMode, ChromaKeySettings, Clip, ClipType,
     ColorGradingSettings, CompressorSettings, EqBand, FilterType, FrameRate, MasterExportSummary,
-    MediaSource, ParametricEqSettings, ProxyGenerationResult, TimelineProject, Track, TrackType,
-    Transform2D,
+    MediaSource, ParametricEqSettings, ProxyGenerationResult, ShuttleSpeed, TimelineProject, Track,
+    TrackType, Transform2D, WorkAreaRange,
 };
 use crate::templates::{EdlExporter, FcpxmlExporter, ProjectTemplate};
 use crate::timeline::{TimelineEngine, TimelineError};
@@ -844,6 +844,68 @@ impl EditorService {
             .write()
             .map_err(|_| ServiceError::LockPoisoned)?;
         Ok(guard.redo()?)
+    }
+
+    pub fn set_in_point(&self, timestamp_ms: Option<u64>) -> Result<WorkAreaRange, ServiceError> {
+        let mut guard = self
+            .engine
+            .write()
+            .map_err(|_| ServiceError::LockPoisoned)?;
+        guard.set_in_point(timestamp_ms);
+        Ok(guard.work_area())
+    }
+
+    pub fn set_out_point(&self, timestamp_ms: Option<u64>) -> Result<WorkAreaRange, ServiceError> {
+        let mut guard = self
+            .engine
+            .write()
+            .map_err(|_| ServiceError::LockPoisoned)?;
+        guard.set_out_point(timestamp_ms);
+        Ok(guard.work_area())
+    }
+
+    pub fn clear_work_area(&self) -> Result<WorkAreaRange, ServiceError> {
+        let mut guard = self
+            .engine
+            .write()
+            .map_err(|_| ServiceError::LockPoisoned)?;
+        guard.clear_work_area();
+        Ok(guard.work_area())
+    }
+
+    pub fn get_work_area(&self) -> Result<WorkAreaRange, ServiceError> {
+        let guard = self.engine.read().map_err(|_| ServiceError::LockPoisoned)?;
+        Ok(guard.work_area())
+    }
+
+    pub fn shuttle_control(&self, action: &str) -> Result<ShuttleSpeed, ServiceError> {
+        let mut guard = self
+            .engine
+            .write()
+            .map_err(|_| ServiceError::LockPoisoned)?;
+        let speed = match action.to_lowercase().as_str() {
+            "reverse" | "j" => guard.shuttle_reverse(),
+            "pause" | "k" | "stop" => guard.shuttle_pause(),
+            "forward" | "l" => guard.shuttle_forward(),
+            _ => guard.shuttle_pause(),
+        };
+        Ok(speed)
+    }
+
+    pub fn get_shuttle_speed(&self) -> Result<ShuttleSpeed, ServiceError> {
+        let guard = self.engine.read().map_err(|_| ServiceError::LockPoisoned)?;
+        Ok(guard.shuttle_speed())
+    }
+
+    /// Render raw RGBA byte buffer (width * height * 4) directly for fast-path binary IPC streaming
+    pub fn render_frame_rgba_raw(
+        &self,
+        timestamp_ms: u64,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, ServiceError> {
+        let frame = self.render_frame(timestamp_ms, width, height)?;
+        Ok(frame.data)
     }
 
     pub fn update_clip_color_grading(
