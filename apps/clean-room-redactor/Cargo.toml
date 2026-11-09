@@ -1,0 +1,48 @@
+[package]
+name = "clean-room-redactor"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Offline Clean-Room Document Redactor — 100% Offline Deep Stream Burnout, PII/PHI Detection, Bates Numbering & Ed25519 Cryptographic Sanitization Certificates"
+
+[lib]
+name = "clean_room_redactor"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "clean-room-redactor"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace crates
+platform-common.workspace = true
+shared-storage.workspace = true
+shared-encryption.workspace = true
+shared-telemetry.workspace = true
+shared-licensing = { path = "../../shared/licensing" }
+shared-ai-core.workspace = true
+
+# Storage, Compression & Serialization
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+flate2.workspace = true
+csv.workspace = true
+
+# Cryptography & Security
+aes-gcm.workspace = true
+ed25519-dalek.workspace = true
+sha2.workspace = true
+blake3.workspace = true
+rand.workspace = true
+zeroize.workspace = true
+
+# Utilities
+thiserror.workspace = true
+uuid.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

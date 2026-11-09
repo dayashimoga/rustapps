@@ -47,6 +47,7 @@ pub enum AppId {
     SignalTelemetryOscilloscope,
     AudioMasteringStudio,
     QrCodeStudio,
+    CleanRoomRedactor,
     AllAppsSuite,
 }
 
@@ -72,6 +73,7 @@ impl AppId {
             AppId::SignalTelemetryOscilloscope => "signal-telemetry-oscilloscope",
             AppId::AudioMasteringStudio => "audio-mastering-studio",
             AppId::QrCodeStudio => "qr-code-studio",
+            AppId::CleanRoomRedactor => "clean-room-redactor",
             AppId::AllAppsSuite => "all-apps-suite",
         }
     }
@@ -111,6 +113,9 @@ impl AppId {
                 Some(AppId::AudioMasteringStudio)
             }
             "qr-code-studio" | "qrcodestudio" | "qr" => Some(AppId::QrCodeStudio),
+            "clean-room-redactor" | "cleanroomredactor" | "redactor" => {
+                Some(AppId::CleanRoomRedactor)
+            }
             "all" | "all-apps" | "suite" | "all-apps-suite" | "allappssuite" => {
                 Some(AppId::AllAppsSuite)
             }

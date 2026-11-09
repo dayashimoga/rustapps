@@ -419,6 +419,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
+name = "clean-room-redactor"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "blake3",
+ "csv",
+ "ed25519-dalek",
+ "flate2",
+ "platform-common",
+ "rand",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shared-ai-core",
+ "shared-encryption",
+ "shared-licensing",
+ "shared-storage",
+ "shared-telemetry",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
