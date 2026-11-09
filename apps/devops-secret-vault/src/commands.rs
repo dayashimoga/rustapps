@@ -33,6 +33,16 @@ use crate::models::{
     SecretMetadata, SecretPayload, SecretSearchResult, UpdateSecretInput,
 };
 use crate::service::VaultService;
+use crate::ssh_agent::SshAgentManager;
+
+static SSH_AGENT: std::sync::OnceLock<SshAgentManager> = std::sync::OnceLock::new();
+
+pub fn get_ssh_agent() -> &'static SshAgentManager {
+    SSH_AGENT.get_or_init(|| {
+        let sock_path = SshAgentManager::default_socket_path();
+        SshAgentManager::new(sock_path)
+    })
+}
 
 /// Shared application state managed by Tauri
 pub struct VaultAppState {
@@ -725,6 +735,51 @@ pub fn dispatch_ipc_command(
                 let res = import_k8s_secret(&svc, yaml_content, target_env).await?;
                 serde_json::to_value(res).map_err(|e| e.to_string())
             }
+            "diff_dotenv" => {
+                let content = args
+                    .get("dotenvContent")
+                    .or_else(|| args.get("dotenv_content"))
+                    .or_else(|| args.get("content"))
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "Missing dotenvContent parameter".to_string())?;
+                let target_env = args
+                    .get("targetEnv")
+                    .or_else(|| args.get("target_env"))
+                    .or_else(|| args.get("environment"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("production");
+                let report = diff_dotenv(&svc, content, target_env).await?;
+                serde_json::to_value(report).map_err(|e| e.to_string())
+            }
+            "start_ssh_agent" => {
+                let agent = get_ssh_agent();
+                agent.start().map_err(|e| e.to_string())?;
+                let _ = agent.load_vault_ssh_keys(&svc).await;
+                let status = agent.status().await;
+                serde_json::to_value(status).map_err(|e| e.to_string())
+            }
+            "stop_ssh_agent" => {
+                let agent = get_ssh_agent();
+                agent.stop().map_err(|e| e.to_string())?;
+                let status = agent.status().await;
+                serde_json::to_value(status).map_err(|e| e.to_string())
+            }
+            "get_ssh_agent_status" => {
+                let agent = get_ssh_agent();
+                let status = agent.status().await;
+                serde_json::to_value(status).map_err(|e| e.to_string())
+            }
+            "load_ssh_keys_into_agent" => {
+                let agent = get_ssh_agent();
+                let count = agent
+                    .load_vault_ssh_keys(&svc)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
+                    "loaded_count": count,
+                    "status": agent.status().await
+                }))
+            }
             "get_git_precommit_hook_script" => {
                 let repo_path = args
                     .get("repoPath")
@@ -860,6 +915,169 @@ pub async fn import_dotenv(
         imported_count,
         updated_count,
         failed_keys,
+    })
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DotenvDiffEntry {
+    pub key: String,
+    pub status: String,
+    pub env_value_masked: String,
+    pub vault_value_masked: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DotenvDiffReport {
+    pub environment: String,
+    pub total_keys: usize,
+    pub added_count: usize,
+    pub removed_count: usize,
+    pub modified_count: usize,
+    pub identical_count: usize,
+    pub entries: Vec<DotenvDiffEntry>,
+}
+
+fn mask_secret_value(val: &str) -> String {
+    let len = val.len();
+    if len == 0 {
+        return String::new();
+    }
+    if len <= 4 {
+        return "******".to_string();
+    }
+    format!("{}****{}", &val[0..2], &val[len - 2..])
+}
+
+/// Generate side-by-side visual diff comparison between plaintext `.env` and vault secrets
+pub async fn diff_dotenv(
+    service: &VaultService,
+    content: &str,
+    target_env: &str,
+) -> Result<DotenvDiffReport, String> {
+    use std::collections::BTreeMap;
+
+    // 1. Parse .env content into key-value map
+    let mut env_map = BTreeMap::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+        if parts.len() != 2 {
+            continue;
+        }
+        let key = parts[0].trim();
+        if key.is_empty() {
+            continue;
+        }
+        let mut val = parts[1].trim();
+        if ((val.starts_with('"') && val.ends_with('"'))
+            || (val.starts_with('\'') && val.ends_with('\'')))
+            && val.len() >= 2
+        {
+            val = &val[1..val.len() - 1];
+        }
+        env_map.insert(key.to_string(), val.to_string());
+    }
+
+    // 2. Query vault secrets matching the target environment or keys
+    let vault_secrets = service.list_secrets().await.map_err(|e| e.to_string())?;
+    let mut vault_map = BTreeMap::new();
+
+    for s in vault_secrets {
+        let has_env_tag = s.tags.iter().any(|t| t == target_env || t == "dotenv");
+        let matches_env_key = env_map.contains_key(&s.title);
+
+        if has_env_tag || matches_env_key {
+            if let Ok(decrypted) = service.get_secret(&s.id, "dotenv-diff").await {
+                let val_str = match &decrypted.payload {
+                    SecretPayload::Password { password } => password.clone(),
+                    SecretPayload::ApiKey { api_key, .. } => api_key.clone(),
+                    SecretPayload::DatabaseCredential { password, .. } => password.clone(),
+                    SecretPayload::AwsCredential {
+                        secret_access_key, ..
+                    } => secret_access_key.clone(),
+                    SecretPayload::AzureCredential { client_secret, .. } => client_secret.clone(),
+                    SecretPayload::SshKey { private_key, .. } => private_key.clone(),
+                    SecretPayload::TerraformSecret { tf_vars, .. } => {
+                        tf_vars.clone().unwrap_or_default()
+                    }
+                    SecretPayload::Certificate { private_key, .. } => private_key.clone(),
+                    SecretPayload::Totp { secret_base32, .. } => secret_base32.clone(),
+                };
+                vault_map.insert(s.title, val_str);
+            }
+        }
+    }
+
+    // 3. Compute union of all keys
+    let mut all_keys: std::collections::BTreeSet<String> = env_map.keys().cloned().collect();
+    for k in vault_map.keys() {
+        all_keys.insert(k.clone());
+    }
+
+    let mut entries = Vec::with_capacity(all_keys.len());
+    let mut added_count = 0;
+    let mut removed_count = 0;
+    let mut modified_count = 0;
+    let mut identical_count = 0;
+
+    for key in all_keys {
+        let env_val_opt = env_map.get(&key);
+        let vault_val_opt = vault_map.get(&key);
+
+        match (env_val_opt, vault_val_opt) {
+            (Some(env_val), None) => {
+                added_count += 1;
+                entries.push(DotenvDiffEntry {
+                    key,
+                    status: "added".to_string(),
+                    env_value_masked: mask_secret_value(env_val),
+                    vault_value_masked: String::new(),
+                });
+            }
+            (None, Some(vault_val)) => {
+                removed_count += 1;
+                entries.push(DotenvDiffEntry {
+                    key,
+                    status: "removed".to_string(),
+                    env_value_masked: String::new(),
+                    vault_value_masked: mask_secret_value(vault_val),
+                });
+            }
+            (Some(env_val), Some(vault_val)) => {
+                if env_val == vault_val {
+                    identical_count += 1;
+                    entries.push(DotenvDiffEntry {
+                        key,
+                        status: "identical".to_string(),
+                        env_value_masked: mask_secret_value(env_val),
+                        vault_value_masked: mask_secret_value(vault_val),
+                    });
+                } else {
+                    modified_count += 1;
+                    entries.push(DotenvDiffEntry {
+                        key,
+                        status: "modified".to_string(),
+                        env_value_masked: mask_secret_value(env_val),
+                        vault_value_masked: mask_secret_value(vault_val),
+                    });
+                }
+            }
+            (None, None) => {}
+        }
+    }
+
+    let total_keys = entries.len();
+    Ok(DotenvDiffReport {
+        environment: target_env.to_string(),
+        total_keys,
+        added_count,
+        removed_count,
+        modified_count,
+        identical_count,
+        entries,
     })
 }
 
@@ -1260,5 +1478,64 @@ stringData:
         )
         .unwrap_err();
         assert!(err.contains("signature") || err.contains("InvalidSignature"));
+    }
+
+    #[tokio::test]
+    async fn test_diff_dotenv_visual_comparison() {
+        let (service, _dir) = create_test_service().await;
+
+        let create1 = CreateSecretInput {
+            title: "DATABASE_URL".to_string(),
+            tags: vec!["dotenv".to_string(), "staging".to_string()],
+            username: None,
+            url: None,
+            notes: None,
+            payload: SecretPayload::Password {
+                password: "postgres://admin:old_secret@db.staging:5432/main".to_string(),
+            },
+        };
+        service.create_secret(create1, "test").await.unwrap();
+
+        let create2 = CreateSecretInput {
+            title: "REMOVED_KEY".to_string(),
+            tags: vec!["dotenv".to_string(), "staging".to_string()],
+            username: None,
+            url: None,
+            notes: None,
+            payload: SecretPayload::Password {
+                password: "should_be_removed_val".to_string(),
+            },
+        };
+        service.create_secret(create2, "test").await.unwrap();
+
+        let dotenv_content = "DATABASE_URL=postgres://admin:new_secret@db.staging:5432/main\nNEW_KEY=brand_new_value\n";
+        let diff = diff_dotenv(&service, dotenv_content, "staging")
+            .await
+            .unwrap();
+
+        assert_eq!(diff.environment, "staging");
+        assert_eq!(diff.added_count, 1);
+        assert_eq!(diff.removed_count, 1);
+        assert_eq!(diff.modified_count, 1);
+        assert_eq!(diff.identical_count, 0);
+
+        let added = diff.entries.iter().find(|e| e.key == "NEW_KEY").unwrap();
+        assert_eq!(added.status, "added");
+        assert!(added.env_value_masked.contains("****"));
+
+        let removed = diff
+            .entries
+            .iter()
+            .find(|e| e.key == "REMOVED_KEY")
+            .unwrap();
+        assert_eq!(removed.status, "removed");
+        assert!(removed.vault_value_masked.contains("****"));
+
+        let modified = diff
+            .entries
+            .iter()
+            .find(|e| e.key == "DATABASE_URL")
+            .unwrap();
+        assert_eq!(modified.status, "modified");
     }
 }

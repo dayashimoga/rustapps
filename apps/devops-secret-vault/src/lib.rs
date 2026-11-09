@@ -26,6 +26,7 @@ pub mod risk_scoring;
 pub mod search;
 pub mod service;
 pub mod shamir;
+pub mod ssh_agent;
 pub mod storage;
 pub mod totp;
 
@@ -43,5 +44,6 @@ pub use service::VaultService;
 pub use shamir::{
     reconstruct_master_key, reconstruct_secret, split_master_key, split_secret, ShamirShare,
 };
+pub use ssh_agent::{LoadedSshKey, SshAgentManager, SshAgentStatus};
 pub use storage::VaultStorage;
 pub use totp::{TotpAlgorithm, TotpCodeResponse, TotpConfig};
