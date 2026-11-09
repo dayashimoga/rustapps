@@ -52,3 +52,4 @@ class PawService {
     return _bindings.dispatch('get_license_status', {});
   }
 }
+

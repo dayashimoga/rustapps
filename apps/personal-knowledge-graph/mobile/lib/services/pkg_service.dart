@@ -67,3 +67,4 @@ class PkgService {
     return _bindings.dispatch('get_license_status', {});
   }
 }
+
