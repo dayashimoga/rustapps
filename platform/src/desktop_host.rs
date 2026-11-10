@@ -1457,6 +1457,7 @@ fn parse_byte_range(range_header: &str, total_size: u64) -> Option<Result<(u64, 
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn apply_dialog_filters(mut dialog: rfd::FileDialog, opts: &Value) -> rfd::FileDialog {
     // If starting directory or defaultPath is specified
     if let Some(default_path) = opts
@@ -1513,6 +1514,7 @@ fn apply_dialog_filters(mut dialog: rfd::FileDialog, opts: &Value) -> rfd::FileD
     dialog
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn invoke_native_open_dialog(
     title: &str,
     is_dir: bool,
@@ -1572,6 +1574,18 @@ fn invoke_native_open_dialog(
     }
 }
 
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn invoke_native_open_dialog(
+    _title: &str,
+    _is_dir: bool,
+    _multiple: bool,
+    _opts: &Value,
+    _scoped_registry: &ScopedFileRegistry,
+) -> Value {
+    Value::Null
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn invoke_native_save_dialog(
     title: &str,
     default_path: &str,
@@ -1601,6 +1615,16 @@ fn invoke_native_save_dialog(
         }
         None => Value::Null,
     }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn invoke_native_save_dialog(
+    _title: &str,
+    _default_path: &str,
+    _opts: &Value,
+    _scoped_registry: &ScopedFileRegistry,
+) -> Value {
+    Value::Null
 }
 
 fn mime_type_for_path(path: &Path) -> &'static str {
@@ -2929,6 +2953,7 @@ mod tests {
         let _ = server_handle.join();
     }
     #[test]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn test_apply_dialog_filters_configures_extensions_and_directory() {
         let opts = serde_json::json!({
             "defaultPath": "C:\\temp\\subfolder\\sample.txt",

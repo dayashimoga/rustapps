@@ -780,9 +780,8 @@ impl DataEngine {
                         };
                         obj.insert(col_name.clone(), json_val);
                     }
-                    serde_json::to_writer(&mut out_file, &obj).map_err(|e| {
-                        std::io::Error::other(e.to_string())
-                    })?;
+                    serde_json::to_writer(&mut out_file, &obj)
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
                     out_file.write_all(b"\n")?;
                     exported_rows += 1;
                 }

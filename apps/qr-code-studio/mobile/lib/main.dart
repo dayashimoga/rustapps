@@ -102,10 +102,10 @@ class _QrStudioHomeScreenState extends State<QrStudioHomeScreen> {
         if (!stats.containsKey('error')) {
           _studioStats = stats;
         }
-        if (history is List) {
-          _historyItems = history;
-        } else if (history.containsKey('items') && history['items'] is List) {
-          _historyItems = history['items'] as List;
+        if (history.containsKey('items') && history['items'] is List) {
+          _historyItems = history['items'] as List<dynamic>;
+        } else if (!history.containsKey('error')) {
+          _historyItems = [];
         }
         _isLoadingHistory = false;
       });

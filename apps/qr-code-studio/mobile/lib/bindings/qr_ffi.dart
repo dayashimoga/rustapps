@@ -75,7 +75,14 @@ class QrStudioFfiBindings {
       }
       try {
         final resStr = resPtr.toDartString();
-        return jsonDecode(resStr) as Map<String, dynamic>;
+        final decoded = jsonDecode(resStr);
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        } else if (decoded is List) {
+          return {'items': decoded, 'success': true};
+        } else {
+          return {'value': decoded, 'success': true};
+        }
       } finally {
         _freeString!(resPtr);
       }
